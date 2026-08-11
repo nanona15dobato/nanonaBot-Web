@@ -1,0 +1,11 @@
+node_modules/
+.env
+*.log
+.DS_Store
+
+.bash_history
+replica.my.cnf
+.zshrc
+.profile
+.bashrc
+.bash_logout

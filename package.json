@@ -1,0 +1,22 @@
+{
+  "name": "nanona-bot-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jawp編集支援Bot NanonaBot Tool（フェーズ1: OAuthログイン/権限制御/緊急停止/DBスキーマ/最小Webサービス）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-mysql-session": "^3.0.3",
+    "express-session": "^1.18.0",
+    "mysql2": "^3.10.0"
+  }
+}
