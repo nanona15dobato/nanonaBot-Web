@@ -11,6 +11,7 @@ const { attachUser } = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const emergencyRoutes = require('./routes/emergency');
 const dashboardRoutes = require('./routes/dashboard');
+const tasksRoutes = require('./routes/tasks');
 
 function createApp() {
   const app = express();
@@ -43,6 +44,7 @@ function createApp() {
 
   app.use(authRoutes);
   app.use(emergencyRoutes);
+  app.use(tasksRoutes);
   app.use(dashboardRoutes);
 
   app.use((req, res) => {

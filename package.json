@@ -2,12 +2,13 @@
   "name": "nanona-bot-tool",
   "version": "0.1.0",
   "private": true,
-  "description": "Jawp編集支援Bot NanonaBot Tool（フェーズ1: OAuthログイン/権限制御/緊急停止/DBスキーマ/最小Webサービス）",
+  "description": "Jawp編集支援Bot NanonaBot Tool（フェーズ1-2: OAuthログイン/権限制御/緊急停止/DBスキーマ/最小Webサービス + キュー・ワーカー・1ページ先読みパイプライン）",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "worker": "node worker.js"
   },
   "engines": {
     "node": ">=20"

@@ -31,6 +31,11 @@ const config = {
     adminCheckWikiHost: process.env.ADMIN_CHECK_WIKI_HOST || 'ja.wikipedia.org',
   },
 
+  wiki: {
+    // Bot編集の対象となるウィキ本体のAPIエンドポイント（フェーズ2以降のワーカーで使用）
+    apiUrl: process.env.WIKI_API_URL || 'https://ja.wikipedia.org/w/api.php',
+  },
+
   session: {
     secret: requireEnv('SESSION_SECRET'),
   },
