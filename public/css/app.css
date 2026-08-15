@@ -1,0 +1,268 @@
+/* NanonaBot Tool - 共通スタイル */
+
+body {
+  margin: 0;
+  font-family: sans-serif;
+  background: #f8f9fa;
+  color: #202122;
+}
+
+.nb-login {
+  max-width: 480px;
+  margin: 80px auto;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #a2a9b1;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.nb-app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.nb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.nb-header__title {
+  font-size: 1.4em;
+  font-weight: bold;
+  margin: 0;
+}
+
+.nb-header__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nb-section {
+  background: #fff;
+  border: 1px solid #c8ccd1;
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.nb-section__title {
+  font-size: 1.1em;
+  font-weight: bold;
+  margin: 0 0 12px;
+}
+
+.nb-field {
+  margin-bottom: 12px;
+}
+
+.nb-field__label {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.nb-field__hint {
+  color: #54595d;
+  font-size: 0.85em;
+  margin-top: 4px;
+}
+
+.nb-rule-card {
+  border: 1px solid #c8ccd1;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #fafafa;
+}
+
+.nb-rule-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.nb-step-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.nb-step-row__pattern,
+.nb-step-row__replacement {
+  flex: 1 1 260px;
+}
+
+.nb-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nb-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #c8ccd1;
+  border-radius: 4px;
+  background: #fff;
+  flex-wrap: wrap;
+}
+
+.nb-task-row__meta {
+  color: #54595d;
+  font-size: 0.9em;
+}
+
+.nb-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: bold;
+  color: #fff;
+  background: #72777d;
+}
+.nb-status-badge--queued { background: #72777d; }
+.nb-status-badge--running { background: #3366cc; }
+.nb-status-badge--paused { background: #b32424; }
+.nb-status-badge--completed { background: #14866d; }
+.nb-status-badge--completed_with_failures { background: #ac6600; }
+.nb-status-badge--failed { background: #b32424; }
+.nb-status-badge--cancelled { background: #72777d; }
+.nb-status-badge--expired { background: #72777d; }
+.nb-status-badge--emergency_stopped { background: #000; }
+
+.nb-page-status {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 0.8em;
+  color: #fff;
+  background: #72777d;
+}
+.nb-page-status--pending,
+.nb-page-status--preparing { background: #72777d; }
+.nb-page-status--prepared,
+.nb-page-status--awaiting_review { background: #ac6600; }
+.nb-page-status--approved,
+.nb-page-status--editing { background: #3366cc; }
+.nb-page-status--edited { background: #14866d; }
+.nb-page-status--failed { background: #b32424; }
+.nb-page-status--rejected,
+.nb-page-status--skipped { background: #72777d; }
+
+.nb-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.nb-page-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+.nb-review-panel {
+  border: 2px solid #3366cc;
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: #eaf3ff;
+}
+
+.nb-review-panel__title {
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.nb-countdown {
+  font-weight: bold;
+  color: #3366cc;
+}
+
+.nb-warning-panel {
+  border: 2px solid #ac6600;
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: #fef6e7;
+}
+
+.nb-emergency-panel {
+  border: 2px solid #000;
+  border-radius: 4px;
+  padding: 16px;
+  text-align: center;
+  background: #fff;
+}
+
+.nb-notice {
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+.nb-notice--error { background: #fee7e6; border: 1px solid #b32424; color: #b32424; }
+.nb-notice--success { background: #d5fdf4; border: 1px solid #14866d; color: #14866d; }
+.nb-notice--info { background: #eaf3ff; border: 1px solid #3366cc; color: #3366cc; }
+
+/* ===== MediaWiki差分テーブルの再現CSS =====
+   action=compareが返すHTMLはMediaWiki本家の差分テーブルと同じクラス構成を使うため、
+   それに合わせた最小限のスタイルをここで用意する（本家CSSを直接読み込むと依存が
+   増えるため、必要なクラスだけ再現する）。 */
+table.diff {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  table-layout: fixed;
+}
+table.diff td, table.diff th {
+  padding: 4px 8px;
+  vertical-align: top;
+  font-family: monospace;
+  font-size: 0.9em;
+  word-wrap: break-word;
+}
+.diff-lineno {
+  font-weight: bold;
+  background: #f8f9fa;
+}
+.diff-marker {
+  text-align: right;
+  color: #72777d;
+  width: 2em;
+}
+.diff-context {
+  background: #f8f9fa;
+  color: #202122;
+}
+.diff-deletedline {
+  background: #fee7e6;
+}
+.diff-addedline {
+  background: #d5fdf4;
+}
+.diffchange {
+  background: #feeec8;
+  font-weight: bold;
+  border-radius: 2px;
+}

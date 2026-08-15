@@ -7,6 +7,15 @@ const { requireRole } = require('../middleware/auth');
 const { pool } = require('../db');
 const { validateTaskConfig } = require('../worker/taskConfig');
 const { toJsonColumn, parseJsonColumn } = require('../dbJson');
+const mediawiki = require('../services/mediawiki');
+
+// ログイン中ユーザー情報（クライアントJSがUI出し分けに使う）
+router.get('/api/whoami', (req, res) => {
+  res.json({
+    username: (req.session && req.session.username) || null,
+    role: (req.session && req.session.role) || null,
+  });
+});
 
 // タスク作成はowner（Nanona15dobato）のみ（仕様書2章）
 router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
@@ -27,7 +36,8 @@ router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
   }
 });
 
-router.get('/api/tasks', requireRole('owner', 'admin_emergency_only'), async (req, res, next) => {
+// タスク一覧・詳細・ページ一覧はowner専用（仕様書2章: admin_emergency_onlyは緊急停止以外閲覧不可）
+router.get('/api/tasks', requireRole('owner'), async (req, res, next) => {
   try {
     const [rows] = await pool.query(
       `SELECT id, created_by, account, mode, status, progress_current, progress_total, created_at, updated_at
@@ -39,7 +49,7 @@ router.get('/api/tasks', requireRole('owner', 'admin_emergency_only'), async (re
   }
 });
 
-router.get('/api/tasks/:id', requireRole('owner', 'admin_emergency_only'), async (req, res, next) => {
+router.get('/api/tasks/:id', requireRole('owner'), async (req, res, next) => {
   try {
     const [rows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
@@ -52,7 +62,7 @@ router.get('/api/tasks/:id', requireRole('owner', 'admin_emergency_only'), async
   }
 });
 
-router.get('/api/tasks/:id/pages', requireRole('owner', 'admin_emergency_only'), async (req, res, next) => {
+router.get('/api/tasks/:id/pages', requireRole('owner'), async (req, res, next) => {
   try {
     const [rows] = await pool.query(
       `SELECT id, stage, order_index, page_title, namespace, status, base_revid, error_message,
@@ -76,6 +86,25 @@ router.get('/api/tasks/:id/pages/:pageId/diff', requireRole('owner'), async (req
     );
     if (!rows[0]) return res.status(404).json({ error: 'not_found' });
     res.json(rows[0]);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 本家同様の差分HTML（仕様書9章）。action=compareで取得し、そのままDiff表示に埋め込む。
+router.get('/api/tasks/:id/pages/:pageId/compare', requireRole('owner'), async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT base_revid, new_wikitext, status FROM task_pages WHERE id = ? AND task_id = ?`,
+      [req.params.pageId, req.params.id]
+    );
+    const row = rows[0];
+    if (!row) return res.status(404).json({ error: 'not_found' });
+    if (!row.base_revid || row.new_wikitext === null) {
+      return res.status(409).json({ error: 'not_ready', message: 'まだ準備が完了していません' });
+    }
+    const html = await mediawiki.compareRevisions({ fromRevId: row.base_revid, toText: row.new_wikitext });
+    res.json({ html });
   } catch (err) {
     next(err);
   }

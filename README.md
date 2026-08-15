@@ -1,6 +1,11 @@
-# NanonaBot Tool（フェーズ1-2）
+# NanonaBot Tool（フェーズ1-3）
 
-Jawp編集支援Bot「NanonaBot Tool」のフェーズ1・フェーズ2実装です。
+Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜3実装です。
+
+**実環境で最初から最後まで確認したい場合**は、本READMEより先に
+[`docs/DEPLOY_VERIFICATION.md`](docs/DEPLOY_VERIFICATION.md) のチェックリストに沿って進めることを推奨する
+（コード転送→OAuth登録→Botパスワード発行→DB→環境変数→起動→ブラウザでの確認まで一本道）。
+本READMEは各手順の背景説明・リファレンスとして使う。
 
 **Toolforge上の配置場所**: このリポジトリの実体は `$HOME/nanonaBot-Web` に置く。
 Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシンボリックリンクとして
@@ -13,10 +18,9 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - 権限判定（`Nanona15dobato` = owner / sysop = admin_emergency_only / それ以外 = denied）
 - 緊急停止API（誰でも停止可、解除はownerのみ）
 - DBスキーマ（`tasks` / `task_pages` / `edit_log` / `system_status`）
-- 最小ダッシュボード（プレースホルダーHTML。OOUIによる本実装はフェーズ3）
 - `Template:リダイレクトの所属カテゴリ` の実際の書式を確認するスクリプト（`scripts/`）
 
-**フェーズ2（今回追加）**
+**フェーズ2**
 - MediaWiki Botクライアント（`src/bot/`）: Special:BotPasswords方式のログイン、
   ページ取得、`basetimestamp`/`starttimestamp`を使った編集競合検出つきの編集。
   外部ライブラリ（mwn等）を使わず、MediaWiki公式ドキュメント（API:Login, API:Edit）の
@@ -32,9 +36,24 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - タスク作成・進捗確認・承認/却下・再開の最小JSON API（`src/routes/tasks.js`）
 - ワーカーのエントリポイント `worker.js`（Toolforge continuous job用）
 
-**含まれないもの（フェーズ3以降）**: OOUIによる本UI、`manualList`以外の対象ページ取得方法
-（category/backlinks/embeddedin/regexSearch/botreqDerived）、BOTREQ連携、
-リンク置換の2ウェーブ構成、Category系の`warningSource`。
+**フェーズ3（今回追加）**
+- OOUIによる本UI（`public/js/`）。npm公式の標準的な組み込み方法
+  （jQuery + OOjs + OOUI本体 + wikimediauiテーマを`/vendor/`配下で静的配信）に準拠
+- ダッシュボード（`/`）: システム状態・タスク一覧・緊急停止。`admin_emergency_only`は
+  緊急停止パネルのみ表示（仕様書2章の原則どおり、他は一切見えない）
+- タスク作成画面（`/tasks/new`）: 置換ルール（種別は6択を表示、フェーズ2時点で
+  機能するのは「カスタム」のみ）、対象ページ手入力、編集設定、実行モード、失敗時挙動
+- タスク詳細/Diff確認画面（`/tasks/:id`）: 9.2節のパイプラインに対応した
+  ストリーミング表示（確認中の1件＋完了済み一覧）。`action=compare`で本家同様の
+  差分HTMLを取得して埋め込み、manualモードは承認/却下ボタン、autoモードは
+  自動承認までの目安秒数を表示
+- `GET /api/tasks/:id/pages/:pageId/compare`（`action=compare`のtoslots/totext-main
+  形式によるDiff HTML取得。MCR対応の現行の正しい書き方）
+
+**含まれないもの（フェーズ4以降）**: `manualList`以外の対象ページ取得方法
+（category/backlinks/embeddedin/regexSearch）、BOTREQ連携、
+リンク置換の2ウェーブ構成、Category系の`warningSource`、失敗ページ再試行の
+UI化（現状`edit_log`を手動で見る想定）。
 
 ---
 
@@ -172,8 +191,8 @@ toolforge webservice logs
 
 `https://<toolname>.toolforge.org/` にアクセスし、「Wikimediaアカウントでログイン」→ 認可 → コールバックでダッシュボードが表示されれば成功。
 
-- `Nanona15dobato` でログイン: 「権限: owner」と表示され、緊急停止ボタンに加えて解除ボタンも見える。
-- 管理者アカウントでログイン: 「権限: admin_emergency_only」、緊急停止ボタンのみ見える（解除ボタンは出ない）。
+- `Nanona15dobato` でログイン: ダッシュボード全体（システム状態・タスク一覧・「＋新規タスク作成」・緊急停止）が見える。
+- 管理者アカウントでログイン: 緊急停止パネルのみが表示される（他は一切見えない。仕様書2章）。
 - それ以外のアカウント: 403で弾かれる。
 
 ### 3.6 ワーカーの起動（フェーズ2）
@@ -212,17 +231,31 @@ Toolforgeのcontinuous job枠（webservice含めて既定3つまで）を消費�
 Webサービス1 + ワーカー1で2つ使う。将来のクリーンアップジョブ（9.4節）は
 `--schedule`指定のcronジョブとして別枠で動かすため、continuous枠は消費しない。
 
-### 3.7 動作確認（curlでタスクを作成・承認してみる）
+### 3.7 動作確認（ブラウザから）
 
-Web UI（OOUI）はフェーズ3で実装するため、フェーズ2時点ではJSON APIを直接叩いて確認する。
-`Nanona15dobato`でログイン済みのブラウザからセッションCookieを取得し、以下のように使う
-（`nanona_bot_sid=...`はブラウザの開発者ツールで確認したセッションCookieの値に置き換える）。
+フェーズ3でOOUIによる画面が揃ったので、通常はブラウザから確認できる。
 
 **必ず`利用者:Nanona15dobato/sandbox`のような実害のないページで試すこと。**
+
+1. `Nanona15dobato`でログインし、ダッシュボード（`/`）の「＋新規タスク作成」から`/tasks/new`へ。
+2. アカウントを選択、「置換ルール」で種別「カスタム」のまま正規表現ステップ（例: パターン`テスト前`→置換後`テスト後`）を入力し、対象ページに`利用者:Nanona15dobato/sandbox`を1行で入力。
+3. 編集設定（要約欄は必須）・実行モード（まずは`確認待機`がおすすめ）・失敗時の挙動を設定し、「タスクを作成してキューに投入」。
+4. 自動的に`/tasks/:id`（タスク詳細画面）へ遷移する。ワーカー（3.6節）が起動していれば、しばらくして対象ページのDiffが「確認中」パネルに表示される。
+5. `確認待機`モードなら「承認」ボタンで実際に編集される。「却下」を押すとそのページはスキップされる。
+6. ダッシュボードの緊急停止ボタンは、いつでも処理を止められることも合わせて確認しておくとよい。
+
+### 3.8 動作確認（APIリファレンス・curl例）
+
+画面を経由せず直接APIを確認したい場合や、スクリプトから叩きたい場合はこちら。
+`Nanona15dobato`でログイン済みのブラウザからセッションCookieを取得し、以下のように使う
+（`nanona_bot_sid=...`はブラウザの開発者ツールで確認したセッションCookieの値に置き換える）。
 
 ```bash
 COOKIE="nanona_bot_sid=xxxxxxxx"
 BASE="https://<toolname>.toolforge.org"
+
+# ログイン中ユーザー情報
+curl -s "$BASE/api/whoami" -b "$COOKIE"
 
 # タスク作成
 curl -s -X POST "$BASE/api/tasks" \
@@ -238,7 +271,7 @@ curl -s -X POST "$BASE/api/tasks" \
     "editSettings": {
       "botFlag": false,
       "minorEdit": true,
-      "editSummary": "Bot: フェーズ2動作確認",
+      "editSummary": "Bot: 動作確認",
       "editIntervalSeconds": 10
     },
     "reviewSettings": { "mode": "manual", "manualTimeoutHours": 1 },
@@ -249,11 +282,17 @@ curl -s -X POST "$BASE/api/tasks" \
 # タスク一覧・進捗確認
 curl -s "$BASE/api/tasks" -b "$COOKIE"
 
+# タスク詳細
+curl -s "$BASE/api/tasks/1" -b "$COOKIE"
+
 # ページ一覧（status: pending → preparing → prepared → awaiting_review → ...）
 curl -s "$BASE/api/tasks/1/pages" -b "$COOKIE"
 
 # Diff確認（本文込み）
 curl -s "$BASE/api/tasks/1/pages/1/diff" -b "$COOKIE"
+
+# 本家同様の差分HTML（action=compare経由）
+curl -s "$BASE/api/tasks/1/pages/1/compare" -b "$COOKIE"
 
 # 承認（awaiting_reviewのページにだけ効く）
 curl -s -X POST "$BASE/api/tasks/1/pages/1/approve" -b "$COOKIE"
@@ -294,17 +333,19 @@ WIKI_USER_AGENT="NanonaBotTool-Verification/0.1 (User:Nanona15dobato)" \
 ```
 server.js                   Webサービスのエントリポイント
 worker.js                   ワーカーのエントリポイント（フェーズ2）
-src/app.js                  Expressアプリ組み立て
+src/app.js                  Expressアプリ組み立て（静的配信/セッション/ルート結線）
 src/config.js                環境変数の一元管理
 src/db.js                    DB接続プール（replica.my.cnf優先）
 src/db/replicaCnf.js         replica.my.cnfパーサー（純粋関数）
 src/dbJson.js                 JSON列のパース/シリアライズ・ユーティリティ
 src/permissions.js           権限判定ロジック（純粋関数）
 src/middleware/auth.js       認可ミドルウェア
+src/views/shell.js           全ページ共通のHTMLシェル生成（OOUI読み込み・初期データ埋め込み）
 src/routes/auth.js           OAuthログイン/コールバック/ログアウト
 src/routes/emergency.js      緊急停止API
-src/routes/tasks.js          タスク作成・進捗確認・承認/却下/再開API（フェーズ2）
-src/routes/dashboard.js      最小ダッシュボード（プレースホルダー）
+src/routes/tasks.js          タスクCRUD・進捗確認・承認/却下/再開・Diff取得API
+src/routes/pages.js          HTMLページルート（/、/tasks/new、/tasks/:id。フェーズ3）
+src/services/mediawiki.js    ユーザーグループ確認・action=compareによるDiff HTML取得
 src/bot/mwClient.js          MediaWiki Botクライアント（生fetch実装。ログイン/取得/編集）
 src/bot/cookieJar.js         ログインセッション保持用の簡易CookieJar
 src/bot/mwUtil.js            タイムスタンプ変換等の純粋関数
@@ -317,6 +358,11 @@ src/worker/pipeline.js       1ページ先読みパイプライン本体（仕�
 src/worker/taskRunner.js     対象列挙→task_pages投入→パイプライン実行のオーケストレーション
 src/worker/emergencyStop.js  緊急停止フラグ確認
 src/worker/editLog.js        edit_logへの書き込み
+public/css/app.css           画面レイアウト＋MediaWiki差分テーブル再現CSS（フェーズ3）
+public/js/common.js          クライアント共通ヘルパー（fetch/通知/ヘッダー/ステータス表示）
+public/js/dashboard.js       ダッシュボード画面ロジック
+public/js/taskNew.js         タスク作成画面ロジック
+public/js/taskDetail.js      タスク詳細/Diff確認画面ロジック（ストリーミング表示）
 lib/WikitextParser.js        Wikitext解析共有ライブラリ
 scripts/check-redirect-category-template.js
                               Template:リダイレクトの所属カテゴリ 書式確認スクリプト
@@ -328,23 +374,37 @@ test/bot.test.js             MediaWikiBotClientのテスト（fetchをモック�
 test/pipeline.test.js        1ページ先読みパイプラインの統合テスト（DBをインメモリスタブ化）
 ```
 
-`npm test` で全テスト（`node --test`）を実行できる。
+`npm test` で全テスト（`node --test`）を実行できる。フェーズ3で追加した`public/js/`配下の
+クライアントサイドJSは、ブラウザのDOM/OOUIに依存するためこのテストスイートの対象外
+（構文チェックとAPI呼び出し先の突合はレビュー済み。3.7節の手順で実ブラウザから確認すること）。
 
-## 6. 既知の制約（フェーズ2時点）
+## 6. 既知の制約（フェーズ3時点）
 
 - 対象ページ取得は `targetSource.type: "manualList"` のみ対応。`category`/`backlinks`/
-  `embeddedin`/`regexSearch`/`botreqDerived`はフェーズ4で追加する。
+  `embeddedin`/`regexSearch`/`botreqDerived`はフェーズ4で追加する。タスク作成画面の
+  種別ドロップダウンには6種類とも表示されるが、「カスタム」以外は選択しても
+  未対応の旨が表示されるだけで送信できない。
 - リンク置換の2ウェーブ構成（Template名前空間→再取得→その他ページ）、Category系の
   `warningSource`（リダイレクトの所属カテゴリ警告）は未実装（フェーズ4）。
+- 失敗ページの再試行はUI化されていない。`completed_with_failures`のタスク詳細画面には
+  案内文のみ表示し、実際の再試行は`edit_log`を見ながら手動でタスクを作り直す運用になる
+  （フェーズ5で自動化予定）。
 - ワーカーがクラッシュ/再起動した場合、処理中だった1ページ分の状態（`preparing`/
   `editing`のまま止まったページ）は自動復旧しない。手動で該当`task_pages`行の
   ステータスを`pending`に戻すか、タスクごと作り直す必要がある（将来的な改善候補）。
-- OAuthアクセストークンはセッションに保存していない（2章参照）ため、フェーズ2の
-  編集はすべてBotPasswordアカウント経由のみ。操作者自身の権限で行う操作が
-  将来必要になった場合は別途設計する。
+- OAuthアクセストークンはセッションに保存していない（2章参照）ため、編集はすべて
+  BotPasswordアカウント経由のみ。操作者自身の権限で行う操作が将来必要になった場合は
+  別途設計する。
+- `action=compare`のDiff表示はページを開いた/更新した時点のスナップショットで、
+  自動リロード（3秒間隔）のたびに再取得はしない（同じページIDの間はキャッシュを使う）。
+  ページを離れて戻ると最新の状態で再取得される。
 - テストはユニットテスト＋fetch/DBをモックした統合テストのみで、実際のToolforge/
-  ToolsDB/Wikipedia本番環境に対する動作確認は行っていない。3.7節の手順で
-  Sandboxページに対して実際に確認すること。
+  ToolsDB/Wikipedia本番環境に対する動作確認、および実ブラウザでのOOUI描画確認は
+  行っていない。3.7節の手順でSandboxページに対して実際に確認すること。
+- OOUIのアイコンパック（`oojs-ui-wikimediaui-icons-*.css`）は`alerts`/`moderation`/
+  `movement`のみ読み込んでいる。使用しているアイコン名がパックに含まれず表示されない
+  場合は、`node_modules/oojs-ui/dist/`内の実際のファイル名を確認し、`src/views/shell.js`の
+  `<link>`を調整すること。
 
 ## 7. ライセンスについて
 
@@ -352,4 +412,5 @@ Toolforgeのポリシー上、公開するコードはOSI承認ライセンス�
 
 ## 8. 次のフェーズ
 
-フェーズ3（Diff確認フロー全体のOOUI本実装、失敗時挙動のUI、タイムアウトのUI表示）。
+フェーズ4（テンプレート機能5種類の実装、対象ページ自動取得: category/backlinks/embeddedin/regexSearch、
+リンク置換の2ウェーブ構成、Category系の`warningSource`、名前空間フィルタUI）。
