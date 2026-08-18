@@ -13,6 +13,7 @@ const authRoutes = require('./routes/auth');
 const emergencyRoutes = require('./routes/emergency');
 const pagesRoutes = require('./routes/pages');
 const tasksRoutes = require('./routes/tasks');
+const botreqRoutes = require('./routes/botreq');
 
 function createApp() {
   const app = express();
@@ -56,6 +57,7 @@ function createApp() {
   app.use(authRoutes);
   app.use(emergencyRoutes);
   app.use(tasksRoutes);
+  app.use(botreqRoutes);
   app.use(pagesRoutes);
 
   app.use((req, res) => {

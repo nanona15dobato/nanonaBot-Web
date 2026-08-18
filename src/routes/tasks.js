@@ -110,6 +110,20 @@ router.get('/api/tasks/:id/pages/:pageId/compare', requireRole('owner'), async (
   }
 });
 
+// Category系の付随警告一覧（仕様書6.3/6.4節・8章。検出のみで編集対象ではない）
+router.get('/api/tasks/:id/warnings', requireRole('owner'), async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, rule_index, page_title, namespace, snippet, created_at
+       FROM task_warnings WHERE task_id = ? ORDER BY id`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/api/tasks/:id/pages/:pageId/approve', requireRole('owner'), async (req, res, next) => {
   try {
     const [result] = await pool.query(

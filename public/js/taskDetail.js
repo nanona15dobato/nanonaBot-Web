@@ -16,18 +16,23 @@
 
   const $notice = $('<div>');
   const $summarySection = $('<div>').addClass('nb-section');
+  const $warningSection = $('<div>');
   const $reviewContainer = $('<div>');
   const $pageListSection = $('<div>').addClass('nb-section');
-  $app.append($notice, $summarySection, $reviewContainer, $pageListSection);
+  $app.append($notice, $summarySection, $warningSection, $reviewContainer, $pageListSection);
 
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
   let lastReviewPageId = null;
+  let warningsLoaded = false;
 
   async function loadTask() {
     return C.fetchJson('/api/tasks/' + taskId);
   }
   async function loadPages() {
     return C.fetchJson('/api/tasks/' + taskId + '/pages');
+  }
+  async function loadWarnings() {
+    return C.fetchJson('/api/tasks/' + taskId + '/warnings');
   }
   async function loadCompare(pageId) {
     if (compareCache.has(pageId)) return compareCache.get(pageId);
@@ -50,6 +55,15 @@
       )
     );
     $summarySection.append($line);
+
+    if (task.stage_count === 2) {
+      $summarySection.append(
+        $('<p>').css('color', '#54595d').text(
+          'リンク置換系ルールを含むため2ウェーブ構成です（現在ウェーブ' + task.current_stage + '/2）。' +
+            'ウェーブ1=Template名前空間、ウェーブ2=その他ページ（ウェーブ1完了後に再取得）。'
+        )
+      );
+    }
 
     if (task.status === 'expired') {
       const msg = new OO.ui.MessageWidget({
@@ -165,12 +179,39 @@
     const $list = $('<div>').addClass('nb-page-list');
     pages.forEach((p) => {
       const $row = $('<div>').addClass('nb-page-row');
-      const $left = $('<span>').text(p.page_title + ' ');
+      const $left = $('<span>').text('[W' + p.stage + '] ' + p.page_title + ' ');
       $left.append(C.pageStatusBadge(p.status));
       const $right = $('<span>').css('color', '#54595d').text(p.error_message || '');
       $list.append($row.append($left, $right));
     });
     $pageListSection.append($list);
+  }
+
+  function renderWarnings(warnings) {
+    $warningSection.empty();
+    if (!warnings || warnings.length === 0) return;
+
+    const $panel = $('<div>').addClass('nb-warning-panel');
+    $panel.append(
+      $('<div>').css('font-weight', 'bold').text(
+        '要手動確認: Template:リダイレクトの所属カテゴリ 関連（' + warnings.length + '件）'
+      )
+    );
+    $panel.append(
+      $('<p>').text(
+        '以下のページには「リダイレクトの所属カテゴリ」と旧カテゴリ名の記載が見つかりました。' +
+          '自動編集は行っていません。必要に応じて手動で確認・修正してください（仕様書8章）。'
+      )
+    );
+    warnings.forEach((w) => {
+      const $item = $('<div>').css('margin-bottom', '8px');
+      $item.append($('<strong>').text(w.page_title));
+      if (w.snippet) {
+        $item.append($('<div>').css({ fontFamily: 'monospace', fontSize: '0.85em', color: '#54595d' }).text(w.snippet));
+      }
+      $panel.append($item);
+    });
+    $warningSection.append($panel);
   }
 
   async function refreshAll() {
@@ -179,6 +220,16 @@
       renderSummary(task);
       renderReviewPanel(task, pages);
       renderPageList(pages);
+
+      if (!warningsLoaded) {
+        warningsLoaded = true;
+        loadWarnings()
+          .then(renderWarnings)
+          .catch((e) => {
+            warningsLoaded = false; // 失敗時は次回リトライできるようにする
+            console.warn('警告一覧の取得に失敗しました:', e.message);
+          });
+      }
     } catch (e) {
       C.showNotice($notice, 'error', '読み込みに失敗しました: ' + e.message);
     }

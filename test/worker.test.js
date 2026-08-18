@@ -158,3 +158,73 @@ test('parseJsonColumn: nullや不正なJSONはfallbackを返す', () => {
   assert.deepEqual(parseJsonColumn(null, []), []);
   assert.deepEqual(parseJsonColumn('{not valid json', { x: 1 }), { x: 1 });
 });
+
+// ---- フェーズ4: テンプレート系ルールのバリデーション ----
+
+function baseConfig(replacements) {
+  return {
+    account: 'NanonaBot',
+    replacements,
+    editSettings: { editSummary: 'test', editIntervalSeconds: 10 },
+    reviewSettings: { mode: 'auto', autoWaitSeconds: 10 },
+    onFailure: 'pause',
+  };
+}
+
+test('validateTaskConfig: linkRenameはfrom/toがあればvalid', () => {
+  const { valid, errors } = validateTaskConfig(
+    baseConfig([{ templateType: 'linkRename', from: 'A', to: 'B' }])
+  );
+  assert.equal(valid, true, JSON.stringify(errors));
+});
+
+test('validateTaskConfig: linkRenameはtoが無いとエラー', () => {
+  const { valid, errors } = validateTaskConfig(baseConfig([{ templateType: 'linkRename', from: 'A' }]));
+  assert.equal(valid, false);
+  assert.ok(errors.some((e) => e.includes('.to')));
+});
+
+test('validateTaskConfig: categoryRemoveはtoが無くてもvalid（除去のみのため）', () => {
+  const { valid, errors } = validateTaskConfig(baseConfig([{ templateType: 'categoryRemove', from: 'A' }]));
+  assert.equal(valid, true, JSON.stringify(errors));
+});
+
+test('validateTaskConfig: templateRenameはfrom/to必須、namespacesは任意', () => {
+  const ok = validateTaskConfig(
+    baseConfig([{ templateType: 'templateRename', from: 'A', to: 'B', namespaces: [0, 10] }])
+  );
+  assert.equal(ok.valid, true, JSON.stringify(ok.errors));
+
+  const ng = validateTaskConfig(baseConfig([{ templateType: 'templateRename', from: 'A', to: 'B', namespaces: ['not-a-number'] }]));
+  assert.equal(ng.valid, false);
+  assert.ok(ng.errors.some((e) => e.includes('namespaces')));
+});
+
+test('validateTaskConfig: 未知のtemplateTypeはエラー', () => {
+  const { valid, errors } = validateTaskConfig(baseConfig([{ templateType: 'nonsense', from: 'A', to: 'B' }]));
+  assert.equal(valid, false);
+  assert.ok(errors.some((e) => e.includes('templateType')));
+});
+
+test('validateTaskConfig: customはtargetSourceがcategory/backlinks/embeddedin/regexSearchでもvalid', () => {
+  const types = [
+    { type: 'category', category: 'テスト' },
+    { type: 'backlinks', page: 'テスト' },
+    { type: 'embeddedin', page: 'テスト' },
+    { type: 'regexSearch', query: 'insource:/x/' },
+  ];
+  for (const targetSource of types) {
+    const { valid, errors } = validateTaskConfig(
+      baseConfig([{ templateType: 'custom', steps: [{ pattern: 'a', replacement: 'b' }], targetSource }])
+    );
+    assert.equal(valid, true, `${targetSource.type}: ${JSON.stringify(errors)}`);
+  }
+});
+
+test('validateTaskConfig: customのtargetSource.typeが不正ならエラー', () => {
+  const { valid, errors } = validateTaskConfig(
+    baseConfig([{ templateType: 'custom', steps: [{ pattern: 'a', replacement: 'b' }], targetSource: { type: 'invalid' } }])
+  );
+  assert.equal(valid, false);
+  assert.ok(errors.some((e) => e.includes('targetSource.type')));
+});

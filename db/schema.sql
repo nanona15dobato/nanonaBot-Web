@@ -106,3 +106,19 @@ CREATE TABLE IF NOT EXISTS edit_log (
   CONSTRAINT fk_edit_log_task
     FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- Category系（categoryRename/categoryRemove）の付随警告（仕様書6.3・6.4節・8章。フェーズ4）。
+-- 置換前Categoryページ自体への標準名前空間backlinksのうち、Template:リダイレクトの所属カテゴリ
+-- と旧カテゴリ名の共起が見つかったページを記録する。検出のみで自動編集はしない。
+CREATE TABLE IF NOT EXISTS task_warnings (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  task_id     INT UNSIGNED NOT NULL,
+  rule_index  INT UNSIGNED NOT NULL,
+  page_title  VARCHAR(512) NOT NULL,
+  namespace   INT NOT NULL,
+  snippet     TEXT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_task_id (task_id),
+  CONSTRAINT fk_task_warnings_task
+    FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
