@@ -1,4 +1,4 @@
-# NanonaBot Tool（フェーズ1-5）
+# NanonaBot Tool（フェーズ1-6）
 
 Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜5実装です。
 
@@ -65,24 +65,41 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
   customルールでの4種類の自動取得方式選択に対応
 - タスク詳細画面: ウェーブ表示、警告パネル（要手動確認一覧）
 
-**フェーズ5（今回追加）**
+**フェーズ5**
 - **BOTREQ連携**（`src/worker/botreq.js`、仕様書7章）: `Wikipedia:Bot作業依頼`のwikitextを取得し、
   `WikitextParser`の`argsOrdered`で`{{リンク修正依頼/改名}}`呼び出しを検出・パース。
   「提案」以外の無名引数を順にペア化し、以下のとおり自動分類する:
   - `Category:X`/`Category:Y` → Category置換、`Template:X`/`Template:Y` → テンプレート置換
   - それ以外の通常ページ名同士 → リンク置換（改名元に曖昧さ回避括弧が無く改名先にはある場合は
     自動的にリンク置換2を選択。仕様書7.3節）
-  - `DELETE_PAGE`/`REDIRECT_TARGET`/`subst:`/外部URL/アンカー・パイプラベル付き・
-    名前空間不整合なペアは、フェーズ1範囲外として検出のみ行い「未対応」表示にする
-    （実際に編集する前に必ず操作者の確認を要求する設計。7.2節）
+  - `REDIRECT_TARGET`/外部URL/アンカー・パイプラベル付き・名前空間不整合なペアは、
+    検出のみ行い「未対応」表示にする（実際に編集する前に必ず操作者の確認を要求する設計。7.2節）
 - `GET /api/botreq/proposals`（owner専用）: 検出結果をプレビュー用に返す
 - タスク作成画面に「Wikipedia:Bot作業依頼 から取得」ボタンを追加。検出された各提案について
   対応済みペア数を表示し、ワンクリックでルールとして取り込める（取り込んだ内容は送信前に
   必ず内容を確認・編集できる。自動即時投入はしない）
 
-**含まれないもの（フェーズ6以降）**: 失敗ページ再試行のUI化（現状`edit_log`を手動で見る想定）、
-`Template:リダイレクトの所属カテゴリ`への実際の自動編集（8章の方針により現時点では検出・警告のみ）、
-BOTREQの`DELETE_PAGE`/`REDIRECT_TARGET`/`subst:`/URL/アンカー付きペアへの対応。
+**フェーズ6（今回追加）**
+- **リンク解除（`unlinkPage`）・テンプレートのsubst化（`templateSubst`）を新規テンプレート種別として実装**
+  （`src/worker/templatePresets.js`）。BOTREQの`DELETE_PAGE`／`Template:X→subst:`を、
+  検出のみから実際に自動処理できるように対応。`REDIRECT_TARGET`は解決先が時間とともに
+  変わりうり操作者から見えにくいという安全上の理由から、引き続き検出のみとする
+- **正規表現の精度改善**: `firstLetterFlexiblePattern`を導入し、MediaWikiの実際のタイトル規則
+  （先頭1文字だけ大文字小文字を区別しない）に正確に合わせた。実装中に見つかった、
+  `templateSubst`の初期実装が`'i'`フラグの副作用で無関係な別テンプレート（例:
+  `MyTemplate`指定時に`mytemplate`まで）を誤って巻き込むバグを修正し、全プリセットに適用
+- **失敗ページ再試行のUI化**（`POST /api/tasks/:id/retry-failed`）: `completed_with_failures`の
+  タスク詳細画面に「失敗ページのみを再試行」ボタンを実装。`edit_log`（`task_pages`が
+  クリーンアップされていても残る）を基準に失敗ページ一覧を取得し、元タスクと同じ置換ルール・
+  編集設定を引き継いだ新規タスクを作成する（`forceTargets`という新しい内部機構で、
+  通常のtargetSource解決をバイパスして指定ページのみを対象にする。ウェーブ分割もしない）
+- **編集ログ画面**（`/edit-log`、`GET /api/edit-log`）: タスクID・ページ名・成功/失敗でフィルタ
+  検索でき、各行から実際の差分ページ（`action=compare`ではなく本チェックリビジョンへの
+  `index.php?diff=`リンク）へ飛べる
+
+**含まれないもの（フェーズ7以降）**: `Template:リダイレクトの所属カテゴリ`への実際の自動編集
+（8章の方針により正確な引数書式が未確認のため、現時点では検出・警告のみ）、BOTREQの
+`REDIRECT_TARGET`・外部URL・アンカー付きペアへの対応。
 
 ---
 
@@ -372,9 +389,10 @@ src/middleware/auth.js       認可ミドルウェア
 src/views/shell.js           全ページ共通のHTMLシェル生成（OOUI読み込み・初期データ埋め込み）
 src/routes/auth.js           OAuthログイン/コールバック/ログアウト
 src/routes/emergency.js      緊急停止API
-src/routes/tasks.js         タスクCRUD・進捗確認・承認/却下/再開・Diff取得・警告一覧API
-src/routes/pages.js          HTMLページルート（/、/tasks/new、/tasks/:id）
-src/routes/botreq.js         BOTREQ取得API（フェーズ5）
+src/routes/tasks.js         タスクCRUD・進捗確認・承認/却下/再開・再試行・Diff取得・
+                              警告一覧・編集ログ検索API
+src/routes/pages.js          HTMLページルート（/、/tasks/new、/tasks/:id、/edit-log）
+src/routes/botreq.js         BOTREQ取得API（仕様書7章）
 src/services/mediawiki.js    ユーザーグループ確認・action=compareによるDiff HTML取得
 src/bot/mwClient.js          MediaWiki Botクライアント（生fetch実装。ログイン/取得/編集）
 src/bot/cookieJar.js         ログインセッション保持用の簡易CookieJar
@@ -382,22 +400,26 @@ src/bot/mwUtil.js            タイムスタンプ変換等の純粋関数
 src/bot/accountNames.js      Botアカウント名の静的定義（依存ゼロ、taskConfig.jsから直接利用）
 src/bot/accounts.js          アカウント名→ログイン済みクライアントのキャッシュ
 src/worker/regexEngine.js    正規表現の複数ステップ置換エンジン（loopUntilStable対応）
-src/worker/templatePresets.js テンプレート機能5種類のsteps自動生成（仕様書6章。フェーズ4）
-src/worker/targetResolvers.js 対象ページ自動取得（category/backlinks/embeddedin/regexSearch。フェーズ4）
-src/worker/categoryWarnings.js Category系warningSource収集（フェーズ4）
-src/worker/taskConfig.js     タスクconfig_jsonのバリデーション（純粋関数。6種類のtemplateType対応）
+src/worker/templatePresets.js テンプレート機能8種類のsteps自動生成（仕様書6章。
+                              firstLetterFlexiblePatternでMediaWikiのタイトル規則に対応）
+src/worker/targetResolvers.js 対象ページ自動取得（category/backlinks/embeddedin/regexSearch）
+src/worker/categoryWarnings.js Category系warningSource収集
+src/worker/taskConfig.js     タスクconfig_jsonのバリデーション（純粋関数。8種類のtemplateType対応）
 src/worker/queue.js          キューからのアトミックなタスクclaim
 src/worker/pipeline.js       1ページ先読みパイプライン本体（仕様書9.2節）
-src/worker/taskRunner.js     ステージ列挙・2ウェーブ orchestration・警告収集（仕様書9章）
-src/worker/botreq.js         BOTREQ({{リンク修正依頼/改名}})の取得・パース・分類（仕様書7章。フェーズ5）
+src/worker/taskRunner.js     ステージ列挙・2ウェーブ orchestration・警告収集・forceTargets
+                              （失敗ページ再試行用の直接ターゲット指定。フェーズ6）
+src/worker/botreq.js         BOTREQ({{リンク修正依頼/改名}})の取得・パース・分類（仕様書7章）
 src/worker/emergencyStop.js  緊急停止フラグ確認
 src/worker/editLog.js        edit_logへの書き込み
 public/css/app.css           画面レイアウト＋MediaWiki差分テーブル再現CSS
 public/js/common.js          クライアント共通ヘルパー（fetch/通知/ヘッダー/ステータス表示）
 public/js/dashboard.js       ダッシュボード画面ロジック
-public/js/taskNew.js         タスク作成画面ロジック（6種類のtemplateType・名前空間選択・
+public/js/taskNew.js         タスク作成画面ロジック（8種類のtemplateType・名前空間選択・
                               BOTREQ取り込み対応）
-public/js/taskDetail.js      タスク詳細/Diff確認画面ロジック（ストリーミング表示・ウェーブ表示・警告パネル）
+public/js/taskDetail.js      タスク詳細/Diff確認画面ロジック（ストリーミング表示・ウェーブ表示・
+                              警告パネル・失敗ページ再試行ボタン）
+public/js/editLog.js         編集ログ画面ロジック（検索・フィルタ・差分リンク。フェーズ6）
 lib/WikitextParser.js        Wikitext解析共有ライブラリ
 scripts/check-redirect-category-template.js
                               Template:リダイレクトの所属カテゴリ 書式確認スクリプト
@@ -407,10 +429,10 @@ test/worker.test.js          置換エンジン・タスクconfig検証・JSON�
 test/bot.test.js             MediaWikiBotClientのテスト（fetchをモックし、ログイン〜編集の
                               一連の流れとbasetimestamp伝播を検証）
 test/pipeline.test.js        1ページ先読みパイプラインの統合テスト（DBをインメモリスタブ化）
-test/templatePresets.test.js テンプレート機能5種類のステップ生成テスト（ハットノート正規表現の
-                              回帰テスト含む）
+test/templatePresets.test.js テンプレート機能8種類のステップ生成テスト（ハットノート正規表現の
+                              回帰テスト、firstLetterFlexiblePatternの誤爆回帰テスト含む）
 test/targetResolvers.test.js 対象ページ自動取得のテスト（継続取得・エラー処理をfetchモックで検証）
-test/taskRunner.test.js      steps自動生成・ステージ判定の純粋関数テスト
+test/taskRunner.test.js      steps自動生成・ステージ判定・forceTargetsの純粋関数テスト
 test/categoryWarnings.test.js Category系警告収集のテスト
 test/botreq.test.js          BOTREQパーサーのテスト（ユーザー提示の実例・複合例を含む全分類パターン）
 ```
@@ -419,21 +441,24 @@ test/botreq.test.js          BOTREQパーサーのテスト（ユーザー提示
 ブラウザのDOM/OOUIに依存するためこのテストスイートの対象外（構文チェックとAPI呼び出し先の
 突合はレビュー済み。3.7節の手順で実ブラウザから確認すること）。
 
-## 6. 既知の制約（フェーズ5時点）
+## 6. 既知の制約（フェーズ6時点）
 
-- BOTREQ連携は`DELETE_PAGE`/`REDIRECT_TARGET`/`subst:`/外部URL/アンカー・パイプラベル付き・
-  名前空間不整合なペアを検出のみ行い、自動でルール化しない（仕様書7.2節、フェーズ1範囲）。
+- BOTREQ連携は`REDIRECT_TARGET`/外部URL/アンカー・パイプラベル付き・名前空間不整合な
+  ペアを検出のみ行い、自動でルール化しない（仕様書7.2節）。`REDIRECT_TARGET`は解決先が
+  時間とともに変わりうり操作者から見えにくいため、安全のため意図的に未対応のままにしている。
   対応する場合はタスク作成画面で手動でルールを追加する。
 - `Template:リダイレクトの所属カテゴリ`への実際の自動編集は行わない。8章の方針どおり、
   検出・警告のみ（`task_warnings`テーブル・タスク詳細画面の警告パネル）。
-- 失敗ページの再試行はUI化されていない。`completed_with_failures`のタスク詳細画面には
-  案内文のみ表示し、実際の再試行は`edit_log`を見ながら手動でタスクを作り直す運用になる。
+- 失敗ページ再試行（`forceTargets`）は、元タスクの置換ルールをそのまま引き継ぐが、
+  ウェーブ分割・名前空間フィルタは行わない（指定ページを直接対象にするだけの単純な再試行）。
 - `regexSearch`の大規模検索時の件数上限は暫定値（`targetResolvers.js`の`MAX_RESULTS=5000`）。
   実運用でのCirrusSearchの負荷傾向を見て調整の余地がある。
+- `unlinkPage`（リンク解除）はハットノートテンプレート内の参照解除には対応していない
+  （通常のwikilink `[[X]]` `[[X|label]]` `[[X#anchor]]` のみ対象）。
 - ワーカーがクラッシュ/再起動した場合、処理中だった1ページ分の状態（`preparing`/
   `editing`のまま止まったページ）は自動復旧しない。手動で該当`task_pages`行の
   ステータスを`pending`に戻すか、タスクごと作り直す必要がある（将来的な改善候補）。
-- `task_pages.namespace`は、`manualList`由来のページでは実際の名前空間ではなく
+- `task_pages.namespace`は、`manualList`/`forceTargets`由来のページでは実際の名前空間ではなく
   常に0が入る（表示用メタデータのみで、置換ロジックには使用していないため実害は無い）。
 - OAuthアクセストークンはセッションに保存していない（2章参照）ため、編集はすべて
   BotPasswordアカウント経由のみ。
@@ -453,6 +478,7 @@ Toolforgeのポリシー上、公開するコードはOSI承認ライセンス�
 
 ## 8. 次のフェーズ
 
-フェーズ6候補: 失敗ページ再試行のUI化、BOTREQの特殊トークン（`DELETE_PAGE`/`REDIRECT_TARGET`/
-`subst:`等）への対応検討、`Template:リダイレクトの所属カテゴリ`の正確な引数書式が確認でき次第の
-自動編集対応、編集ログ・監査機能の強化。
+フェーズ7候補: `Template:リダイレクトの所属カテゴリ`の正確な引数書式が確認でき次第の自動編集対応
+（`scripts/check-redirect-category-template.js`をToolforge上で実行して一次資料を確認してから着手）、
+BOTREQの`REDIRECT_TARGET`対応（解決先の可視化・確認フローを含めた安全な設計の検討）、
+ハットノート内リンク解除への対応、監査・通知機能の強化（緊急停止・失敗タスクのアラート等）。

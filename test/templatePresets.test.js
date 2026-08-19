@@ -144,3 +144,52 @@ test('templateRenameSteps: 置換先に$記号が含まれても文字どおり�
   const result = applyReplacementSteps('{{価格|100}}', steps);
   assert.equal(result, '{{$価格|100}}');
 });
+
+// ---- リンク解除（unlinkPage、フェーズ6: BOTREQのDELETE_PAGE相当） ----
+
+test('unlinkPageSteps: 裸リンク・アンカー・パイプ付きリンクを地の文に変換する', () => {
+  const steps = presets.unlinkPageSteps('プタリン');
+  const text = '[[プタリン]]と[[プタリン|表示名]]と[[プタリン#節]]';
+  assert.equal(applyReplacementSteps(text, steps), 'プタリンと表示名とプタリン');
+});
+
+test('unlinkPageSteps: 対象外のリンクは変更しない', () => {
+  const steps = presets.unlinkPageSteps('プタリン');
+  assert.equal(applyReplacementSteps('[[別のページ]]', steps), '[[別のページ]]');
+});
+
+// ---- テンプレートのsubst化（templateSubst、フェーズ6: BOTREQのTemplate:X→subst:相当） ----
+
+test('templateSubstSteps: {{X}}を{{subst:X}}に変換する', () => {
+  const steps = presets.templateSubstSteps('旧テンプレ');
+  assert.equal(applyReplacementSteps('{{旧テンプレ|a=1}}', steps), '{{subst:旧テンプレ|a=1}}');
+});
+
+test('templateSubstSteps: 既にsubst:/safesubst:済みのものは二重にしない', () => {
+  const steps = presets.templateSubstSteps('旧テンプレ');
+  assert.equal(applyReplacementSteps('{{subst:旧テンプレ}}', steps), '{{subst:旧テンプレ}}');
+  assert.equal(applyReplacementSteps('{{safesubst:旧テンプレ}}', steps), '{{safesubst:旧テンプレ}}');
+});
+
+test('templateSubstSteps: 無関係なテンプレートは変更しない', () => {
+  const steps = presets.templateSubstSteps('旧テンプレ');
+  assert.equal(applyReplacementSteps('{{別テンプレ}}', steps), '{{別テンプレ}}');
+});
+
+// ---- firstLetterFlexiblePattern（MediaWikiの先頭1文字大文字小文字非依存規則） ----
+
+test('templateSubstSteps: 先頭1文字だけ大文字小文字を許容する（MediaWikiのタイトル規則）', () => {
+  const steps = presets.templateSubstSteps('MyTemplate');
+  assert.equal(applyReplacementSteps('{{myTemplate}}', steps), '{{subst:MyTemplate}}');
+});
+
+test('templateSubstSteps: 2文字目以降の大文字小文字違いは別ページとして扱い変更しない（gi誤爆の回帰確認）', () => {
+  const steps = presets.templateSubstSteps('MyTemplate');
+  // "mytemplate" は2文字目以降(ytemplate)がMyTemplateの(yTemplate)と大文字小文字不一致のため対象外
+  assert.equal(applyReplacementSteps('{{mytemplate}}', steps), '{{mytemplate}}');
+});
+
+test('linkRenameSteps: 先頭1文字だけ大文字小文字を許容する', () => {
+  const steps = presets.linkRenameSteps('Example', 'Sample');
+  assert.equal(applyReplacementSteps('[[example]]', steps), '[[Sample]]');
+});

@@ -69,9 +69,24 @@ function classifyPair(rawFrom, rawTo) {
   const from = String(rawFrom).trim();
   const to = String(rawTo).trim();
 
-  if (to === 'DELETE_PAGE') return { type: 'unsupported', reason: 'DELETE_PAGE', rawFrom: from, rawTo: to };
-  if (to === 'REDIRECT_TARGET') return { type: 'unsupported', reason: 'REDIRECT_TARGET', rawFrom: from, rawTo: to };
-  if (to === 'subst:') return { type: 'unsupported', reason: 'subst', rawFrom: from, rawTo: to };
+  if (to === 'DELETE_PAGE') {
+    // リンク解除（フェーズ6対応: unlinkPageとして処理）
+    return { type: 'unlinkPage', from, rawFrom: from, rawTo: to };
+  }
+  if (to === 'REDIRECT_TARGET') {
+    // リダイレクト解決先は時間とともに変わりうり、操作者から見えにくいため、
+    // 安全のためフェーズ6でも自動処理対象に含めない（要手動設定のまま）。
+    return { type: 'unsupported', reason: 'REDIRECT_TARGET', rawFrom: from, rawTo: to };
+  }
+  if (to === 'subst:') {
+    // "Template:X |subst:" の形式のみサブスト化として処理する（フェーズ6対応）。
+    // Template:プレフィックスが無いfromに対するsubst:指定は想定外のため未対応のままにする。
+    const tmplFromForSubst = stripNamespacePrefix(from, TEMPLATE_PREFIXES);
+    if (tmplFromForSubst !== null) {
+      return { type: 'templateSubst', from: tmplFromForSubst, rawFrom: from, rawTo: to };
+    }
+    return { type: 'unsupported', reason: 'subst', rawFrom: from, rawTo: to };
+  }
   if (/^https?:\/\//i.test(from) || /^https?:\/\//i.test(to)) {
     return { type: 'unsupported', reason: 'URL', rawFrom: from, rawTo: to };
   }

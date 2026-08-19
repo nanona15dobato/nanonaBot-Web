@@ -54,19 +54,33 @@ test('classifyPair: Template:同士はtemplateRename', () => {
   assert.equal(result.to, '新テンプレ');
 });
 
-test('classifyPair: DELETE_PAGE/REDIRECT_TARGET/subst:/URLは未対応', () => {
-  assert.equal(classifyPair('A', 'DELETE_PAGE').reason, 'DELETE_PAGE');
-  assert.equal(classifyPair('A', 'REDIRECT_TARGET').reason, 'REDIRECT_TARGET');
-  assert.equal(classifyPair('Template:A', 'subst:').reason, 'subst');
+test('classifyPair: DELETE_PAGEはunlinkPageとして処理する（フェーズ6対応）', () => {
+  const result = classifyPair('A', 'DELETE_PAGE');
+  assert.equal(result.type, 'unlinkPage');
+  assert.equal(result.from, 'A');
+});
+
+test('classifyPair: REDIRECT_TARGETは引き続き未対応（解決先の不安定さ・不可視性への配慮）', () => {
+  const result = classifyPair('A', 'REDIRECT_TARGET');
+  assert.equal(result.type, 'unsupported');
+  assert.equal(result.reason, 'REDIRECT_TARGET');
+});
+
+test('classifyPair: "Template:X |subst:" はtemplateSubstとして処理する（フェーズ6対応）', () => {
+  const result = classifyPair('Template:旧テンプレ', 'subst:');
+  assert.equal(result.type, 'templateSubst');
+  assert.equal(result.from, '旧テンプレ');
+});
+
+test('classifyPair: Template:プレフィックスの無いfromに対するsubst:指定は未対応のまま', () => {
+  const result = classifyPair('旧テンプレ', 'subst:');
+  assert.equal(result.type, 'unsupported');
+  assert.equal(result.reason, 'subst');
+});
+
+test('classifyPair: URLペアは未対応', () => {
   assert.equal(classifyPair('http://move.from/x', 'https://move.to/y').reason, 'URL');
-  for (const r of [
-    classifyPair('A', 'DELETE_PAGE'),
-    classifyPair('A', 'REDIRECT_TARGET'),
-    classifyPair('Template:A', 'subst:'),
-    classifyPair('http://a', 'http://b'),
-  ]) {
-    assert.equal(r.type, 'unsupported');
-  }
+  assert.equal(classifyPair('http://a', 'http://b').type, 'unsupported');
 });
 
 test('classifyPair: アンカー・{{!}}パイプラベル付きは未対応（フェーズ1では単純改名のみ）', () => {
@@ -112,7 +126,7 @@ test('parseBotreqTemplates: 仕様書8章の複合例（複数ペア種別混在
   const proposals = parseBotreqTemplates(wikitext);
   assert.equal(proposals.length, 1);
   const types = proposals[0].pairs.map((p) => p.type);
-  assert.deepEqual(types, ['linkRename', 'templateRename', 'categoryRename', 'unsupported', 'unsupported', 'unsupported']);
+  assert.deepEqual(types, ['linkRename', 'templateRename', 'categoryRename', 'unlinkPage', 'unsupported', 'unsupported']);
 });
 
 test('parseBotreqTemplates: 複数の{{リンク修正依頼/改名}}呼び出しをすべて検出する', () => {

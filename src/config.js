@@ -34,6 +34,8 @@ const config = {
   wiki: {
     // Bot編集の対象となるウィキ本体のAPIエンドポイント（フェーズ2以降のワーカーで使用）
     apiUrl: process.env.WIKI_API_URL || 'https://ja.wikipedia.org/w/api.php',
+    // 編集ログ画面（フェーズ6）でrevidから差分ページへのリンクを組み立てるのに使う
+    host: new URL(process.env.WIKI_API_URL || 'https://ja.wikipedia.org/w/api.php').host,
   },
 
   session: {

@@ -77,4 +77,15 @@ router.get('/tasks/:id', (req, res) => {
   );
 });
 
+// 編集ログ画面（owner専用。フェーズ6）
+router.get('/edit-log', (req, res) => {
+  const role = req.session && req.session.role;
+  const username = req.session && req.session.username;
+
+  if (!role) return res.send(loginPageHtml());
+  if (role !== 'owner') return res.status(403).send(deniedPageHtml(username));
+
+  res.send(renderShell({ title: '編集ログ', script: 'editLog.js', initialData: { username, role } }));
+});
+
 module.exports = router;

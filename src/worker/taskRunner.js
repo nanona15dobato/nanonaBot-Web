@@ -28,11 +28,13 @@ function materializeReplacements(replacements) {
 }
 
 function computeStageCount(replacements) {
-  return replacements.some((r) => WAVE_TEMPLATE_TYPES.includes(r.templateType)) ? 2 : 1;
+  // forceTargets指定時（失敗ページ再試行。フェーズ6）はウェーブ分割せず常に1ステージで扱う
+  return replacements.some((r) => !r.forceTargets && WAVE_TEMPLATE_TYPES.includes(r.templateType)) ? 2 : 1;
 }
 
 /** そのルールが指定ステージで対象ページ収集の対象になるか。 */
 function ruleAppliesToStage(rule, stage) {
+  if (rule.forceTargets) return stage === 1;
   if (WAVE_TEMPLATE_TYPES.includes(rule.templateType)) return stage === 1 || stage === 2;
   // custom/categoryRename/categoryRemove/templateRename はステージ1のみ
   return stage === 1;
@@ -43,6 +45,13 @@ function ruleAppliesToStage(rule, stage) {
  * @returns {Promise<{results: Array<{title:string, namespace:number}>, error: string|null}>}
  */
 async function resolveRuleTargetsForStage(rule, stage) {
+  // 失敗ページ再試行（フェーズ6）: 通常のtargetSource解決をバイパスし、
+  // 指定されたページ名だけを対象にする。templateTypeによらず常に有効。
+  if (rule.forceTargets) {
+    const results = rule.forceTargets.map((title) => ({ title, namespace: null }));
+    return { results, error: null };
+  }
+
   switch (rule.templateType) {
     case 'custom':
       if (rule.targetSource.type === 'manualList') {
@@ -71,6 +80,15 @@ async function resolveRuleTargetsForStage(rule, stage) {
       };
 
     case 'templateRename':
+      return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: rule.namespaces || [0] }), error: null };
+
+    case 'unlinkPage':
+      // リンク解除（BOTREQのDELETE_PAGE。フェーズ6）。既定ns=0、複数選択可。
+      // linkRename系のような2ウェーブ構成は取らず単一ステージで扱う（簡易実装）。
+      return { results: await resolveBacklinks({ page: rule.from, namespaces: rule.namespaces || [0] }), error: null };
+
+    case 'templateSubst':
+      // テンプレートのsubst化（BOTREQのTemplate:X→subst:。フェーズ6）
       return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: rule.namespaces || [0] }), error: null };
 
     default:
@@ -256,4 +274,5 @@ module.exports = {
   materializeReplacements,
   computeStageCount,
   ruleAppliesToStage,
+  resolveRuleTargetsForStage,
 };

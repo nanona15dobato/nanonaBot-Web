@@ -11,7 +11,7 @@
   const $notice = $('<div>');
   $app.append($notice);
 
-  // フェーズ4: 6種類すべてのtemplateTypeが実際に機能する（仕様書6章・10章）。
+  // フェーズ4〜6: 8種類すべてのtemplateTypeが実際に機能する（仕様書6章・10章、フェーズ6でunlinkPage/templateSubstを追加）。
   const RULE_TYPES = [
     { data: 'custom', label: 'カスタム' },
     { data: 'linkRename', label: 'リンク置換' },
@@ -19,7 +19,12 @@
     { data: 'categoryRename', label: 'Category置換' },
     { data: 'categoryRemove', label: 'Category除去' },
     { data: 'templateRename', label: 'テンプレート置換' },
+    { data: 'unlinkPage', label: 'リンク解除' },
+    { data: 'templateSubst', label: 'テンプレートのsubst化' },
   ];
+
+  // toが不要な種別（fromのみで完結する）
+  const TYPES_WITHOUT_TO = ['categoryRemove', 'unlinkPage', 'templateSubst'];
 
   const CUSTOM_TARGET_SOURCE_TYPES = [
     { data: 'manualList', label: '手入力' },
@@ -201,9 +206,16 @@
         value: (prefill && prefill.from) || '',
       });
       const toWidget = new OO.ui.TextInputWidget({ placeholder: '改名先', value: (prefill && prefill.to) || '' });
-      const needsTo = type !== 'categoryRemove';
+      const needsTo = !TYPES_WITHOUT_TO.includes(type);
 
-      $body.append(new OO.ui.FieldLayout(fromWidget, { label: type === 'categoryRemove' ? '除去対象' : '改名元（from）', align: 'top' }).$element);
+      const fromLabels = {
+        categoryRemove: '除去対象',
+        unlinkPage: 'リンク解除対象',
+        templateSubst: 'subst化するテンプレート',
+      };
+      $body.append(
+        new OO.ui.FieldLayout(fromWidget, { label: fromLabels[type] || '改名元（from）', align: 'top' }).$element
+      );
       if (needsTo) {
         $body.append(new OO.ui.FieldLayout(toWidget, { label: '改名先（to）', align: 'top' }).$element);
       }
@@ -245,6 +257,34 @@
           templateType: 'templateRename',
           from: fromWidget.getValue(),
           to: toWidget.getValue(),
+          namespaces: namespacesOrNull(ns.widget),
+        });
+      } else if (type === 'unlinkPage') {
+        const ns = buildNamespaceField([0], '既定は標準名前空間のみ。リンク元へのbacklinksを対象にします。');
+        $body.append(
+          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
+            '[[対象]]・[[対象|表示名]]・[[対象#アンカー]] を地の文に変換します（BOTREQのDELETE_PAGE相当）。' +
+              'ハットノートテンプレート内の参照解除はフェーズ6では対象外です。'
+          ),
+          ns.$element
+        );
+        rule.getConfig = () => ({
+          templateType: 'unlinkPage',
+          from: fromWidget.getValue(),
+          namespaces: namespacesOrNull(ns.widget),
+        });
+      } else if (type === 'templateSubst') {
+        const ns = buildNamespaceField([0], '既定は標準名前空間のみ。テンプレート使用ページへのembeddedinを対象にします。');
+        $body.append(
+          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
+            '{{対象}} を {{subst:対象}} に変換します（BOTREQの Template:X→subst: 相当）。' +
+              '既にsubst:/safesubst:済みのものは二重に付与しません。'
+          ),
+          ns.$element
+        );
+        rule.getConfig = () => ({
+          templateType: 'templateSubst',
+          from: fromWidget.getValue(),
           namespaces: namespacesOrNull(ns.widget),
         });
       }
@@ -301,6 +341,8 @@
           $row.css('color', '#ac6600').text(
             '[未対応: ' + (UNSUPPORTED_REASON_LABELS[pair.reason] || pair.reason) + '] ' + pair.rawFrom + ' → ' + pair.rawTo
           );
+        } else if (pair.to === undefined) {
+          $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + pair.from);
         } else {
           $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + pair.from + ' → ' + pair.to);
         }

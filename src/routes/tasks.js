@@ -8,6 +8,7 @@ const { pool } = require('../db');
 const { validateTaskConfig } = require('../worker/taskConfig');
 const { toJsonColumn, parseJsonColumn } = require('../dbJson');
 const mediawiki = require('../services/mediawiki');
+const config = require('../config');
 
 // ログイン中ユーザー情報（クライアントJSがUI出し分けに使う）
 router.get('/api/whoami', (req, res) => {
@@ -167,6 +168,71 @@ router.post('/api/tasks/:id/resume', requireRole('owner'), async (req, res, next
       return res.status(409).json({ error: 'not_paused' });
     }
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 失敗ページのみを対象にした再試行タスクを作成する（仕様書9.3節・フェーズ6）。
+// edit_logを基準にする（task_pagesは9.4節のクリーンアップ対象で消えている場合があるため）。
+// 元タスクの置換ルールをそのまま引き継ぎ、対象だけをforceTargetsで失敗ページに絞る。
+router.post('/api/tasks/:id/retry-failed', requireRole('owner'), async (req, res, next) => {
+  try {
+    const [taskRows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    const originalTask = taskRows[0];
+    if (!originalTask) return res.status(404).json({ error: 'not_found' });
+
+    const [failedRows] = await pool.query(
+      `SELECT DISTINCT page_title FROM edit_log WHERE task_id = ? AND status = 'failed'`,
+      [req.params.id]
+    );
+    const failedTitles = failedRows.map((r) => r.page_title);
+    if (failedTitles.length === 0) {
+      return res.status(409).json({ error: 'no_failed_pages', message: 'このタスクに失敗ページはありません' });
+    }
+
+    const originalConfig = parseJsonColumn(originalTask.config_json, {});
+    const retryReplacements = (originalConfig.replacements || []).map((r) => ({ ...r, forceTargets: failedTitles }));
+    const retryConfig = { ...originalConfig, replacements: retryReplacements };
+
+    const [result] = await pool.query(
+      `INSERT INTO tasks (created_by, account, mode, status, config_json, retry_of_task_id)
+       VALUES (?, ?, ?, 'queued', ?, ?)`,
+      [req.session.username, originalTask.account, originalTask.mode, toJsonColumn(retryConfig), originalTask.id]
+    );
+    res.status(201).json({ id: result.insertId, retriedPageCount: failedTitles.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 編集ログの検索・閲覧（仕様書9.4節・フェーズ6）。task_pagesが削除された後も参照できる恒久ログ。
+router.get('/api/edit-log', requireRole('owner'), async (req, res, next) => {
+  try {
+    const conditions = [];
+    const params = [];
+    if (req.query.task_id) {
+      conditions.push('task_id = ?');
+      params.push(Number(req.query.task_id));
+    }
+    if (req.query.page_title) {
+      conditions.push('page_title LIKE ?');
+      params.push(`%${req.query.page_title}%`);
+    }
+    if (req.query.status && ['edited', 'failed'].includes(req.query.status)) {
+      conditions.push('status = ?');
+      params.push(req.query.status);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+    const [rows] = await pool.query(`SELECT * FROM edit_log ${where} ORDER BY id DESC LIMIT ?`, [...params, limit]);
+
+    const withDiffUrl = rows.map((r) => ({
+      ...r,
+      diffUrl: r.revid ? `https://${config.wiki.host}/w/index.php?diff=${r.revid}&oldid=prev` : null,
+    }));
+    res.json(withDiffUrl);
   } catch (err) {
     next(err);
   }

@@ -87,8 +87,9 @@
 
     if (params.user && params.user.role === 'owner') {
       const dashboardBtn = new OO.ui.ButtonWidget({ label: 'ダッシュボード', href: '/', framed: false });
+      const editLogBtn = new OO.ui.ButtonWidget({ label: '編集ログ', href: '/edit-log', framed: false });
       const newTaskBtn = new OO.ui.ButtonWidget({ label: '＋ 新規タスク作成', href: '/tasks/new', flags: ['progressive'] });
-      $right.append(dashboardBtn.$element, newTaskBtn.$element);
+      $right.append(dashboardBtn.$element, editLogBtn.$element, newTaskBtn.$element);
     }
 
     const emergencyBtn = new OO.ui.ButtonWidget({ label: '緊急停止', flags: ['destructive'], icon: 'alert' });

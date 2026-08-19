@@ -20,11 +20,31 @@ function escapeReplacementDollar(str) {
 }
 
 /**
+ * MediaWikiのページタイトル規則（多くのウィキ・多くの名前空間で先頭1文字だけ
+ * 大文字小文字を区別しない。2文字目以降は区別する）に合わせた正規表現パターンを作る。
+ * 単純に正規表現全体へ 'i' フラグを付けると、無関係な別ページ（例: "MyTemplate" と
+ * "mytemplate"）まで誤って一致してしまうため、先頭文字だけを文字クラス化する。
+ */
+function firstLetterFlexiblePattern(name) {
+  const str = String(name);
+  if (str.length === 0) return '';
+  const first = str[0];
+  const rest = escapeRegExp(str.slice(1));
+  const upper = first.toUpperCase();
+  const lower = first.toLowerCase();
+  if (upper === lower) {
+    // 数字・記号・大文字小文字の概念が無い文字（多くの日本語文字を含む）はそのまま
+    return escapeRegExp(first) + rest;
+  }
+  return `[${escapeRegExp(upper)}${escapeRegExp(lower)}]${rest}`;
+}
+
+/**
  * ハットノート系テンプレート（{{See also|X}}等）内の素の参照を修正する共通ステップ。
  * 6.1/6.2/6.3節で共有される「共通ステップA」。
  */
 function hatnoteStep(from, to) {
-  const f = escapeRegExp(from);
+  const f = firstLetterFlexiblePattern(from);
   const tRep = escapeReplacementDollar(to);
   return {
     pattern:
@@ -39,8 +59,8 @@ function hatnoteStep(from, to) {
 
 /** 6.1 リンク置換（標準） */
 function linkRenameSteps(from, to) {
-  const f = escapeRegExp(from);
-  const t = escapeRegExp(to);
+  const f = firstLetterFlexiblePattern(from);
+  const t = firstLetterFlexiblePattern(to);
   const tRep = escapeReplacementDollar(to);
   return [
     {
@@ -59,8 +79,8 @@ function linkRenameSteps(from, to) {
 
 /** 6.2 リンク置換2（表示保持・リンク先のみ変更） */
 function linkRename2Steps(from, to) {
-  const f = escapeRegExp(from);
-  const t = escapeRegExp(to);
+  const f = firstLetterFlexiblePattern(from);
+  const t = firstLetterFlexiblePattern(to);
   const fRep = escapeReplacementDollar(from);
   const tRep = escapeReplacementDollar(to);
   return [
@@ -89,8 +109,8 @@ function linkRename2Steps(from, to) {
  * 自動編集ステップとしては生成しない（warningSourceで検出・警告のみ行う）。
  */
 function categoryRenameSteps(from, to) {
-  const f = escapeRegExp(from);
-  const t = escapeRegExp(to);
+  const f = firstLetterFlexiblePattern(from);
+  const t = firstLetterFlexiblePattern(to);
   const tRep = escapeReplacementDollar(to);
   const nsAlt = '(?:Category|category|カテゴリ)';
   return [
@@ -117,7 +137,7 @@ function categoryRenameSteps(from, to) {
  * Step2（Template:リダイレクトの所属カテゴリの更新）は8章の方針により自動編集しない。
  */
 function categoryRemoveSteps(from) {
-  const f = escapeRegExp(from);
+  const f = firstLetterFlexiblePattern(from);
   return [
     {
       pattern: `\\n?\\[\\[\\s*(?:Category|category|カテゴリ):\\s*${f}\\s*(\\|[^\\]]*)?\\]\\]`,
@@ -131,13 +151,56 @@ function categoryRemoveSteps(from) {
  * 6.5 テンプレート置換（単純名称変更のみ）。from/toはTemplate:プレフィックスを除いた素の名前。
  */
 function templateRenameSteps(from, to) {
-  const f = escapeRegExp(from);
+  const f = firstLetterFlexiblePattern(from);
   const tRep = escapeReplacementDollar(to);
   return [
     {
       pattern: `(\\{\\{\\s*)${f}\\s*([\\|\\}])`,
       flags: 'g',
       replacement: `$1${tRep}$2`,
+    },
+  ];
+}
+
+/**
+ * リンク解除（フェーズ6。BOTREQの DELETE_PAGE 相当）。
+ * [[from]] → from、[[from|表示名]] → 表示名、[[from#アンカー]] → from のように、
+ * 通常のwikilinkを地の文に変換する。ハットノート系テンプレート内の参照解除は対象外
+ * （フェーズ1範囲外。必要な場合はcustom置換で個別対応する）。
+ */
+function unlinkPageSteps(from) {
+  const f = firstLetterFlexiblePattern(from);
+  return [
+    {
+      // パイプ付き（表示名あり）: [[from|表示名]] → 表示名
+      pattern: `\\[\\[\\s*${f}\\s*(?:\\#[^\\]|]*)?\\|([^\\]]*)\\]\\]`,
+      flags: 'g',
+      replacement: '$1',
+    },
+    {
+      // パイプなし: [[from]] / [[from#アンカー]] → from
+      pattern: `\\[\\[\\s*${f}\\s*(?:\\#[^\\]]*)?\\]\\]`,
+      flags: 'g',
+      replacement: escapeReplacementDollar(from),
+    },
+  ];
+}
+
+/**
+ * テンプレートのsubst化（フェーズ6。BOTREQの Template:X → subst: 相当）。
+ * {{from ...}} → {{subst:from ...}} に変換する。既に {{subst:from ...}} のものは
+ * 二重にsubst:が付かないよう除外する。
+ */
+function templateSubstSteps(from) {
+  const f = firstLetterFlexiblePattern(from);
+  return [
+    {
+      // 'subst:'/'safesubst:' の判定は小文字表記のみを見る（テンプレート名側は
+      // firstLetterFlexiblePatternで先頭文字のみ大文字小文字を許容し、名前全体を
+      // 大文字小文字無視にしてしまわないようにするため、全体には'i'フラグを付けない）
+      pattern: `(\\{\\{\\s*)(?!subst:|safesubst:)${f}\\s*([\\|\\}])`,
+      flags: 'g',
+      replacement: `$1subst:${escapeReplacementDollar(from)}$2`,
     },
   ];
 }
@@ -160,6 +223,10 @@ function buildStepsForTemplateType(templateType, { from, to }) {
       return categoryRemoveSteps(from);
     case 'templateRename':
       return templateRenameSteps(from, to);
+    case 'unlinkPage':
+      return unlinkPageSteps(from);
+    case 'templateSubst':
+      return templateSubstSteps(from);
     default:
       throw new Error(`buildStepsForTemplateType: 未知のtemplateType "${templateType}"`);
   }
@@ -172,6 +239,8 @@ const KNOWN_PRESET_TEMPLATE_TYPES = [
   'categoryRename',
   'categoryRemove',
   'templateRename',
+  'unlinkPage',
+  'templateSubst',
 ];
 
 module.exports = {
@@ -183,6 +252,8 @@ module.exports = {
   categoryRenameSteps,
   categoryRemoveSteps,
   templateRenameSteps,
+  unlinkPageSteps,
+  templateSubstSteps,
   buildStepsForTemplateType,
   TEMPLATE_TYPES_REQUIRING_TO,
   KNOWN_PRESET_TEMPLATE_TYPES,

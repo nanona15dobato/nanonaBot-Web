@@ -24,7 +24,12 @@ fakeModule.exports = {
 };
 require.cache[DB_PATH] = fakeModule;
 
-const { materializeReplacements, computeStageCount, ruleAppliesToStage } = require('../src/worker/taskRunner');
+const {
+  materializeReplacements,
+  computeStageCount,
+  ruleAppliesToStage,
+  resolveRuleTargetsForStage,
+} = require('../src/worker/taskRunner');
 const { applyReplacementSteps } = require('../src/worker/regexEngine');
 
 test('materializeReplacements: customはstepsをそのまま維持する', () => {
@@ -68,4 +73,48 @@ test('ruleAppliesToStage: linkRename系はステージ1・2両方、それ以外
   assert.equal(ruleAppliesToStage({ templateType: 'categoryRename' }, 2), false);
   assert.equal(ruleAppliesToStage({ templateType: 'custom' }, 2), false);
   assert.equal(ruleAppliesToStage({ templateType: 'templateRename' }, 2), false);
+});
+
+// ---- フェーズ6: unlinkPage/templateSubst ----
+
+test('materializeReplacements: unlinkPageはtoなしでsteps生成できる', () => {
+  const input = [{ templateType: 'unlinkPage', from: 'A' }];
+  const result = materializeReplacements(input);
+  assert.equal(applyReplacementSteps('[[A]]と[[B]]', result[0].steps), 'Aと[[B]]');
+});
+
+test('materializeReplacements: templateSubstはtoなしでsteps生成できる', () => {
+  const input = [{ templateType: 'templateSubst', from: 'A' }];
+  const result = materializeReplacements(input);
+  assert.equal(applyReplacementSteps('{{A}}', result[0].steps), '{{subst:A}}');
+});
+
+// ---- フェーズ6: forceTargets（失敗ページ再試行）----
+
+test('computeStageCount: forceTargets指定時はlinkRename系でもウェーブ分割しない', () => {
+  assert.equal(computeStageCount([{ templateType: 'linkRename', forceTargets: ['X'] }]), 1);
+  assert.equal(
+    computeStageCount([
+      { templateType: 'linkRename', forceTargets: ['X'] },
+      { templateType: 'custom' },
+    ]),
+    1
+  );
+});
+
+test('ruleAppliesToStage: forceTargets指定時はtemplateTypeによらずステージ1のみ', () => {
+  assert.equal(ruleAppliesToStage({ templateType: 'linkRename', forceTargets: ['X'] }, 1), true);
+  assert.equal(ruleAppliesToStage({ templateType: 'linkRename', forceTargets: ['X'] }, 2), false);
+});
+
+test('resolveRuleTargetsForStage: forceTargets指定時は通常のAPI解決をバイパスし指定タイトルのみ返す', async () => {
+  // categoryRenameは本来resolveCategoryMembers（ネットワークアクセス）を呼ぶが、
+  // forceTargetsがあればそれより先にバイパスされるため、fetchが無い環境でも呼び出せる。
+  const rule = { templateType: 'categoryRename', from: 'X', to: 'Y', forceTargets: ['失敗したページA', '失敗したページB'] };
+  const { results, error } = await resolveRuleTargetsForStage(rule, 1);
+  assert.deepEqual(
+    results.map((r) => r.title),
+    ['失敗したページA', '失敗したページB']
+  );
+  assert.equal(error, null);
 });

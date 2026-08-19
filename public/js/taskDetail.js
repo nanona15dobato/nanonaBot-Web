@@ -90,8 +90,25 @@
     if (task.status === 'completed_with_failures') {
       const msg = new OO.ui.MessageWidget({ type: 'warning', label: '一部のページで編集が失敗しました。' });
       $summarySection.append(msg.$element);
+      const retryBtn = new OO.ui.ButtonWidget({ label: '失敗ページのみを再試行', flags: ['progressive'] });
+      retryBtn.on('click', async () => {
+        retryBtn.setDisabled(true);
+        try {
+          const result = await C.postJson('/api/tasks/' + taskId + '/retry-failed', {});
+          C.showNotice($notice, 'success', result.retriedPageCount + '件を対象に再試行タスク #' + result.id + ' を作成しました。移動します…');
+          setTimeout(() => {
+            location.href = '/tasks/' + result.id;
+          }, 800);
+        } catch (e) {
+          C.showNotice($notice, 'error', '再試行タスクの作成に失敗しました: ' + e.message);
+          retryBtn.setDisabled(false);
+        }
+      });
+      $summarySection.append($('<div>').css('margin-top', '8px').append(retryBtn.$element));
       $summarySection.append(
-        $('<p>').text('失敗ページの再試行機能は編集ログ（edit_log）基準のフェーズ5以降で提供予定です。現時点では下記の一覧から失敗理由を確認してください。')
+        $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
+          '同じ置換ルール・編集設定を引き継ぎ、失敗したページのみを対象にした新規タスクを作成します（仕様書9.3節）。'
+        )
       );
     }
   }
