@@ -118,3 +118,52 @@ test('resolveRuleTargetsForStage: forceTargets指定時は通常のAPI解決を�
   );
   assert.equal(error, null);
 });
+
+// ---- フェーズ7: categoryRename/categoryRemoveの対象に、リダイレクトの所属カテゴリ構造一致ページも含める ----
+
+test('resolveRuleTargetsForStage: categoryRenameはカテゴリメンバーとリダイレクトの所属カテゴリ一致ページを統合する', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const u = new URL(String(url));
+    if (u.searchParams.get('list') === 'categorymembers') {
+      return { ok: true, status: 200, json: async () => ({ query: { categorymembers: [{ title: 'カテゴリメンバーページ', ns: 0 }] } }) };
+    }
+    if (u.searchParams.get('list') === 'backlinks') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ query: { backlinks: [{ title: 'テンプレ一致ページ', ns: 0 }, { title: 'カテゴリメンバーページ', ns: 0 }] } }),
+      };
+    }
+    throw new Error('想定外のAPI呼び出し: ' + u.search);
+  };
+  const mwClient = {
+    getPage: async (title) => ({
+      exists: true,
+      wikitext: title === 'テンプレ一致ページ' ? '{{リダイレクトの所属カテゴリ|redirect1=X|1-1=旧カテゴリ}}' : '本文のみ',
+    }),
+  };
+
+  try {
+    const rule = { templateType: 'categoryRename', from: '旧カテゴリ', to: '新カテゴリ' };
+    const { results } = await resolveRuleTargetsForStage(rule, 1, mwClient);
+    const titles = results.map((r) => r.title).sort();
+    // カテゴリメンバーページ（直接タグ）とテンプレ一致ページ（構造一致）が重複なく統合される
+    assert.deepEqual(titles, ['カテゴリメンバーページ', 'テンプレ一致ページ']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('resolveRuleTargetsForStage: mwClientが無い場合はリダイレクトの所属カテゴリ確認をスキップする（例外を投げない）', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ query: { categorymembers: [{ title: 'X', ns: 0 }] } }) });
+  try {
+    const rule = { templateType: 'categoryRemove', from: 'カテゴリA' };
+    const { results, error } = await resolveRuleTargetsForStage(rule, 1 /* mwClient省略 */);
+    assert.equal(error, null);
+    assert.deepEqual(results.map((r) => r.title), ['X']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

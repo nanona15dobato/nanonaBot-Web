@@ -274,3 +274,92 @@ test('runStagePipeline: onFailure="pause"は失敗直後にタスクを止め、
   // ページYはまだ編集されていない（先読みでprepareはされ得るが、editまでは進まない）
   assert.deepEqual(editCallOrder, ['ページX(失敗)']);
 });
+
+// ---- フェーズ7: Category置換/除去に伴う {{リダイレクトの所属カテゴリ}} の自動編集 ----
+
+test('applyRedirectCategoryTemplateEdits: categoryRenameルールがあれば該当カテゴリ引数も改名する', () => {
+  withStubbedDb(createFakeDb().pool, () => {
+    const { applyRedirectCategoryTemplateEdits } = require('../src/worker/pipeline');
+    const wikitext = '{{リダイレクトの所属カテゴリ\n|redirect1=X\n|1-1=旧カテゴリ\n}}';
+    const result = applyRedirectCategoryTemplateEdits(wikitext, [
+      { templateType: 'categoryRename', from: '旧カテゴリ', to: '新カテゴリ' },
+    ]);
+    assert.match(result, /\|1-1=新カテゴリ/);
+  });
+});
+
+test('applyRedirectCategoryTemplateEdits: categoryRemoveルールがあれば該当カテゴリ引数を除去する', () => {
+  withStubbedDb(createFakeDb().pool, () => {
+    const { applyRedirectCategoryTemplateEdits } = require('../src/worker/pipeline');
+    const wikitext = '{{リダイレクトの所属カテゴリ\n|redirect1=X\n|1-1=除去対象\n|1-2=残す\n}}';
+    const result = applyRedirectCategoryTemplateEdits(wikitext, [
+      { templateType: 'categoryRemove', from: '除去対象' },
+    ]);
+    assert.doesNotMatch(result, /除去対象/);
+    assert.match(result, /\|1-2=残す/);
+  });
+});
+
+test('applyRedirectCategoryTemplateEdits: 該当が無いページ・無関係なルールは変更しない', () => {
+  withStubbedDb(createFakeDb().pool, () => {
+    const { applyRedirectCategoryTemplateEdits } = require('../src/worker/pipeline');
+    const wikitext = '通常の記事本文。テンプレートなし。';
+    const result1 = applyRedirectCategoryTemplateEdits(wikitext, [
+      { templateType: 'categoryRename', from: 'A', to: 'B' },
+    ]);
+    assert.equal(result1, wikitext);
+
+    const result2 = applyRedirectCategoryTemplateEdits(wikitext, [{ templateType: 'custom', steps: [] }]);
+    assert.equal(result2, wikitext);
+  });
+});
+
+test('prepareOnePage: categoryRenameで[[Category:X]]タグと{{リダイレクトの所属カテゴリ}}の両方を1回の準備で書き換える', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 3, status: 'running', review_timeout_at: null, progress_current: 0 });
+  db.seedPages([
+    {
+      task_id: 3,
+      stage: 1,
+      order_index: 0,
+      page_title: '対象記事',
+      namespace: 0,
+      matched_rule_indices: '[0]',
+      status: 'pending',
+    },
+  ]);
+
+  const mwClient = {
+    getPage: async (title) => ({
+      title,
+      exists: true,
+      revid: 1,
+      baseTimestamp: '2026-08-11T09:00:00Z',
+      startTimestamp: '2026-08-11T09:00:01Z',
+      wikitext: '[[Category:旧カテゴリ]]\n\n{{リダイレクトの所属カテゴリ\n|redirect1=X\n|1-1=旧カテゴリ\n}}',
+    }),
+  };
+
+  await withStubbedDb(db.pool, async () => {
+    const { prepareOnePage } = require('../src/worker/pipeline');
+    const { buildStepsForTemplateType } = require('../src/worker/templatePresets');
+
+    const rule = {
+      templateType: 'categoryRename',
+      from: '旧カテゴリ',
+      to: '新カテゴリ',
+      steps: buildStepsForTemplateType('categoryRename', { from: '旧カテゴリ', to: '新カテゴリ' }),
+    };
+
+    const [rows] = await db.pool.query('SELECT * FROM task_pages WHERE task_id = ? AND stage = ? AND status = ?', [
+      3,
+      1,
+      'pending',
+    ]);
+    const result = await prepareOnePage(rows[0], { mwClient, replacements: [rule] });
+
+    assert.equal(result.status, 'prepared');
+    assert.match(result.newWikitext, /\[\[Category:新カテゴリ\]\]/);
+    assert.match(result.newWikitext, /\|1-1=新カテゴリ/);
+  });
+});

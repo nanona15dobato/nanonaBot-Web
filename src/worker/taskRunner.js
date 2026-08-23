@@ -7,6 +7,7 @@ const { runStagePipeline } = require('./pipeline');
 const { buildStepsForTemplateType, KNOWN_PRESET_TEMPLATE_TYPES } = require('./templatePresets');
 const { resolveTargetSource, resolveCategoryMembers, resolveBacklinks, resolveEmbeddedIn } = require('./targetResolvers');
 const { collectCategoryWarnings } = require('./categoryWarnings');
+const { findCandidatePages: findRedirectCategoryTemplatePages } = require('./redirectCategoryTemplate');
 
 const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2'];
 const CATEGORY_TEMPLATE_TYPES = ['categoryRename', 'categoryRemove'];
@@ -42,9 +43,13 @@ function ruleAppliesToStage(rule, stage) {
 
 /**
  * 1ルール・1ステージ分の対象ページを解決する。
+ * @param {object} rule
+ * @param {number} stage
+ * @param {import('../bot/mwClient').MediaWikiBotClient} [mwClient] - categoryRename/categoryRemoveで
+ *   Template:リダイレクトの所属カテゴリの構造一致ページを調べるのに使う（省略時はスキップする）
  * @returns {Promise<{results: Array<{title:string, namespace:number}>, error: string|null}>}
  */
-async function resolveRuleTargetsForStage(rule, stage) {
+async function resolveRuleTargetsForStage(rule, stage, mwClient) {
   // 失敗ページ再試行（フェーズ6）: 通常のtargetSource解決をバイパスし、
   // 指定されたページ名だけを対象にする。templateTypeによらず常に有効。
   if (rule.forceTargets) {
@@ -73,11 +78,33 @@ async function resolveRuleTargetsForStage(rule, stage) {
       return { results: await resolveBacklinks({ page: rule.from, namespaces: rule.namespaces || [0] }), error: null };
 
     case 'categoryRename':
-    case 'categoryRemove':
-      return {
-        results: await resolveCategoryMembers({ category: rule.from, namespaces: rule.namespaces ?? null }),
-        error: null,
-      };
+    case 'categoryRemove': {
+      // 主対象: カテゴリメンバー（全名前空間が既定）
+      const memberResults = await resolveCategoryMembers({ category: rule.from, namespaces: rule.namespaces ?? null });
+      // 付随対象: Template:リダイレクトの所属カテゴリ内で構造的にこのカテゴリ名を
+      // 保持しているページ（8章で確認済みの書式にもとづき自動編集の対象にする）。
+      // mwClient無しでは判定できないため、その場合はスキップする（呼び出し元で必ず渡すこと）。
+      let templateResults = [];
+      if (mwClient) {
+        try {
+          templateResults = await findRedirectCategoryTemplatePages({ category: rule.from, mwClient });
+        } catch (err) {
+          console.warn(
+            `[taskRunner] Template:リダイレクトの所属カテゴリの対象確認に失敗しました（${rule.from}）:`,
+            err.message || err
+          );
+        }
+      }
+      const seen = new Set(memberResults.map((r) => r.title));
+      const merged = [...memberResults];
+      for (const p of templateResults) {
+        if (!seen.has(p.title)) {
+          merged.push(p);
+          seen.add(p.title);
+        }
+      }
+      return { results: merged, error: null };
+    }
 
     case 'templateRename':
       return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: rule.namespaces || [0] }), error: null };
@@ -99,8 +126,12 @@ async function resolveRuleTargetsForStage(rule, stage) {
 /**
  * 指定ステージの対象ページを列挙し、task_pagesへ投入する（そのステージが未列挙の場合のみ＝冪等）。
  * ウェーブ2は「ウェーブ1の全ページが編集完了してから」呼ばれる想定（runTask側で保証する）。
+ * @param {object} task
+ * @param {Array} replacements
+ * @param {number} stage
+ * @param {import('../bot/mwClient').MediaWikiBotClient} mwClient
  */
-async function enumerateStageIfNeeded(task, replacements, stage) {
+async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
   const [existingCountRows] = await pool.query(
     'SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ? AND stage = ?',
     [task.id, stage]
@@ -114,7 +145,7 @@ async function enumerateStageIfNeeded(task, replacements, stage) {
     const rule = replacements[idx];
     if (!ruleAppliesToStage(rule, stage)) continue;
 
-    const { results, error } = await resolveRuleTargetsForStage(rule, stage);
+    const { results, error } = await resolveRuleTargetsForStage(rule, stage, mwClient);
     if (error) {
       stageErrors.push(`replacements[${idx}] (${rule.templateType}): ${error}`);
     }
@@ -215,7 +246,7 @@ async function runTask(task) {
   await collectWarningsIfNeeded(task, replacements, mwClient);
 
   // ---- ウェーブ1 ----
-  await enumerateStageIfNeeded(task, replacements, 1);
+  await enumerateStageIfNeeded(task, replacements, 1, mwClient);
   let result = await runStagePipeline({
     taskId: task.id,
     stage: 1,
@@ -237,7 +268,7 @@ async function runTask(task) {
 
   // ---- ウェーブ2（linkRename/linkRename2ルールがある場合のみ） ----
   if (stageCount === 2) {
-    await enumerateStageIfNeeded(task, replacements, 2);
+    await enumerateStageIfNeeded(task, replacements, 2, mwClient);
     result = await runStagePipeline({
       taskId: task.id,
       stage: 2,

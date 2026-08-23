@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveBacklinks } = require('./targetResolvers');
+const { findCalls, findMatchingCategoryArgs } = require('./redirectCategoryTemplate');
 
 const WARNING_MARKER = 'リダイレクトの所属カテゴリ';
 const SNIPPET_BEFORE = 60;
@@ -16,10 +17,16 @@ function extractSnippet(wikitext, markerIndex) {
 }
 
 /**
- * Category:from への標準名前空間backlinksを取得し、各ページに
- * `{{リダイレクトの所属カテゴリ...}}` と旧カテゴリ名(from)の両方が含まれるものを警告として返す。
- * 8章の方針により検出のみ・自動編集は行わない。正確な引数書式が未確認のため、
- * 判定は「テンプレート名らしき文字列」＋「対象カテゴリ名」の共起という緩い基準にとどめている。
+ * Category:from への標準名前空間backlinksを取得し、`{{リダイレクトの所属カテゴリ...}}`と
+ * 旧カテゴリ名(from)の共起があるのに構造的には一致しないページ（＝自動編集できない・
+ * 想定外の記法の可能性がある）だけを警告として返す。
+ *
+ * Template:リダイレクトの所属カテゴリ の正確な引数書式は確認済み（仕様書8章）で、
+ * 構造的に一致するページは redirectCategoryTemplate.js が自動編集する
+ * （taskRunner.jsのresolveRuleTargetsForStageで対象ページに含まれ、
+ * pipeline.jsのprepareOnePageで実際に書き換えられる）ため、ここでは重複して
+ * 警告を出さない。緩い文字列一致はできるが構造的に確認できないケースだけが対象になる
+ * （例: 想定外のテンプレート変種、コメントアウトされた記載等）。
  *
  * @param {object} params
  * @param {string} params.from - Category:プレフィックスを除いた素のカテゴリ名
@@ -37,6 +44,9 @@ async function collectCategoryWarnings({ from, mwClient }) {
     const markerIndex = page.wikitext.indexOf(WARNING_MARKER);
     if (markerIndex === -1) continue;
     if (!page.wikitext.includes(from)) continue;
+
+    const hasPreciseMatch = findCalls(page.wikitext).some((call) => findMatchingCategoryArgs(call, from).length > 0);
+    if (hasPreciseMatch) continue; // 自動編集の対象になるため警告不要
 
     warnings.push({
       pageTitle: candidate.title,

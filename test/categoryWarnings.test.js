@@ -14,7 +14,7 @@ test('extractSnippet: マーカー周辺を切り出し、省略記号を付け�
   assert.ok(snippet.includes('リダイレクトの所属カテゴリ'));
 });
 
-test('collectCategoryWarnings: テンプレート名と旧カテゴリ名が共起するページのみ警告として返す', async () => {
+test('collectCategoryWarnings: 構造的に一致するページは警告に含めない（自動編集対象のため）', async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => ({
     ok: true,
@@ -22,18 +22,22 @@ test('collectCategoryWarnings: テンプレート名と旧カテゴリ名が共�
     json: async () => ({
       query: {
         backlinks: [
-          { title: 'ページA（該当）', ns: 0 },
+          { title: 'ページA（構造一致）', ns: 0 },
           { title: 'ページB（テンプレなし）', ns: 0 },
           { title: 'ページC（別カテゴリ言及）', ns: 0 },
+          { title: 'ページD（緩い一致のみ）', ns: 0 },
         ],
       },
     }),
   });
 
   const pages = {
-    'ページA（該当）': '本文…{{リダイレクトの所属カテゴリ|旧カテゴリ名}}…',
+    'ページA（構造一致）': '本文…{{リダイレクトの所属カテゴリ|redirect1=X|1-1=旧カテゴリ名}}…',
     'ページB（テンプレなし）': '本文のみ、テンプレなし',
-    'ページC（別カテゴリ言及）': '{{リダイレクトの所属カテゴリ|別のカテゴリ}}',
+    'ページC（別カテゴリ言及）': '{{リダイレクトの所属カテゴリ|redirect1=X|1-1=別のカテゴリ}}',
+    // マーカー文字列とカテゴリ名は共起するが、テンプレート呼び出しの引数としては
+    // 構造的に確認できない（コメントアウトされている）ケース
+    'ページD（緩い一致のみ）': '<!-- リダイレクトの所属カテゴリとして 旧カテゴリ名 を検討中 -->',
   };
   const mwClient = {
     getPage: async (title) => ({ exists: true, wikitext: pages[title] || '' }),
@@ -42,8 +46,7 @@ test('collectCategoryWarnings: テンプレート名と旧カテゴリ名が共�
   try {
     const warnings = await collectCategoryWarnings({ from: '旧カテゴリ名', mwClient });
     assert.equal(warnings.length, 1);
-    assert.equal(warnings[0].pageTitle, 'ページA（該当）');
-    assert.match(warnings[0].snippet, /リダイレクトの所属カテゴリ/);
+    assert.equal(warnings[0].pageTitle, 'ページD（緩い一致のみ）');
   } finally {
     global.fetch = originalFetch;
   }

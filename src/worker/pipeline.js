@@ -5,9 +5,30 @@ const { applyReplacementSteps } = require('./regexEngine');
 const { isEmergencyStopped } = require('./emergencyStop');
 const { writeEditLog } = require('./editLog');
 const { parseJsonColumn } = require('../dbJson');
+const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MANUAL_POLL_MS = 3000;
+
+/**
+ * matchedRulesのうちcategoryRename/categoryRemoveについて、
+ * Template:リダイレクトの所属カテゴリ内の該当カテゴリ引数も書き換える（仕様書6.3/6.4節・8章）。
+ * 該当箇所が無ければ何もしない（安全に無変化で返る）。
+ * @param {string} wikitext
+ * @param {Array} matchedRules
+ * @returns {string}
+ */
+function applyRedirectCategoryTemplateEdits(wikitext, matchedRules) {
+  let text = wikitext;
+  for (const rule of matchedRules) {
+    if (rule.templateType === 'categoryRename') {
+      text = renameCategoryInTemplate(text, rule.from, rule.to).wikitext;
+    } else if (rule.templateType === 'categoryRemove') {
+      text = removeCategoryFromTemplate(text, rule.from).wikitext;
+    }
+  }
+  return text;
+}
 
 /**
  * 1つのページを準備する（wikitext取得→置換適用→差分の有無判定→DB更新）。
@@ -28,8 +49,12 @@ async function prepareOnePage(row, ctx) {
     }
 
     const ruleIndices = parseJsonColumn(row.matched_rule_indices, []);
-    const steps = ruleIndices.flatMap((idx) => ctx.replacements[idx]?.steps || []);
-    const newWikitext = applyReplacementSteps(page.wikitext, steps);
+    const matchedRules = ruleIndices.map((idx) => ctx.replacements[idx]).filter(Boolean);
+    const steps = matchedRules.flatMap((r) => r.steps || []);
+    let newWikitext = applyReplacementSteps(page.wikitext, steps);
+    // Category置換/除去ルールが含まれる場合、{{リダイレクトの所属カテゴリ}}内の
+    // 該当カテゴリ引数も併せて書き換える（該当が無いページには影響しない）
+    newWikitext = applyRedirectCategoryTemplateEdits(newWikitext, matchedRules);
 
     if (newWikitext === page.wikitext) {
       await pool.query(
@@ -241,4 +266,4 @@ async function runStagePipeline(ctx) {
   return { completed: true, hadFailures };
 }
 
-module.exports = { runStagePipeline, prepareOnePage, waitForApproval, editOnePage };
+module.exports = { runStagePipeline, prepareOnePage, waitForApproval, editOnePage, applyRedirectCategoryTemplateEdits };

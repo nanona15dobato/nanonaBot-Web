@@ -1,4 +1,4 @@
-# NanonaBot Tool（フェーズ1-6）
+# NanonaBot Tool（フェーズ1-7）
 
 Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜5実装です。
 
@@ -79,7 +79,7 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
   対応済みペア数を表示し、ワンクリックでルールとして取り込める（取り込んだ内容は送信前に
   必ず内容を確認・編集できる。自動即時投入はしない）
 
-**フェーズ6（今回追加）**
+**フェーズ6**
 - **リンク解除（`unlinkPage`）・テンプレートのsubst化（`templateSubst`）を新規テンプレート種別として実装**
   （`src/worker/templatePresets.js`）。BOTREQの`DELETE_PAGE`／`Template:X→subst:`を、
   検出のみから実際に自動処理できるように対応。`REDIRECT_TARGET`は解決先が時間とともに
@@ -97,9 +97,21 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
   検索でき、各行から実際の差分ページ（`action=compare`ではなく本チェックリビジョンへの
   `index.php?diff=`リンク）へ飛べる
 
-**含まれないもの（フェーズ7以降）**: `Template:リダイレクトの所属カテゴリ`への実際の自動編集
-（8章の方針により正確な引数書式が未確認のため、現時点では検出・警告のみ）、BOTREQの
-`REDIRECT_TARGET`・外部URL・アンカー付きペアへの対応。
+**フェーズ7（今回追加）**
+- **`Template:リダイレクトの所属カテゴリ`への実際の自動編集**（`src/worker/redirectCategoryTemplate.js`、
+  仕様書8章）。`scripts/check-redirect-category-template.js`をToolforge上で実行し取得した
+  テンプレート本文・実使用例4件から、正確な引数書式（Luaモジュールではない素のwikitextテンプレートで、
+  `redirect1`〜`redirect10` / `1-1`〜`10-20`という名前付き引数にCategory:プレフィックス無しの
+  カテゴリ名を直書きする形式）を確認し、検出のみだった実装を実際の自動編集に置き換えた
+  - Category置換: 該当引数の値だけをピンポイントで改名（`WikitextParser`の`argsOrdered`で
+    位置を特定）
+  - Category除去: 該当引数を丸ごと除去（名前付き引数のため番号が飛んでも表示は壊れないことを
+    確認済みで、番号の振り直しは行わない）
+  - 対象ページの検出は、置換前Categoryページ自体への標準名前空間backlinksから、実際に構造的に
+    一致するものだけを自動編集対象に追加する。緩い文字列一致のみ（構造的に確認できないもの）は
+    引き続き`task_warnings`で警告表示に留める
+
+**含まれないもの（フェーズ8以降）**: BOTREQの`REDIRECT_TARGET`・外部URL・アンカー付きペアへの対応。
 
 ---
 
@@ -350,9 +362,9 @@ curl -s -X POST "$BASE/api/tasks/1/pages/1/reject" -b "$COOKIE"
 curl -s -X POST "$BASE/api/tasks/1/resume" -b "$COOKIE"
 ```
 
-## 4. `Template:リダイレクトの所属カテゴリ` の書式確認スクリプト
+## 4. `Template:リダイレクトの所属カテゴリ` の書式確認スクリプト（確認済み）
 
-仕様書8章の「要確認事項」に対応。認証不要（公開情報の読み取りのみ）なので、Toolforge上・ローカルどちらでも実行できる。
+仕様書8章に対応。**フェーズ7で実際に一次資料を確認し、`src/worker/redirectCategoryTemplate.js`として実装済み**（Luaモジュールではない素のwikitextテンプレートで、`redirect1`〜`redirect10`／`1-1`〜`10-20`という名前付き引数にCategory:プレフィックス無しのカテゴリ名を直書きする形式）。スクリプト自体は今後テンプレートの仕様が変わった場合の再確認用に残してある。
 
 ```bash
 # ~/nanonaBot-Web で実行する
@@ -372,7 +384,7 @@ WIKI_USER_AGENT="NanonaBotTool-Verification/0.1 (User:Nanona15dobato)" \
 2. `Template:リダイレクトの所属カテゴリ/doc` のwikitext
 3. 実際にこのテンプレートを使っているページを数件取得し、`WikitextParser`（`lib/WikitextParser.js`）で実際の呼び出し部分を抽出・引数一覧を表示
 
-実行結果は `redirect-category-template-report.json`（`--out <path>` で変更可）にも保存される。この出力を見て、仕様書8章「Category置換 Step4 / Category除去 Step2」の実装方針（引数の名前付け方・番号振り直しの要否など）を確定させる。
+実行結果は `redirect-category-template-report.json`（`--out <path>` で変更可）にも保存される。
 
 ## 5. ディレクトリ構成
 
@@ -403,7 +415,9 @@ src/worker/regexEngine.js    正規表現の複数ステップ置換エンジン
 src/worker/templatePresets.js テンプレート機能8種類のsteps自動生成（仕様書6章。
                               firstLetterFlexiblePatternでMediaWikiのタイトル規則に対応）
 src/worker/targetResolvers.js 対象ページ自動取得（category/backlinks/embeddedin/regexSearch）
-src/worker/categoryWarnings.js Category系warningSource収集
+src/worker/categoryWarnings.js Category系warningSource収集（構造一致は自動編集対象のため除外。フェーズ7で更新）
+src/worker/redirectCategoryTemplate.js Template:リダイレクトの所属カテゴリの検出・カテゴリ引数の
+                              改名/除去（仕様書8章。フェーズ7、実テンプレート本文・実例で確認済み）
 src/worker/taskConfig.js     タスクconfig_jsonのバリデーション（純粋関数。8種類のtemplateType対応）
 src/worker/queue.js          キューからのアトミックなタスクclaim
 src/worker/pipeline.js       1ページ先読みパイプライン本体（仕様書9.2節）
@@ -433,7 +447,9 @@ test/templatePresets.test.js テンプレート機能8種類のステップ生�
                               回帰テスト、firstLetterFlexiblePatternの誤爆回帰テスト含む）
 test/targetResolvers.test.js 対象ページ自動取得のテスト（継続取得・エラー処理をfetchモックで検証）
 test/taskRunner.test.js      steps自動生成・ステージ判定・forceTargetsの純粋関数テスト
-test/categoryWarnings.test.js Category系警告収集のテスト
+test/categoryWarnings.test.js Category系警告収集のテスト（構造一致は警告対象外になることの確認含む）
+test/redirectCategoryTemplate.test.js Template:リダイレクトの所属カテゴリの改名/除去テスト
+                              （Toolforge上で取得した実際のページの呼び出し例を使用。フェーズ7）
 test/botreq.test.js          BOTREQパーサーのテスト（ユーザー提示の実例・複合例を含む全分類パターン）
 ```
 
@@ -441,20 +457,22 @@ test/botreq.test.js          BOTREQパーサーのテスト（ユーザー提示
 ブラウザのDOM/OOUIに依存するためこのテストスイートの対象外（構文チェックとAPI呼び出し先の
 突合はレビュー済み。3.7節の手順で実ブラウザから確認すること）。
 
-## 6. 既知の制約（フェーズ6時点）
+## 6. 既知の制約（フェーズ7時点）
 
 - BOTREQ連携は`REDIRECT_TARGET`/外部URL/アンカー・パイプラベル付き・名前空間不整合な
   ペアを検出のみ行い、自動でルール化しない（仕様書7.2節）。`REDIRECT_TARGET`は解決先が
   時間とともに変わりうり操作者から見えにくいため、安全のため意図的に未対応のままにしている。
   対応する場合はタスク作成画面で手動でルールを追加する。
-- `Template:リダイレクトの所属カテゴリ`への実際の自動編集は行わない。8章の方針どおり、
-  検出・警告のみ（`task_warnings`テーブル・タスク詳細画面の警告パネル）。
+- `unlinkPage`（リンク解除）はハットノートテンプレート内の参照解除には対応していない
+  （通常のwikilink `[[X]]` `[[X|label]]` `[[X#anchor]]` のみ対象）。
+- Category系の対象ページ列挙で、カテゴリメンバー検索とTemplate:リダイレクトの所属カテゴリの
+  構造確認が、同じbacklinks候補ページに対して独立に本文取得している（`resolveRuleTargetsForStage`と
+  `collectWarningsIfNeeded`）。重複取得になるため、実運用でAPI呼び出し数が問題になれば
+  取得結果を共有する最適化の余地がある（仕様書14章）。
 - 失敗ページ再試行（`forceTargets`）は、元タスクの置換ルールをそのまま引き継ぐが、
   ウェーブ分割・名前空間フィルタは行わない（指定ページを直接対象にするだけの単純な再試行）。
 - `regexSearch`の大規模検索時の件数上限は暫定値（`targetResolvers.js`の`MAX_RESULTS=5000`）。
   実運用でのCirrusSearchの負荷傾向を見て調整の余地がある。
-- `unlinkPage`（リンク解除）はハットノートテンプレート内の参照解除には対応していない
-  （通常のwikilink `[[X]]` `[[X|label]]` `[[X#anchor]]` のみ対象）。
 - ワーカーがクラッシュ/再起動した場合、処理中だった1ページ分の状態（`preparing`/
   `editing`のまま止まったページ）は自動復旧しない。手動で該当`task_pages`行の
   ステータスを`pending`に戻すか、タスクごと作り直す必要がある（将来的な改善候補）。
@@ -478,7 +496,6 @@ Toolforgeのポリシー上、公開するコードはOSI承認ライセンス�
 
 ## 8. 次のフェーズ
 
-フェーズ7候補: `Template:リダイレクトの所属カテゴリ`の正確な引数書式が確認でき次第の自動編集対応
-（`scripts/check-redirect-category-template.js`をToolforge上で実行して一次資料を確認してから着手）、
-BOTREQの`REDIRECT_TARGET`対応（解決先の可視化・確認フローを含めた安全な設計の検討）、
-ハットノート内リンク解除への対応、監査・通知機能の強化（緊急停止・失敗タスクのアラート等）。
+フェーズ8候補: BOTREQの`REDIRECT_TARGET`対応（解決先の可視化・確認フローを含めた安全な設計の検討）、
+ハットノート内リンク解除への対応、Category系対象ページ列挙の重複API呼び出し最適化、
+監査・通知機能の強化（緊急停止・失敗タスクのアラート等）。
