@@ -89,6 +89,7 @@ async function prepareOnePage(row, ctx) {
  */
 async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
   await pool.query(`UPDATE task_pages SET status = 'awaiting_review' WHERE id = ?`, [pageId]);
+  const approvalStartedAt = Date.now();
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -106,7 +107,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
     const currentSettings = { ...reviewSettings, mode: task.mode || reviewSettings.mode };
     if (currentSettings.mode === 'auto') {
       const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
-      const preparedTime = preparedAt ? new Date(preparedAt).getTime() : Date.now();
+      const preparedTime = preparedAt ? new Date(preparedAt).getTime() : approvalStartedAt;
       if (Date.now() >= preparedTime + autoWaitSeconds * 1000) {
         const [result] = await pool.query(
           `UPDATE task_pages SET status = 'approved', reviewed_at = NOW()
