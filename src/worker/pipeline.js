@@ -8,7 +8,7 @@ const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const MANUAL_POLL_MS = 3000;
+const REVIEW_POLL_MS = 500;
 
 /**
  * matchedRulesのうちcategoryRename/categoryRemoveについて、
@@ -81,46 +81,67 @@ async function prepareOnePage(row, ctx) {
 
 /**
  * 承認されるのを待つ（仕様書9.2節 手順2・3）。
- * auto: autoWaitSeconds待機して自動承認（待機中に外部から却下されていれば尊重する）。
- * manual: task_pages.statusがapproved/rejectedになるまでポーリング。
+ * タスクのreviewSettingsをポーリングごとに読み直すため、auto/manualの切替は
+ * 現在待機中のページにも反映される。どちらのモードでも外部からの承認・却下を優先する。
  *   タスクのreview_timeout_atを超えたらタスクをexpiredにして待機終了する。
  *
  * @returns {Promise<boolean>} 承認されたらtrue、却下/期限切れ/緊急停止ならfalse
  */
 async function waitForApproval({ taskId, pageId, reviewSettings }) {
-  await pool.query(`UPDATE task_pages SET status = 'awaiting_review' WHERE id = ?`, [pageId]);
+  await pool.query(`UPDATE task_pages SET status = 'awaiting_review', review_deadline_at = NULL WHERE id = ?`, [pageId]);
 
-  if (reviewSettings.mode === 'auto') {
-    await sleep(Math.max(0, reviewSettings.autoWaitSeconds) * 1000);
-
-    if (await isEmergencyStopped()) return false;
-
-    const [rows] = await pool.query(`SELECT status FROM task_pages WHERE id = ?`, [pageId]);
-    if (rows[0] && rows[0].status === 'rejected') return false;
-
-    await pool.query(`UPDATE task_pages SET status = 'approved', reviewed_at = NOW() WHERE id = ?`, [pageId]);
-    return true;
-  }
-
-  // manualモード
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const [pageRows] = await pool.query(`SELECT status FROM task_pages WHERE id = ?`, [pageId]);
-    const pageStatus = pageRows[0] && pageRows[0].status;
+    const [pageRows] = await pool.query(`SELECT status, review_deadline_at FROM task_pages WHERE id = ?`, [pageId]);
+    const page = pageRows[0];
+    const pageStatus = page && page.status;
     if (pageStatus === 'approved') return true;
-    if (pageStatus === 'rejected') return false;
+    if (pageStatus === 'rejected' || !page) return false;
 
     if (await isEmergencyStopped()) return false;
 
-    const [taskRows] = await pool.query(`SELECT status, review_timeout_at FROM tasks WHERE id = ?`, [taskId]);
+    const [taskRows] = await pool.query(`SELECT status, review_timeout_at, config_json FROM tasks WHERE id = ?`, [taskId]);
     const task = taskRows[0];
-    if (!task || task.status === 'emergency_stopped' || task.status === 'paused') return false;
-    if (task.review_timeout_at && new Date(task.review_timeout_at).getTime() < Date.now()) {
+    if (!task || ['emergency_stopped', 'paused', 'cancelled'].includes(task.status)) return false;
+
+    const currentReviewSettings = parseJsonColumn(task.config_json, {}).reviewSettings || reviewSettings;
+    if (currentReviewSettings.mode === 'auto') {
+      let deadline = page.review_deadline_at && new Date(page.review_deadline_at).getTime();
+      if (!deadline) {
+        deadline = Date.now() + Math.max(0, Number(currentReviewSettings.autoWaitSeconds) || 0) * 1000;
+        await pool.query(`UPDATE task_pages SET review_deadline_at = ? WHERE id = ? AND status = 'awaiting_review'`, [
+          new Date(deadline),
+          pageId,
+        ]);
+      }
+      if (Date.now() >= deadline) {
+        await pool.query(
+          `UPDATE task_pages SET status = 'approved', reviewed_at = NOW() WHERE id = ? AND status = 'awaiting_review'`,
+          [pageId]
+        );
+      }
+    } else {
+      // 自動待機中から手動へ切り替えたとき、画面のカウントダウンを消す。
+      if (page.review_deadline_at) {
+        await pool.query(`UPDATE task_pages SET review_deadline_at = NULL WHERE id = ? AND status = 'awaiting_review'`, [pageId]);
+      }
+      if (task.review_timeout_at && new Date(task.review_timeout_at).getTime() < Date.now()) {
+        await pool.query(`UPDATE tasks SET status = 'expired' WHERE id = ?`, [taskId]);
+        return false;
+      }
+    }
+
+    // 自動承認UPDATEと手動操作が競合した場合も、最終statusで確定する。
+    const [updatedPageRows] = await pool.query(`SELECT status FROM task_pages WHERE id = ?`, [pageId]);
+    if (updatedPageRows[0] && updatedPageRows[0].status === 'approved') return true;
+    if (!updatedPageRows[0] || updatedPageRows[0].status === 'rejected') return false;
+
+    if (currentReviewSettings.mode !== 'auto' && task.review_timeout_at && new Date(task.review_timeout_at).getTime() < Date.now()) {
       await pool.query(`UPDATE tasks SET status = 'expired' WHERE id = ?`, [taskId]);
       return false;
     }
 
-    await sleep(MANUAL_POLL_MS);
+    await sleep(REVIEW_POLL_MS);
   }
 }
 
@@ -190,6 +211,10 @@ async function editOnePage(prepared, ctx) {
  * @returns {Promise<{completed:boolean, paused?:boolean, emergencyStopped?:boolean, expired?:boolean, hadFailures:boolean}>}
  */
 async function runStagePipeline(ctx) {
+  const [initialTaskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
+  if (initialTaskRows[0] && initialTaskRows[0].status === 'cancelled') {
+    return { completed: false, cancelled: true, hadFailures: false };
+  }
   const [rows] = await pool.query(
     `SELECT * FROM task_pages WHERE task_id = ? AND stage = ? AND status = 'pending' ORDER BY order_index ASC`,
     [ctx.taskId, ctx.stage]
@@ -206,6 +231,10 @@ async function runStagePipeline(ctx) {
   let nextPromise = rows[1] ? prepareOnePage(rows[1], ctx) : null;
 
   for (let i = 0; i < rows.length; i++) {
+    const [taskRowsBeforePage] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
+    if (taskRowsBeforePage[0] && taskRowsBeforePage[0].status === 'cancelled') {
+      return { completed: false, cancelled: true, hadFailures };
+    }
     if (await isEmergencyStopped()) {
       return { completed: false, emergencyStopped: true, hadFailures };
     }
@@ -227,8 +256,14 @@ async function runStagePipeline(ctx) {
       // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
       const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
       const taskStatus = taskRows[0] && taskRows[0].status;
-      if (taskStatus === 'expired' || taskStatus === 'emergency_stopped') {
-        return { completed: false, expired: taskStatus === 'expired', emergencyStopped: taskStatus === 'emergency_stopped', hadFailures };
+      if (taskStatus === 'expired' || taskStatus === 'emergency_stopped' || taskStatus === 'cancelled') {
+        return {
+          completed: false,
+          expired: taskStatus === 'expired',
+          emergencyStopped: taskStatus === 'emergency_stopped',
+          cancelled: taskStatus === 'cancelled',
+          hadFailures,
+        };
       }
 
       if (!approved) {

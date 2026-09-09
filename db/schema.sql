@@ -79,12 +79,16 @@ CREATE TABLE IF NOT EXISTS task_pages (
   error_message         TEXT NULL,
   prepared_at           DATETIME NULL,
   reviewed_at           DATETIME NULL,
+  review_deadline_at    DATETIME NULL,
   edited_at             DATETIME NULL,
   KEY idx_task_stage_order (task_id, stage, order_index),
   KEY idx_task_status (task_id, status),
   CONSTRAINT fk_task_pages_task
     FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 既存DBを再適用した場合にも、自動承認の締切時刻を保存する列を追加する。
+ALTER TABLE task_pages ADD COLUMN IF NOT EXISTS review_deadline_at DATETIME NULL AFTER reviewed_at;
 
 -- 恒久監査ログ（本文を含まない。task_pagesとは独立してその場で書き込む。9.4節）
 CREATE TABLE IF NOT EXISTS edit_log (

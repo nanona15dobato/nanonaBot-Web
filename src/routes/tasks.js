@@ -67,7 +67,7 @@ router.get('/api/tasks/:id/pages', requireRole('owner'), async (req, res, next) 
   try {
     const [rows] = await pool.query(
       `SELECT id, stage, order_index, page_title, namespace, status, base_revid, error_message,
-              prepared_at, reviewed_at, edited_at
+              prepared_at, reviewed_at, review_deadline_at, edited_at
        FROM task_pages WHERE task_id = ? ORDER BY stage, order_index`,
       [req.params.id]
     );
@@ -166,6 +166,53 @@ router.post('/api/tasks/:id/pages/:pageId/reject', requireRole('owner'), async (
     if (result.affectedRows === 0) {
       return res.status(409).json({ error: 'not_awaiting_review' });
     }
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 実行中タスクのレビュー方式を切り替える。waitForApprovalはこの設定をポーリングで読むため、
+// 現在awaiting_reviewのページにも直ちに反映される。
+router.post('/api/tasks/:id/review-settings', requireRole('owner'), async (req, res, next) => {
+  try {
+    const settings = req.body && req.body.reviewSettings;
+    if (!settings || !['auto', 'manual'].includes(settings.mode)) {
+      return res.status(400).json({ error: 'invalid_review_settings' });
+    }
+    if (settings.mode === 'auto' && (!Number.isFinite(settings.autoWaitSeconds) || settings.autoWaitSeconds < 0)) {
+      return res.status(400).json({ error: 'invalid_auto_wait_seconds' });
+    }
+    if (settings.mode === 'manual' && (!Number.isFinite(settings.manualTimeoutHours) || settings.manualTimeoutHours <= 0)) {
+      return res.status(400).json({ error: 'invalid_manual_timeout_hours' });
+    }
+
+    const [rows] = await pool.query('SELECT config_json FROM tasks WHERE id = ? AND status IN (\'queued\', \'running\')', [req.params.id]);
+    if (!rows[0]) return res.status(409).json({ error: 'not_running' });
+
+    const config = parseJsonColumn(rows[0].config_json, {});
+    config.reviewSettings = settings;
+    const timeoutAt =
+      settings.mode === 'manual' ? new Date(Date.now() + settings.manualTimeoutHours * 3600 * 1000) : null;
+    await pool.query(
+      `UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = ?, updated_at = NOW() WHERE id = ?`,
+      [settings.mode, toJsonColumn(config), timeoutAt, req.params.id]
+    );
+    res.json({ ok: true, reviewSettings: settings, reviewTimeoutAt: timeoutAt });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// queued/running/pausedのタスクを中止する。ワーカーは次の安全な確認地点で中止を検知する。
+router.post('/api/tasks/:id/cancel', requireRole('owner'), async (req, res, next) => {
+  try {
+    const [result] = await pool.query(
+      `UPDATE tasks SET status = 'cancelled', updated_at = NOW()
+       WHERE id = ? AND status IN ('queued', 'running', 'paused')`,
+      [req.params.id]
+    );
+    if (result.affectedRows === 0) return res.status(409).json({ error: 'not_cancellable' });
     res.json({ ok: true });
   } catch (err) {
     next(err);
