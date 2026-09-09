@@ -228,6 +228,52 @@ test('runStagePipeline: 1ページ先読みで進行し、skipAndContinueで1件
   assert.equal(db.editLogRows.length, 3);
 });
 
+test('runStagePipeline: スキップが連続しても次のページを先読みする', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 1, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([
+    { task_id: 1, stage: 1, order_index: 0, page_title: '変更なしA', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+    { task_id: 1, stage: 1, order_index: 1, page_title: '変更なしB', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+    { task_id: 1, stage: 1, order_index: 2, page_title: '変更なしC', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+  ]);
+
+  const preparedTitles = [];
+  const mwClient = {
+    async getPage(title) {
+      preparedTitles.push(title);
+      return {
+        title,
+        exists: true,
+        revid: 1,
+        baseTimestamp: '2026-08-11T09:00:00Z',
+        startTimestamp: '2026-08-11T09:00:01Z',
+        wikitext: '変更なし',
+      };
+    },
+    async edit() {
+      throw new Error('スキップ対象は編集されません');
+    },
+  };
+
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    const result = await runStagePipeline({
+      taskId: 1,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '存在しない文字列', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'skipAndContinue',
+    });
+    assert.equal(result.completed, true);
+  });
+
+  assert.deepEqual(preparedTitles, ['変更なしA', '変更なしB', '変更なしC']);
+  assert.deepEqual([...db.taskPages.values()].map((p) => p.status), ['skipped', 'skipped', 'skipped']);
+});
+
 test('runStagePipeline: onFailure="pause"は失敗直後にタスクを止め、以降のページへ進まない', async () => {
   const db = createFakeDb();
   db.seedTask({ id: 2, status: 'running', review_timeout_at: null, progress_current: 0 });

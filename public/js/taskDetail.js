@@ -15,6 +15,7 @@
   }
 
   const $notice = $('<div>');
+  const $refreshStatus = $('<span>').css({ marginLeft: '8px', color: '#54595d', fontSize: '0.9em' });
   const $summarySection = $('<div>').addClass('nb-section');
   const $warningSection = $('<div>');
   const $reviewContainer = $('<div>');
@@ -25,6 +26,7 @@
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
   let lastReviewPageId = null;
   let warningsLoaded = false;
+  let refreshInProgress = false;
 
   async function loadTask() {
     return C.fetchJson('/api/tasks/' + taskId);
@@ -188,10 +190,12 @@
     if (mode === 'auto') {
       const autoWaitSeconds = Number(reviewSettings.autoWaitSeconds) || 0;
       const preparedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
-      $panel.append(
-        $('<p>').addClass('nb-countdown').data('deadline', preparedAt + autoWaitSeconds * 1000)
-          .text('自動更新モード: 自動承認まで計算中…')
-      );
+      const $countdown = $('<p>').addClass('nb-countdown').data('deadline', preparedAt + autoWaitSeconds * 1000)
+        .text('自動更新モード: 自動承認まで計算中…');
+      $countdown.append($refreshStatus);
+      $panel.append($countdown);
+    } else {
+      $panel.append($refreshStatus);
     }
 
     const $diffArea = $('<div>').text('Diffを読み込み中…');
@@ -287,6 +291,9 @@
   }
 
   async function refreshAll() {
+    if (refreshInProgress) return;
+    refreshInProgress = true;
+    $refreshStatus.text('更新中…');
     try {
       const [task, pages, logs] = await Promise.all([loadTask(), loadPages(), loadLogs()]);
       renderSummary(task);
@@ -304,7 +311,15 @@
           });
       }
     } catch (e) {
-      C.showNotice($notice, 'error', '読み込みに失敗しました: ' + e.message);
+      if (e.status === 503) {
+        $refreshStatus.text('更新に失敗しました。再試行します…');
+      } else {
+        $refreshStatus.text('更新に失敗しました。');
+        C.showNotice($notice, 'error', '読み込みに失敗しました: ' + e.message);
+      }
+    } finally {
+      refreshInProgress = false;
+      if ($refreshStatus.text() === '更新中…') $refreshStatus.empty();
     }
   }
 
