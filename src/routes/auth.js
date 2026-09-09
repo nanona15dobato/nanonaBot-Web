@@ -8,6 +8,7 @@ const oauthService = require('../services/oauth');
 const mediawiki = require('../services/mediawiki');
 const config = require('../config');
 const { determineRole } = require('../permissions');
+const { escapeHtml } = require('../views/shell');
 
 router.get('/oauth/login', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
@@ -19,7 +20,9 @@ router.get('/oauth/callback', async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.query;
 
   if (error) {
-    return res.status(400).send(`OAuth認可が拒否・失敗しました: ${error} ${errorDescription || ''}`);
+    return res.status(400).send(
+      `OAuth認可が拒否・失敗しました: ${escapeHtml(error)} ${escapeHtml(errorDescription || '')}`
+    );
   }
   if (!code || !state || state !== req.session.oauthState) {
     return res.status(400).send('OAuthの状態が不正です（stateの不一致、またはセッション切れ）。もう一度ログインしてください。');

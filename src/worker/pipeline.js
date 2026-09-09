@@ -100,11 +100,18 @@ async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
 
     if (await isEmergencyStopped()) return false;
 
-    const [taskRows] = await pool.query(`SELECT status, review_timeout_at, mode FROM tasks WHERE id = ?`, [taskId]);
+    const [taskRows] = await pool.query(
+      `SELECT status, review_timeout_at, mode, config_json FROM tasks WHERE id = ?`,
+      [taskId]
+    );
     const task = taskRows[0];
     if (!task || ['cancelled', 'emergency_stopped', 'paused'].includes(task.status)) return false;
 
-    const currentSettings = { ...reviewSettings, mode: task.mode || reviewSettings.mode };
+    const currentSettings = {
+      ...reviewSettings,
+      ...parseJsonColumn(task.config_json, {}).reviewSettings,
+      mode: task.mode || reviewSettings.mode,
+    };
     if (currentSettings.mode === 'auto') {
       const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
       const preparedTime = preparedAt ? new Date(preparedAt).getTime() : approvalStartedAt;
@@ -220,6 +227,12 @@ async function runStagePipeline(ctx) {
     if (current.status === 'failed') {
       hadFailures = true;
       if (ctx.onFailure === 'pause') {
+        if (nextPromise) await nextPromise;
+        await pool.query(
+          `UPDATE task_pages SET status = 'pending'
+           WHERE task_id = ? AND stage = ? AND status IN ('preparing', 'prepared')`,
+          [ctx.taskId, ctx.stage]
+        );
         await pool.query(`UPDATE tasks SET status = 'paused' WHERE id = ?`, [ctx.taskId]);
         return { completed: false, paused: true, hadFailures };
       }
@@ -257,6 +270,12 @@ async function runStagePipeline(ctx) {
         if (!editResult.ok) {
           hadFailures = true;
           if (ctx.onFailure === 'pause') {
+            if (nextPromise) await nextPromise;
+            await pool.query(
+              `UPDATE task_pages SET status = 'pending'
+               WHERE task_id = ? AND stage = ? AND status IN ('preparing', 'prepared')`,
+              [ctx.taskId, ctx.stage]
+            );
             await pool.query(`UPDATE tasks SET status = 'paused' WHERE id = ?`, [ctx.taskId]);
             return { completed: false, paused: true, hadFailures };
           }
