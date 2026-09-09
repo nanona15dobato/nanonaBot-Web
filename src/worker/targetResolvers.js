@@ -13,7 +13,12 @@ function namespaceParam(namespaces) {
 
 async function apiGet(params) {
   const url = new URL(config.wiki.apiUrl);
-  url.search = new URLSearchParams({ format: 'json', formatversion: '2', ...params }).toString();
+  // URLSearchParamsはundefinedを文字列"undefined"として送ってしまうため、
+  // 全名前空間を表す未指定値はクエリから完全に除外する。
+  const definedParams = Object.fromEntries(
+    Object.entries({ format: 'json', formatversion: '2', ...params }).filter(([, value]) => value !== undefined && value !== null)
+  );
+  url.search = new URLSearchParams(definedParams).toString();
   const res = await fetch(url, { headers: { 'User-Agent': config.userAgent } });
   if (!res.ok) {
     throw new Error(`MediaWiki APIエラー (${res.status})`);

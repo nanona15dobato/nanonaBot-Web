@@ -31,6 +31,7 @@ test('resolveCategoryMembers: cmcontinueを追って全件取得する', async (
     const u = new URL(String(url));
     assert.equal(u.searchParams.get('list'), 'categorymembers');
     assert.equal(u.searchParams.get('cmtitle'), 'Category:テスト');
+    assert.equal(u.searchParams.has('cmnamespace'), false);
     if (!u.searchParams.get('cmcontinue')) {
       return jsonResponse({
         query: { categorymembers: [{ title: 'ページA', ns: 0 }] },

@@ -37,6 +37,8 @@
   const NAMESPACE_OPTIONS = [
     { data: 0, label: '標準 (0)' },
     { data: 1, label: 'ノート (1)' },
+    { data: 2, label: '利用者 (2)' },
+    { data: 3, label: '利用者‐会話 (3)' },
     { data: 4, label: 'Wikipedia (4)' },
     { data: 10, label: 'Template (10)' },
     { data: 12, label: 'Help (12)' },

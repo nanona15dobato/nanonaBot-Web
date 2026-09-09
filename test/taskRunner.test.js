@@ -28,6 +28,7 @@ const {
   materializeReplacements,
   computeStageCount,
   ruleAppliesToStage,
+  namespacesOrDefault,
   resolveRuleTargetsForStage,
 } = require('../src/worker/taskRunner');
 const { applyReplacementSteps } = require('../src/worker/regexEngine');
@@ -82,6 +83,27 @@ test('2ウェーブ構成: ウェーブ1の対象が0件でもlinkRename系は�
   assert.equal(computeStageCount([rule]), 2);
   assert.equal(ruleAppliesToStage(rule, 1), true);
   assert.equal(ruleAppliesToStage(rule, 2), true);
+});
+
+test('namespacesOrDefault: 明示的なnullは全名前空間のまま、未指定だけが標準名前空間になる', () => {
+  assert.deepEqual(namespacesOrDefault(undefined), [0]);
+  assert.equal(namespacesOrDefault(null), null);
+  assert.deepEqual(namespacesOrDefault([2]), [2]);
+});
+
+test('resolveRuleTargetsForStage: linkRenameのウェーブ2はnamespaces:nullを全名前空間としてAPIへ渡す', async () => {
+  const originalFetch = global.fetch;
+  let requestedNamespace;
+  global.fetch = async (url) => {
+    requestedNamespace = new URL(String(url)).searchParams.get('blnamespace');
+    return { ok: true, status: 200, json: async () => ({ query: { backlinks: [] } }) };
+  };
+  try {
+    await resolveRuleTargetsForStage({ templateType: 'linkRename', from: '利用者:旧', to: '利用者:新', namespaces: null }, 2);
+    assert.equal(requestedNamespace, null);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 // ---- フェーズ6: unlinkPage/templateSubst ----

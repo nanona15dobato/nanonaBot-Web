@@ -14,6 +14,14 @@ const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2'];
 const CATEGORY_TEMPLATE_TYPES = ['categoryRename', 'categoryRemove'];
 
 /**
+ * 未指定（旧APIクライアント等）は種別ごとの既定値を使うが、明示的なnullは
+ * 「全名前空間」を表す。UIの「未選択=全名前空間」と同じ意味にそろえる。
+ */
+function namespacesOrDefault(namespaces, defaultNamespaces = [0]) {
+  return namespaces === undefined ? defaultNamespaces : namespaces;
+}
+
+/**
  * config.replacements の各ルールに、実際に適用するsteps配列を付与した配列を返す。
  * "custom" はユーザー指定のstepsをそのまま使う。テンプレート系（5種類）は
  * templatePresets.js で自動生成する（仕様書6章。ハットノート正規表現の修正済み版を使用）。
@@ -75,8 +83,9 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
         // ウェーブ1: Template名前空間固定（仕様書6.1/6.2節）
         return { results: await resolveBacklinks({ page: rule.from, namespaces: [10] }), error: null };
       }
-      // ウェーブ2: その他ページ（既定ns=0、複数選択可）。ウェーブ1の編集完了後に再取得する。
-      return { results: await resolveBacklinks({ page: rule.from, namespaces: rule.namespaces || [0] }), error: null };
+      // ウェーブ2: その他ページ（未指定時は既定ns=0、nullは全名前空間、複数選択可）。
+      // ウェーブ1の編集完了後に再取得する。
+      return { results: await resolveBacklinks({ page: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
 
     case 'categoryRename':
     case 'categoryRemove': {
@@ -108,16 +117,16 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
     }
 
     case 'templateRename':
-      return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: rule.namespaces || [0] }), error: null };
+      return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
 
     case 'unlinkPage':
       // リンク解除（BOTREQのDELETE_PAGE。フェーズ6）。既定ns=0、複数選択可。
       // linkRename系のような2ウェーブ構成は取らず単一ステージで扱う（簡易実装）。
-      return { results: await resolveBacklinks({ page: rule.from, namespaces: rule.namespaces || [0] }), error: null };
+      return { results: await resolveBacklinks({ page: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
 
     case 'templateSubst':
       // テンプレートのsubst化（BOTREQのTemplate:X→subst:。フェーズ6）
-      return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: rule.namespaces || [0] }), error: null };
+      return { results: await resolveEmbeddedIn({ template: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
 
     default:
       throw new Error(`resolveRuleTargetsForStage: 未知のtemplateType "${rule.templateType}"`);
@@ -364,5 +373,6 @@ module.exports = {
   materializeReplacements,
   computeStageCount,
   ruleAppliesToStage,
+  namespacesOrDefault,
   resolveRuleTargetsForStage,
 };
