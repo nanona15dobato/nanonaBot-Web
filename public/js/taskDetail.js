@@ -28,6 +28,11 @@
   let warningsLoaded = false;
   let refreshInProgress = false;
 
+  function updateCountdown($countdown) {
+    const remain = Math.max(0, Math.ceil((Number($countdown.data('deadline')) - Date.now()) / 1000));
+    $countdown.text('自動更新モード: あと約' + remain + '秒で自動承認されます（目安）。');
+  }
+
   async function loadTask() {
     return C.fetchJson('/api/tasks/' + taskId);
   }
@@ -190,10 +195,9 @@
     if (mode === 'auto') {
       const autoWaitSeconds = Number(reviewSettings.autoWaitSeconds) || 0;
       const preparedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
-      const $countdown = $('<p>').addClass('nb-countdown').data('deadline', preparedAt + autoWaitSeconds * 1000)
-        .text('自動更新モード: 自動承認まで計算中…');
-      $countdown.append($refreshStatus);
-      $panel.append($countdown);
+      const $countdown = $('<span>').addClass('nb-countdown').data('deadline', preparedAt + autoWaitSeconds * 1000);
+      updateCountdown($countdown);
+      $panel.append($('<p>').append($countdown, $refreshStatus));
     } else {
       $panel.append($refreshStatus);
     }
@@ -327,8 +331,7 @@
   setInterval(refreshAll, 3000);
   setInterval(() => {
     $reviewContainer.find('.nb-countdown').each(function () {
-      const remain = Math.max(0, Math.ceil((Number($(this).data('deadline')) - Date.now()) / 1000));
-      $(this).text('自動更新モード: あと約' + remain + '秒で自動承認されます（目安）。');
+      updateCountdown($(this));
     });
   }, 1000);
 })();
