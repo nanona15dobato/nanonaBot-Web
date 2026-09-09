@@ -172,6 +172,60 @@ router.post('/api/tasks/:id/pages/:pageId/reject', requireRole('owner'), async (
   }
 });
 
+// 確認モードは待機中のタスクでも切り替えられる。設定はJSONと一覧用modeを同時に更新する。
+router.post('/api/tasks/:id/review-mode', requireRole('owner'), async (req, res, next) => {
+  try {
+    const mode = req.body && req.body.mode;
+    if (mode !== 'auto' && mode !== 'manual') {
+      return res.status(400).json({ error: 'invalid_mode' });
+    }
+    const [rows] = await pool.query('SELECT status, config_json FROM tasks WHERE id = ?', [req.params.id]);
+    const task = rows[0];
+    if (!task) return res.status(404).json({ error: 'not_found' });
+    if (!['queued', 'running'].includes(task.status)) {
+      return res.status(409).json({ error: 'not_running' });
+    }
+
+    const taskConfig = parseJsonColumn(task.config_json, {});
+    const reviewSettings = { ...(taskConfig.reviewSettings || {}), mode };
+    taskConfig.reviewSettings = reviewSettings;
+    if (mode === 'manual') {
+      const hours = Math.max(1, Number(reviewSettings.manualTimeoutHours) || 72);
+      await pool.query(
+        'UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = DATE_ADD(NOW(), INTERVAL ? HOUR), updated_at = NOW() WHERE id = ?',
+        [mode, toJsonColumn(taskConfig), hours, req.params.id]
+      );
+    } else {
+      await pool.query(
+        'UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = NULL, updated_at = NOW() WHERE id = ?',
+        [mode, toJsonColumn(taskConfig), req.params.id]
+      );
+    }
+    res.json({ ok: true, mode });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// queued/running/pausedのタスクを中止する。実行中のワーカーは次の監視周期で停止する。
+router.post('/api/tasks/:id/cancel', requireRole('owner'), async (req, res, next) => {
+  try {
+    const [result] = await pool.query(
+      `UPDATE tasks SET status = 'cancelled', updated_at = NOW()
+       WHERE id = ? AND status IN ('queued', 'running', 'paused')`,
+      [req.params.id]
+    );
+    if (result.affectedRows === 0) return res.status(409).json({ error: 'not_cancellable' });
+    await pool.query(
+      `INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', 'タスクが中止されました。')`,
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // onFailure="pause" で止まったタスクの再開（9.3節）。
 // task_pagesは既に列挙済みなので、taskRunner側は残りのpendingだけを処理する。
 router.post('/api/tasks/:id/resume', requireRole('owner'), async (req, res, next) => {

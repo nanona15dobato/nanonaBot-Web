@@ -81,28 +81,15 @@ async function prepareOnePage(row, ctx) {
 
 /**
  * 承認されるのを待つ（仕様書9.2節 手順2・3）。
- * auto: autoWaitSeconds待機して自動承認（待機中に外部から却下されていれば尊重する）。
- * manual: task_pages.statusがapproved/rejectedになるまでポーリング。
+ * auto/manualともtask_pages.statusをポーリングし、待機中の即時承認・却下を尊重する。
+ * reviewSettingsは実行中に変更されるため、毎回tasks.config_jsonから読み直す。
  *   タスクのreview_timeout_atを超えたらタスクをexpiredにして待機終了する。
  *
  * @returns {Promise<boolean>} 承認されたらtrue、却下/期限切れ/緊急停止ならfalse
  */
-async function waitForApproval({ taskId, pageId, reviewSettings }) {
+async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
   await pool.query(`UPDATE task_pages SET status = 'awaiting_review' WHERE id = ?`, [pageId]);
 
-  if (reviewSettings.mode === 'auto') {
-    await sleep(Math.max(0, reviewSettings.autoWaitSeconds) * 1000);
-
-    if (await isEmergencyStopped()) return false;
-
-    const [rows] = await pool.query(`SELECT status FROM task_pages WHERE id = ?`, [pageId]);
-    if (rows[0] && rows[0].status === 'rejected') return false;
-
-    await pool.query(`UPDATE task_pages SET status = 'approved', reviewed_at = NOW() WHERE id = ?`, [pageId]);
-    return true;
-  }
-
-  // manualモード
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const [pageRows] = await pool.query(`SELECT status FROM task_pages WHERE id = ?`, [pageId]);
@@ -112,9 +99,24 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
 
     if (await isEmergencyStopped()) return false;
 
-    const [taskRows] = await pool.query(`SELECT status, review_timeout_at FROM tasks WHERE id = ?`, [taskId]);
+    const [taskRows] = await pool.query(`SELECT status, review_timeout_at, mode FROM tasks WHERE id = ?`, [taskId]);
     const task = taskRows[0];
-    if (!task || task.status === 'emergency_stopped' || task.status === 'paused') return false;
+    if (!task || ['cancelled', 'emergency_stopped', 'paused'].includes(task.status)) return false;
+
+    const currentSettings = { ...reviewSettings, mode: task.mode || reviewSettings.mode };
+    if (currentSettings.mode === 'auto') {
+      const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
+      const preparedTime = preparedAt ? new Date(preparedAt).getTime() : Date.now();
+      if (Date.now() >= preparedTime + autoWaitSeconds * 1000) {
+        const [result] = await pool.query(
+          `UPDATE task_pages SET status = 'approved', reviewed_at = NOW()
+           WHERE id = ? AND status = 'awaiting_review'`,
+          [pageId]
+        );
+        if (result.affectedRows > 0) return true;
+      }
+    }
+
     if (task.review_timeout_at && new Date(task.review_timeout_at).getTime() < Date.now()) {
       await pool.query(`UPDATE tasks SET status = 'expired' WHERE id = ?`, [taskId]);
       return false;
@@ -187,7 +189,7 @@ async function editOnePage(prepared, ctx) {
  * @param {object} ctx.editSettings
  * @param {object} ctx.reviewSettings
  * @param {'pause'|'skipAndContinue'} ctx.onFailure
- * @returns {Promise<{completed:boolean, paused?:boolean, emergencyStopped?:boolean, expired?:boolean, hadFailures:boolean}>}
+ * @returns {Promise<{completed:boolean, paused?:boolean, emergencyStopped?:boolean, expired?:boolean, cancelled?:boolean, hadFailures:boolean}>}
  */
 async function runStagePipeline(ctx) {
   const [rows] = await pool.query(
@@ -209,6 +211,10 @@ async function runStagePipeline(ctx) {
     if (await isEmergencyStopped()) {
       return { completed: false, emergencyStopped: true, hadFailures };
     }
+    const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
+    if (!taskRows[0] || taskRows[0].status === 'cancelled') {
+      return { completed: false, cancelled: true, hadFailures };
+    }
 
     if (current.status === 'failed') {
       hadFailures = true;
@@ -222,13 +228,20 @@ async function runStagePipeline(ctx) {
         taskId: ctx.taskId,
         pageId: current.row.id,
         reviewSettings: ctx.reviewSettings,
+        preparedAt: current.row.prepared_at,
       });
 
       // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
       const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
       const taskStatus = taskRows[0] && taskRows[0].status;
-      if (taskStatus === 'expired' || taskStatus === 'emergency_stopped') {
-        return { completed: false, expired: taskStatus === 'expired', emergencyStopped: taskStatus === 'emergency_stopped', hadFailures };
+      if (['expired', 'emergency_stopped', 'cancelled'].includes(taskStatus)) {
+        return {
+          completed: false,
+          expired: taskStatus === 'expired',
+          emergencyStopped: taskStatus === 'emergency_stopped',
+          cancelled: taskStatus === 'cancelled',
+          hadFailures,
+        };
       }
 
       if (!approved) {

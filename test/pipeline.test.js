@@ -89,9 +89,9 @@ function createFakeDb() {
       return [[row ? { status: row.status } : undefined].filter(Boolean)];
     }
 
-    if (s.startsWith('SELECT status, review_timeout_at FROM tasks')) {
+    if (s.startsWith('SELECT status, review_timeout_at')) {
       const t = tasks.get(params[0]);
-      return [t ? [{ status: t.status, review_timeout_at: t.review_timeout_at || null }] : []];
+      return [t ? [{ status: t.status, mode: t.mode, review_timeout_at: t.review_timeout_at || null }] : []];
     }
 
     if (s.startsWith('SELECT status FROM tasks WHERE id')) {

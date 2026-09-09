@@ -299,6 +299,10 @@ async function runTask(task) {
     });
     return;
   }
+  if (result.cancelled) {
+    await writeTaskLogSafely({ taskId: task.id, stage: 1, level: 'info', message: 'タスクが中止されました。' });
+    return;
+  }
   await writeTaskLogSafely({
     taskId: task.id,
     stage: 1,
@@ -344,6 +348,10 @@ async function runTask(task) {
       });
       return;
     }
+    if (result.cancelled) {
+      await writeTaskLogSafely({ taskId: task.id, stage: 2, level: 'info', message: 'タスクが中止されました。' });
+      return;
+    }
     await writeTaskLogSafely({
       taskId: task.id,
       stage: 2,
@@ -355,6 +363,11 @@ async function runTask(task) {
   // 最終ステータスは、実行中の一時的なhadFailuresではなく、
   // task_pages全体を見て「failedが1件でもあるか」で判定する
   // （resumeを挟んだ場合でも正しく判定できるようにするため）。
+  const [currentTaskRows] = await pool.query('SELECT status FROM tasks WHERE id = ?', [task.id]);
+  if (!currentTaskRows[0] || currentTaskRows[0].status === 'cancelled') {
+    await writeTaskLogSafely({ taskId: task.id, level: 'info', message: 'タスクが中止されました。' });
+    return;
+  }
   const [failureCountRows] = await pool.query(
     `SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ? AND status = 'failed'`,
     [task.id]

@@ -60,6 +60,22 @@
     );
     $summarySection.append($line);
 
+    if (['queued', 'running', 'paused'].includes(task.status)) {
+      const cancelBtn = new OO.ui.ButtonWidget({ label: 'タスクを中止', flags: ['destructive'] });
+      cancelBtn.on('click', async () => {
+        if (!window.confirm('このタスクを中止しますか？')) return;
+        cancelBtn.setDisabled(true);
+        try {
+          await C.postJson('/api/tasks/' + taskId + '/cancel', {});
+          await refreshAll();
+        } catch (e) {
+          C.showNotice($notice, 'error', 'タスクの中止に失敗しました: ' + e.message);
+          cancelBtn.setDisabled(false);
+        }
+      });
+      $summarySection.append($('<div>').css('margin-top', '8px').append(cancelBtn.$element));
+    }
+
     if (task.stage_count === 2) {
       $summarySection.append(
         $('<p>').css('color', '#54595d').text(
@@ -129,42 +145,52 @@
     const $panel = $('<div>').addClass('nb-review-panel');
     $panel.append($('<div>').addClass('nb-review-panel__title').text('確認中: ' + reviewing.page_title));
 
-    const mode = task.config_json && task.config_json.reviewSettings && task.config_json.reviewSettings.mode;
-    if (mode === 'manual') {
-      const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
-      const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
-      approveBtn.on('click', async () => {
-        approveBtn.setDisabled(true);
-        rejectBtn.setDisabled(true);
-        try {
-          await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/approve', {});
-          refreshAll();
-        } catch (e) {
-          C.showNotice($notice, 'error', '承認に失敗しました: ' + e.message);
-          approveBtn.setDisabled(false);
-          rejectBtn.setDisabled(false);
-        }
-      });
-      rejectBtn.on('click', async () => {
-        approveBtn.setDisabled(true);
-        rejectBtn.setDisabled(true);
-        try {
-          await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/reject', {});
-          refreshAll();
-        } catch (e) {
-          C.showNotice($notice, 'error', '却下に失敗しました: ' + e.message);
-          approveBtn.setDisabled(false);
-          rejectBtn.setDisabled(false);
-        }
-      });
-      $panel.append($('<div>').css('margin-bottom', '8px').append(approveBtn.$element, ' ', rejectBtn.$element));
-    } else {
-      const autoWaitSeconds =
-        (task.config_json && task.config_json.reviewSettings && task.config_json.reviewSettings.autoWaitSeconds) || 0;
+    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
+    const mode = reviewSettings.mode || task.mode;
+    const modeWidget = new OO.ui.DropdownInputWidget({
+      options: [{ label: '自動更新', value: 'auto' }, { label: '手動確認', value: 'manual' }],
+      value: mode,
+    });
+    modeWidget.on('change', async (nextMode) => {
+      modeWidget.setDisabled(true);
+      try {
+        await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
+        await refreshAll();
+      } catch (e) {
+        C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
+        modeWidget.setValue(mode);
+        modeWidget.setDisabled(false);
+      }
+    });
+
+    const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
+    const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
+    const submitReview = async (action, button) => {
+      approveBtn.setDisabled(true);
+      rejectBtn.setDisabled(true);
+      try {
+        await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/' + action, {});
+        await refreshAll();
+      } catch (e) {
+        C.showNotice($notice, 'error', (action === 'approve' ? '承認' : '却下') + 'に失敗しました: ' + e.message);
+        button.setDisabled(false);
+        (button === approveBtn ? rejectBtn : approveBtn).setDisabled(false);
+      }
+    };
+    approveBtn.on('click', () => submitReview('approve', approveBtn));
+    rejectBtn.on('click', () => submitReview('reject', rejectBtn));
+    $panel.append(
+      $('<div>').css('margin-bottom', '8px').append(
+        $('<span>').text('確認モード: '), modeWidget.$element, ' ', approveBtn.$element, ' ', rejectBtn.$element
+      )
+    );
+
+    if (mode === 'auto') {
+      const autoWaitSeconds = Number(reviewSettings.autoWaitSeconds) || 0;
       const preparedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
-      const remain = Math.max(0, Math.round((preparedAt + autoWaitSeconds * 1000 - Date.now()) / 1000));
       $panel.append(
-        $('<p>').addClass('nb-countdown').text('自動更新モード: あと約' + remain + '秒で自動承認されます（目安）。')
+        $('<p>').addClass('nb-countdown').data('deadline', preparedAt + autoWaitSeconds * 1000)
+          .text('自動更新モード: 自動承認まで計算中…')
       );
     }
 
@@ -284,4 +310,10 @@
 
   refreshAll();
   setInterval(refreshAll, 3000);
+  setInterval(() => {
+    $reviewContainer.find('.nb-countdown').each(function () {
+      const remain = Math.max(0, Math.ceil((Number($(this).data('deadline')) - Date.now()) / 1000));
+      $(this).text('自動更新モード: あと約' + remain + '秒で自動承認されます（目安）。');
+    });
+  }, 1000);
 })();
