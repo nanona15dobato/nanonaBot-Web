@@ -229,12 +229,6 @@ body {
   color: #3366cc;
 }
 
-.nb-review-settings {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #eaecf0;
-}
-
 .nb-warning-panel {
   border: 2px solid #ac6600;
   border-radius: 4px;

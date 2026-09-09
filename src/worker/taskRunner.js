@@ -290,16 +290,12 @@ async function runTask(task) {
     await pool.query(`UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ?`, [task.id]);
     return;
   }
-  if (result.expired || result.paused || result.cancelled) {
+  if (result.expired || result.paused) {
     await writeTaskLogSafely({
       taskId: task.id,
       stage: 1,
-      level: result.cancelled || result.expired ? 'warning' : 'error',
-      message: result.cancelled
-        ? '利用者によりタスクが中止されました。'
-        : result.expired
-          ? 'レビュー期限切れのため、ウェーブ1を終了しました。'
-          : '失敗により、ウェーブ1を一時停止しました。',
+      level: result.expired ? 'warning' : 'error',
+      message: result.expired ? 'レビュー期限切れのため、ウェーブ1を終了しました。' : '失敗により、ウェーブ1を一時停止しました。',
     });
     return;
   }
@@ -339,16 +335,12 @@ async function runTask(task) {
       await pool.query(`UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ?`, [task.id]);
       return;
     }
-    if (result.expired || result.paused || result.cancelled) {
+    if (result.expired || result.paused) {
       await writeTaskLogSafely({
         taskId: task.id,
         stage: 2,
-        level: result.cancelled || result.expired ? 'warning' : 'error',
-        message: result.cancelled
-          ? '利用者によりタスクが中止されました。'
-          : result.expired
-            ? 'レビュー期限切れのため、ウェーブ2を終了しました。'
-            : '失敗により、ウェーブ2を一時停止しました。',
+        level: result.expired ? 'warning' : 'error',
+        message: result.expired ? 'レビュー期限切れのため、ウェーブ2を終了しました。' : '失敗により、ウェーブ2を一時停止しました。',
       });
       return;
     }

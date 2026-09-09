@@ -91,81 +91,6 @@
       $summarySection.append(msg.$element, $('<div>').css('margin-top', '8px').append(resumeBtn.$element));
     }
 
-    if (['queued', 'running'].includes(task.status)) {
-      const settings = (task.config_json && task.config_json.reviewSettings) || {};
-      const modeWidget = new OO.ui.DropdownInputWidget({
-        options: [
-          { data: 'manual', label: '手動確認' },
-          { data: 'auto', label: '自動承認' },
-        ],
-        value: settings.mode || task.mode,
-      });
-      const autoWaitWidget = new OO.ui.NumberInputWidget({
-        value: Number(settings.autoWaitSeconds) || 0,
-        min: 0,
-        step: 1,
-      });
-      const manualTimeoutWidget = new OO.ui.NumberInputWidget({
-        value: Number(settings.manualTimeoutHours) || 72,
-        min: 1,
-        step: 1,
-      });
-      const $autoField = new OO.ui.FieldLayout(autoWaitWidget, { label: '自動承認まで（秒）', align: 'top' }).$element;
-      const $manualField = new OO.ui.FieldLayout(manualTimeoutWidget, { label: '手動確認の期限（時間）', align: 'top' }).$element;
-      const applyBtn = new OO.ui.ButtonWidget({ label: 'レビュー方式を反映', flags: ['progressive'] });
-      const cancelBtn = new OO.ui.ButtonWidget({ label: 'タスクを中止', flags: ['destructive'] });
-
-      function updateModeFields() {
-        const isAuto = modeWidget.getValue() === 'auto';
-        $autoField.toggle(isAuto);
-        $manualField.toggle(!isAuto);
-      }
-      modeWidget.on('change', updateModeFields);
-      updateModeFields();
-
-      applyBtn.on('click', async () => {
-        applyBtn.setDisabled(true);
-        try {
-          const mode = modeWidget.getValue();
-          const reviewSettings =
-            mode === 'auto'
-              ? { mode, autoWaitSeconds: Number(autoWaitWidget.getValue()) }
-              : { mode, manualTimeoutHours: Number(manualTimeoutWidget.getValue()) };
-          await C.postJson('/api/tasks/' + taskId + '/review-settings', { reviewSettings });
-          C.showNotice($notice, 'success', 'レビュー方式を反映しました。待機中のページにも適用されます。');
-          refreshAll();
-        } catch (e) {
-          C.showNotice($notice, 'error', 'レビュー方式の変更に失敗しました: ' + e.message);
-          applyBtn.setDisabled(false);
-        }
-      });
-      cancelBtn.on('click', async () => {
-        cancelBtn.setDisabled(true);
-        try {
-          await C.postJson('/api/tasks/' + taskId + '/cancel', {});
-          C.showNotice($notice, 'success', 'タスクを中止しました。ワーカーは次の安全な確認地点で停止します。');
-          refreshAll();
-        } catch (e) {
-          C.showNotice($notice, 'error', 'タスクの中止に失敗しました: ' + e.message);
-          cancelBtn.setDisabled(false);
-        }
-      });
-
-      const $settingsSection = $('<div>').addClass('nb-review-settings');
-      $settingsSection.append(
-        $('<div>').css('font-weight', 'bold').text('レビュー方式（実行中に変更可能）'),
-        new OO.ui.FieldLayout(modeWidget, { label: '方式', align: 'top' }).$element,
-        $autoField,
-        $manualField,
-        $('<div>').append(applyBtn.$element, ' ', cancelBtn.$element)
-      );
-      $summarySection.append($settingsSection);
-    }
-
-    if (task.status === 'cancelled') {
-      $summarySection.append(new OO.ui.MessageWidget({ type: 'warning', label: 'このタスクは中止されました。未処理のページは編集されません。' }).$element);
-    }
-
     if (task.status === 'completed_with_failures') {
       const msg = new OO.ui.MessageWidget({ type: 'warning', label: '一部のページで編集が失敗しました。' });
       $summarySection.append(msg.$element);
@@ -205,32 +130,43 @@
     $panel.append($('<div>').addClass('nb-review-panel__title').text('確認中: ' + reviewing.page_title));
 
     const mode = task.config_json && task.config_json.reviewSettings && task.config_json.reviewSettings.mode;
-    if (mode === 'auto') {
-      const $countdown = $('<p>').addClass('nb-countdown').attr('data-deadline', reviewing.review_deadline_at || '');
-      $panel.append($countdown);
-      updateCountdown($countdown);
+    if (mode === 'manual') {
+      const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
+      const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
+      approveBtn.on('click', async () => {
+        approveBtn.setDisabled(true);
+        rejectBtn.setDisabled(true);
+        try {
+          await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/approve', {});
+          refreshAll();
+        } catch (e) {
+          C.showNotice($notice, 'error', '承認に失敗しました: ' + e.message);
+          approveBtn.setDisabled(false);
+          rejectBtn.setDisabled(false);
+        }
+      });
+      rejectBtn.on('click', async () => {
+        approveBtn.setDisabled(true);
+        rejectBtn.setDisabled(true);
+        try {
+          await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/reject', {});
+          refreshAll();
+        } catch (e) {
+          C.showNotice($notice, 'error', '却下に失敗しました: ' + e.message);
+          approveBtn.setDisabled(false);
+          rejectBtn.setDisabled(false);
+        }
+      });
+      $panel.append($('<div>').css('margin-bottom', '8px').append(approveBtn.$element, ' ', rejectBtn.$element));
     } else {
-      $panel.append($('<p>').addClass('nb-countdown').text('手動確認モード: 承認または却下を待機しています。'));
+      const autoWaitSeconds =
+        (task.config_json && task.config_json.reviewSettings && task.config_json.reviewSettings.autoWaitSeconds) || 0;
+      const preparedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
+      const remain = Math.max(0, Math.round((preparedAt + autoWaitSeconds * 1000 - Date.now()) / 1000));
+      $panel.append(
+        $('<p>').addClass('nb-countdown').text('自動更新モード: あと約' + remain + '秒で自動承認されます（目安）。')
+      );
     }
-
-    // auto/manualを問わず、待機中なら操作者が直ちに確定できる。
-    const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
-    const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
-    async function decide(decision) {
-      approveBtn.setDisabled(true);
-      rejectBtn.setDisabled(true);
-      try {
-        await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/' + decision, {});
-        refreshAll();
-      } catch (e) {
-        C.showNotice($notice, 'error', (decision === 'approve' ? '承認' : '却下') + 'に失敗しました: ' + e.message);
-        approveBtn.setDisabled(false);
-        rejectBtn.setDisabled(false);
-      }
-    }
-    approveBtn.on('click', () => decide('approve'));
-    rejectBtn.on('click', () => decide('reject'));
-    $panel.append($('<div>').css('margin-bottom', '8px').append(approveBtn.$element, ' ', rejectBtn.$element));
 
     const $diffArea = $('<div>').text('Diffを読み込み中…');
     $panel.append($diffArea);
@@ -250,16 +186,6 @@
     } else if (compareCache.has(reviewing.id)) {
       $diffArea.html(compareCache.get(reviewing.id));
     }
-  }
-
-  function updateCountdown($countdown) {
-    const deadline = new Date($countdown.attr('data-deadline')).getTime();
-    if (!Number.isFinite(deadline)) {
-      $countdown.text('自動承認の時刻を設定中です。');
-      return;
-    }
-    const remain = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    $countdown.text('自動承認モード: あと' + remain + '秒で自動承認されます。承認・却下で直ちに確定できます。');
   }
 
   function renderPageList(pages) {
@@ -358,5 +284,4 @@
 
   refreshAll();
   setInterval(refreshAll, 3000);
-  setInterval(() => $reviewContainer.find('.nb-countdown[data-deadline]').each(function () { updateCountdown($(this)); }), 1000);
 })();
