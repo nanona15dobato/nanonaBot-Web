@@ -77,6 +77,21 @@ router.get('/api/tasks/:id/pages', requireRole('owner'), async (req, res, next) 
   }
 });
 
+// タスク実行ログ。編集結果だけでなく、対象取得・ウェーブ遷移・停止理由をWeb上で確認できる。
+router.get('/api/tasks/:id/logs', requireRole('owner'), async (req, res, next) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const [rows] = await pool.query(
+      `SELECT id, stage, page_title, level, message, created_at
+       FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT ?`,
+      [req.params.id, limit]
+    );
+    res.json(rows.reverse());
+  } catch (err) {
+    next(err);
+  }
+});
+
 // 個別ページのDiff確認用（本文込み。フェーズ3のOOUI Diff画面はこれを叩く想定）
 router.get('/api/tasks/:id/pages/:pageId/diff', requireRole('owner'), async (req, res, next) => {
   try {

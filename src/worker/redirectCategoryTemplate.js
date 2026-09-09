@@ -21,8 +21,8 @@ const WikitextParser = require('../../lib/WikitextParser');
  * redirectは最大10件（redirect1〜redirect10）、各リダイレクトにつき
  * カテゴリは最大20件（N-1〜N-20）。1件目のリダイレクトを省略した「まとめて表示」用途では
  * 素の位置引数（1,2,3...20）がN-1〜N-20の代わりに使われる。
- * Luaモジュールではない素のwikitextテンプレートであり、番号は名前付き引数のため、
- * 1つ除去しても残りの表示は壊れない（1-2を消しても1-1・1-3はそのまま表示される）。
+ * Luaモジュールではない素のwikitextテンプレートである。カテゴリ引数は名前付きだが、
+ * 除去後は読みやすさのため各リダイレクト内で 1 から連番に詰め直す。
  */
 
 const TEMPLATE_TITLE = 'Template:リダイレクトの所属カテゴリ';
@@ -60,6 +60,29 @@ function findMatchingCategoryArgs(call, categoryName) {
   return call.argsOrdered.filter((a) => isCategoryValueKey(a.key) && a.value.trim() === target);
 }
 
+/** カテゴリ引数キーを、連番を振る単位とその現在の番号に分解する。 */
+function parseCategoryValueKey(key) {
+  const redirectMatch = /^(\d+)-(\d+)$/.exec(key);
+  if (redirectMatch) return { group: redirectMatch[1], index: Number(redirectMatch[2]) };
+  if (/^\d+$/.test(key)) return { group: null, index: Number(key) };
+  return null;
+}
+
+/**
+ * 引数部分（先頭の "|" を含まない）にある明示的な名前付きキーだけを書き換える。
+ * 位置引数は、引数を削除すればMediaWiki側で自動的に詰まるため変更しない。
+ */
+function replaceExplicitArgumentKey(segment, newKey) {
+  const equalsAt = segment.indexOf('=');
+  if (equalsAt === -1) return null;
+
+  const rawKey = segment.slice(0, equalsAt);
+  const keyStart = rawKey.search(/\S/);
+  if (keyStart === -1) return null;
+  const keyEnd = rawKey.search(/\s*$/);
+  return segment.slice(0, keyStart) + newKey + segment.slice(keyEnd);
+}
+
 /**
  * wikitext中の {{リダイレクトの所属カテゴリ}} 内のカテゴリ名を改名する（Category置換Step4）。
  * 該当が無ければ changed:false でwikitextはそのまま返す。
@@ -93,29 +116,58 @@ function renameCategoryInTemplate(wikitext, fromCategory, toCategory) {
 
 /**
  * wikitext中の {{リダイレクトの所属カテゴリ}} 内のカテゴリ引数を除去する（Category除去Step2）。
- * 名前付き引数（N-M形式）は番号が飛んでも表示が壊れないことをテンプレート本文で確認済みのため、
- * 番号の振り直しは行わない（不要かつリスクを増やすだけのため）。
+ * 残った明示的な名前付き引数は、リダイレクトごとに 1 から連番へ詰め直す。
+ * 位置引数は削除だけでMediaWikiが自動的に詰めるため、明示的なキーへの変換はしない。
  * @param {string} wikitext
  * @param {string} category
  * @returns {{wikitext: string, changed: boolean, count: number}}
  */
 function removeCategoryFromTemplate(wikitext, category) {
-  const positions = [];
+  const edits = [];
+  let matchedCount = 0;
   for (const call of findCalls(wikitext)) {
-    for (const arg of findMatchingCategoryArgs(call, category)) {
-      positions.push(arg.position);
+    const matching = new Set(findMatchingCategoryArgs(call, category));
+    matchedCount += matching.size;
+
+    for (const arg of matching) {
+      // positionは引数本体だけなので、直前の "|" も含めて除去する。
+      edits.push({ start: arg.position.start - 1, end: arg.position.end, replacement: '' });
+    }
+
+    // 削除されなかったカテゴリ引数を redirect 番号ごとに集め、既存番号順で詰める。
+    const groups = new Map();
+    for (const arg of call.argsOrdered) {
+      if (!isCategoryValueKey(arg.key) || matching.has(arg)) continue;
+      const parts = parseCategoryValueKey(arg.key);
+      if (!parts) continue;
+      const groupId = parts.group === null ? '__positional__' : parts.group;
+      if (!groups.has(groupId)) groups.set(groupId, []);
+      groups.get(groupId).push({ arg, ...parts });
+    }
+
+    for (const values of groups.values()) {
+      values.sort((a, b) => a.index - b.index || a.arg.position.start - b.arg.position.start);
+      values.forEach(({ arg, group }, index) => {
+        const newKey = group === null ? String(index + 1) : `${group}-${index + 1}`;
+        if (newKey === arg.key) return;
+        const segment = wikitext.slice(arg.position.start, arg.position.end);
+        const replacement = replaceExplicitArgumentKey(segment, newKey);
+        if (replacement !== null && replacement !== segment) {
+          edits.push({ start: arg.position.start, end: arg.position.end, replacement });
+        }
+      });
     }
   }
-  if (positions.length === 0) return { wikitext, changed: false, count: 0 };
+  if (matchedCount === 0) return { wikitext, changed: false, count: 0 };
 
-  positions.sort((a, b) => b.start - a.start);
+  // 後方から適用し、書き換えによる絶対位置のずれを防ぐ。
+  edits.sort((a, b) => b.start - a.start);
   let result = wikitext;
   let count = 0;
-  for (const position of positions) {
-    const pipeIndex = position.start - 1;
-    if (result[pipeIndex] !== '|') continue; // 想定外の構造（直前が"|"でない）。安全のためスキップ
-    result = result.slice(0, pipeIndex) + result.slice(position.end);
-    count++;
+  for (const edit of edits) {
+    if (edit.replacement === '' && result[edit.start] !== '|') continue; // 想定外の構造。安全のためスキップ
+    result = result.slice(0, edit.start) + edit.replacement + result.slice(edit.end);
+    if (edit.replacement === '') count++;
   }
   return { wikitext: result, changed: count > 0, count };
 }

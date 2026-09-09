@@ -19,7 +19,8 @@
   const $warningSection = $('<div>');
   const $reviewContainer = $('<div>');
   const $pageListSection = $('<div>').addClass('nb-section');
-  $app.append($notice, $summarySection, $warningSection, $reviewContainer, $pageListSection);
+  const $logSection = $('<div>').addClass('nb-section');
+  $app.append($notice, $summarySection, $warningSection, $reviewContainer, $pageListSection, $logSection);
 
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
   let lastReviewPageId = null;
@@ -33,6 +34,9 @@
   }
   async function loadWarnings() {
     return C.fetchJson('/api/tasks/' + taskId + '/warnings');
+  }
+  async function loadLogs() {
+    return C.fetchJson('/api/tasks/' + taskId + '/logs?limit=200');
   }
   async function loadCompare(pageId) {
     if (compareCache.has(pageId)) return compareCache.get(pageId);
@@ -233,12 +237,36 @@
     $warningSection.append($panel);
   }
 
+  function renderLogs(logs) {
+    $logSection.empty();
+    $logSection.append($('<div>').addClass('nb-section__title').text('実行ログ（最新200件）'));
+
+    if (!logs || logs.length === 0) {
+      $logSection.append($('<p>').text('まだ実行ログはありません。ワーカーがタスクを開始すると、対象取得やウェーブ遷移がここに記録されます。'));
+      return;
+    }
+
+    const $list = $('<div>').addClass('nb-task-log');
+    logs.forEach((log) => {
+      const timestamp = log.created_at ? new Date(log.created_at).toLocaleString('ja-JP') : '';
+      const scope = [log.stage ? 'W' + log.stage : '', log.page_title || ''].filter(Boolean).join(' ');
+      const $row = $('<div>').addClass('nb-task-log__row nb-task-log__row--' + log.level);
+      $row.append($('<time>').addClass('nb-task-log__time').text(timestamp));
+      $row.append($('<span>').addClass('nb-task-log__level').text(log.level));
+      if (scope) $row.append($('<span>').addClass('nb-task-log__scope').text(scope));
+      $row.append($('<span>').addClass('nb-task-log__message').text(log.message));
+      $list.append($row);
+    });
+    $logSection.append($list);
+  }
+
   async function refreshAll() {
     try {
-      const [task, pages] = await Promise.all([loadTask(), loadPages()]);
+      const [task, pages, logs] = await Promise.all([loadTask(), loadPages(), loadLogs()]);
       renderSummary(task);
       renderReviewPanel(task, pages);
       renderPageList(pages);
+      renderLogs(logs);
 
       if (!warningsLoaded) {
         warningsLoaded = true;

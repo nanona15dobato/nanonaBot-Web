@@ -75,6 +75,15 @@ test('ruleAppliesToStage: linkRename系はステージ1・2両方、それ以外
   assert.equal(ruleAppliesToStage({ templateType: 'templateRename' }, 2), false);
 });
 
+test('2ウェーブ構成: ウェーブ1の対象が0件でもlinkRename系はウェーブ2の対象取得対象である', () => {
+  // runStagePipelineは対象0件ならcompleted:trueを返すため、runTaskはこの判定を使って
+  // 続けてウェーブ2を列挙・実行する。ここではその前提となるルール適用範囲を固定する。
+  const rule = { templateType: 'linkRename', from: '旧ページ', to: '新ページ' };
+  assert.equal(computeStageCount([rule]), 2);
+  assert.equal(ruleAppliesToStage(rule, 1), true);
+  assert.equal(ruleAppliesToStage(rule, 2), true);
+});
+
 // ---- フェーズ6: unlinkPage/templateSubst ----
 
 test('materializeReplacements: unlinkPageはtoなしでsteps生成できる', () => {

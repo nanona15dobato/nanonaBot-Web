@@ -17,7 +17,7 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - Wikimedia OAuth 2.0 ログイン
 - 権限判定（`Nanona15dobato` = owner / sysop = admin_emergency_only / それ以外 = denied）
 - 緊急停止API（誰でも停止可、解除はownerのみ）
-- DBスキーマ（`tasks` / `task_pages` / `edit_log` / `system_status`）
+- DBスキーマ（`tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `system_status`）
 - `Template:リダイレクトの所属カテゴリ` の実際の書式を確認するスクリプト（`scripts/`）
 
 **フェーズ2**
@@ -110,6 +110,10 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
   - 対象ページの検出は、置換前Categoryページ自体への標準名前空間backlinksから、実際に構造的に
     一致するものだけを自動編集対象に追加する。緩い文字列一致のみ（構造的に確認できないもの）は
     引き続き`task_warnings`で警告表示に留める
+
+**今回の改善**
+- Category除去時、`Template:リダイレクトの所属カテゴリ` の残った名前付きカテゴリ引数を、リダイレクトごとに1から連番へ詰め直す
+- タスク詳細画面に永続的な実行ログを追加。対象取得・ウェーブ遷移・一時停止・完了理由をDBの`task_logs`に保存して表示する
 
 **含まれないもの（フェーズ8以降）**: BOTREQの`REDIRECT_TARGET`・外部URL・アンカー付きペアへの対応。
 
@@ -437,7 +441,7 @@ public/js/editLog.js         編集ログ画面ロジック（検索・フィル
 lib/WikitextParser.js        Wikitext解析共有ライブラリ
 scripts/check-redirect-category-template.js
                               Template:リダイレクトの所属カテゴリ 書式確認スクリプト
-db/schema.sql                DBスキーマ（tasks/task_pages/edit_log/system_status/task_warnings）
+db/schema.sql                DBスキーマ（tasks/task_pages/edit_log/task_logs/system_status/task_warnings）
 test/unit.test.js            権限判定・replica.my.cnfパーサー等のユニットテスト
 test/worker.test.js          置換エンジン・タスクconfig検証・JSON列ユーティリティのテスト
 test/bot.test.js             MediaWikiBotClientのテスト（fetchをモックし、ログイン〜編集の

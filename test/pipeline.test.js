@@ -296,7 +296,7 @@ test('applyRedirectCategoryTemplateEdits: categoryRemoveルールがあれば該
       { templateType: 'categoryRemove', from: '除去対象' },
     ]);
     assert.doesNotMatch(result, /除去対象/);
-    assert.match(result, /\|1-2=残す/);
+    assert.match(result, /\|1-1=残す/);
   });
 });
 

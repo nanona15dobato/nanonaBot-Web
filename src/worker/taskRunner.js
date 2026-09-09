@@ -8,6 +8,7 @@ const { buildStepsForTemplateType, KNOWN_PRESET_TEMPLATE_TYPES } = require('./te
 const { resolveTargetSource, resolveCategoryMembers, resolveBacklinks, resolveEmbeddedIn } = require('./targetResolvers');
 const { collectCategoryWarnings } = require('./categoryWarnings');
 const { findCandidatePages: findRedirectCategoryTemplatePages } = require('./redirectCategoryTemplate');
+const { writeTaskLogSafely } = require('./taskLog');
 
 const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2'];
 const CATEGORY_TEMPLATE_TYPES = ['categoryRename', 'categoryRemove'];
@@ -136,7 +137,9 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
     'SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ? AND stage = ?',
     [task.id, stage]
   );
-  if (existingCountRows[0].cnt > 0) return; // 既に列挙済み（再開等）
+  if (existingCountRows[0].cnt > 0) {
+    return { alreadyEnumerated: true, targetCount: existingCountRows[0].cnt, errors: [] };
+  }
 
   const titleToInfo = new Map(); // title -> { namespace, ruleIndices: Set }
   const stageErrors = [];
@@ -166,7 +169,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
   if (titles.length === 0) {
     // このステージの対象が0件。ウェーブ2でよくあるケース（9章: 0件でも必ず実行する。
     // 実行した結果0件だったのはウェーブ1の結果とは独立した事実であり、異常ではない）。
-    return;
+    return { alreadyEnumerated: false, targetCount: 0, errors: stageErrors };
   }
 
   const values = titles.map((title, i) => {
@@ -192,6 +195,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
     stage,
     task.id,
   ]);
+  return { alreadyEnumerated: false, targetCount: titles.length, errors: stageErrors };
 }
 
 /**
@@ -234,6 +238,11 @@ async function runTask(task) {
 
   const stageCount = computeStageCount(replacements);
   await pool.query('UPDATE tasks SET stage_count = ? WHERE id = ?', [stageCount, task.id]);
+  await writeTaskLogSafely({
+    taskId: task.id,
+    level: 'info',
+    message: `タスクの実行を開始しました（${stageCount}ウェーブ構成）。`,
+  });
 
   if (config.reviewSettings && config.reviewSettings.mode === 'manual' && !task.review_timeout_at) {
     const timeoutAt = new Date(Date.now() + config.reviewSettings.manualTimeoutHours * 3600 * 1000);
@@ -246,7 +255,16 @@ async function runTask(task) {
   await collectWarningsIfNeeded(task, replacements, mwClient);
 
   // ---- ウェーブ1 ----
-  await enumerateStageIfNeeded(task, replacements, 1, mwClient);
+  await writeTaskLogSafely({ taskId: task.id, stage: 1, level: 'info', message: 'ウェーブ1の対象ページを取得します。' });
+  let enumeration = await enumerateStageIfNeeded(task, replacements, 1, mwClient);
+  await writeTaskLogSafely({
+    taskId: task.id,
+    stage: 1,
+    level: enumeration.errors.length > 0 ? 'warning' : 'info',
+    message: enumeration.alreadyEnumerated
+      ? `ウェーブ1は既に列挙済みです（${enumeration.targetCount}件）。`
+      : `ウェーブ1の対象ページ取得が完了しました（${enumeration.targetCount}件）。`,
+  });
   let result = await runStagePipeline({
     taskId: task.id,
     stage: 1,
@@ -259,16 +277,39 @@ async function runTask(task) {
   });
 
   if (result.emergencyStopped) {
+    await writeTaskLogSafely({ taskId: task.id, stage: 1, level: 'warning', message: '緊急停止を検知したため、ウェーブ1を中断しました。' });
     await pool.query(`UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ?`, [task.id]);
     return;
   }
   if (result.expired || result.paused) {
+    await writeTaskLogSafely({
+      taskId: task.id,
+      stage: 1,
+      level: result.expired ? 'warning' : 'error',
+      message: result.expired ? 'レビュー期限切れのため、ウェーブ1を終了しました。' : '失敗により、ウェーブ1を一時停止しました。',
+    });
     return;
   }
+  await writeTaskLogSafely({
+    taskId: task.id,
+    stage: 1,
+    level: result.hadFailures ? 'warning' : 'info',
+    message: result.hadFailures ? 'ウェーブ1が完了しました（一部ページは失敗）。' : 'ウェーブ1が完了しました。',
+  });
 
   // ---- ウェーブ2（linkRename/linkRename2ルールがある場合のみ） ----
   if (stageCount === 2) {
-    await enumerateStageIfNeeded(task, replacements, 2, mwClient);
+    // ウェーブ1の対象が0件でも、ウェーブ2は改めてbacklinksを取得して必ず実行する。
+    await writeTaskLogSafely({ taskId: task.id, stage: 2, level: 'info', message: 'ウェーブ2の対象ページを取得します。' });
+    enumeration = await enumerateStageIfNeeded(task, replacements, 2, mwClient);
+    await writeTaskLogSafely({
+      taskId: task.id,
+      stage: 2,
+      level: enumeration.errors.length > 0 ? 'warning' : 'info',
+      message: enumeration.alreadyEnumerated
+        ? `ウェーブ2は既に列挙済みです（${enumeration.targetCount}件）。`
+        : `ウェーブ2の対象ページ取得が完了しました（${enumeration.targetCount}件）。`,
+    });
     result = await runStagePipeline({
       taskId: task.id,
       stage: 2,
@@ -281,12 +322,25 @@ async function runTask(task) {
     });
 
     if (result.emergencyStopped) {
+      await writeTaskLogSafely({ taskId: task.id, stage: 2, level: 'warning', message: '緊急停止を検知したため、ウェーブ2を中断しました。' });
       await pool.query(`UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ?`, [task.id]);
       return;
     }
     if (result.expired || result.paused) {
+      await writeTaskLogSafely({
+        taskId: task.id,
+        stage: 2,
+        level: result.expired ? 'warning' : 'error',
+        message: result.expired ? 'レビュー期限切れのため、ウェーブ2を終了しました。' : '失敗により、ウェーブ2を一時停止しました。',
+      });
       return;
     }
+    await writeTaskLogSafely({
+      taskId: task.id,
+      stage: 2,
+      level: result.hadFailures ? 'warning' : 'info',
+      message: result.hadFailures ? 'ウェーブ2が完了しました（一部ページは失敗）。' : 'ウェーブ2が完了しました。',
+    });
   }
 
   // 最終ステータスは、実行中の一時的なhadFailuresではなく、
@@ -298,6 +352,11 @@ async function runTask(task) {
   );
   const finalStatus = failureCountRows[0].cnt > 0 ? 'completed_with_failures' : 'completed';
   await pool.query(`UPDATE tasks SET status = ?, updated_at = NOW() WHERE id = ?`, [finalStatus, task.id]);
+  await writeTaskLogSafely({
+    taskId: task.id,
+    level: finalStatus === 'completed' ? 'info' : 'warning',
+    message: finalStatus === 'completed' ? 'タスクが完了しました。' : 'タスクが完了しました（失敗したページがあります）。',
+  });
 }
 
 module.exports = {

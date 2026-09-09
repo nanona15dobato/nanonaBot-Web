@@ -153,7 +153,7 @@ mysql --defaults-file=$HOME/replica.my.cnf \
   <credentialUser>__nanona_bot -e "SHOW TABLES;"
 ```
 
-`tasks` / `task_pages` / `edit_log` / `system_status` の4つが表示されればOK
+`tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `system_status` の6つが表示されればOK
 （`sessions`は`express-mysql-session`が初回起動時に自動作成するので、この時点では無くてよい）。
 
 - [ ] DB作成済み

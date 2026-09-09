@@ -95,9 +95,31 @@ test('removeCategoryFromTemplate: 単一リダイレクト例で該当行を丸�
   assert.equal(result.changed, true);
   assert.equal(result.count, 1);
   assert.doesNotMatch(result.wikitext, /日本のキャラクターデザイナー/);
-  // 残りは番号を振り直さずそのまま残る（テンプレートは名前付き引数のため表示は壊れない）
+  // 残った名前付き引数は、読みやすいように1から連番へ詰める。
   assert.match(result.wikitext, /\|1-1=日本のアニメーター/);
-  assert.match(result.wikitext, /\|1-3=アニメのキャラクターデザイナー/);
+  assert.match(result.wikitext, /\|1-2=アニメのキャラクターデザイナー/);
+  assert.doesNotMatch(result.wikitext, /\|1-3=/);
+});
+
+test('removeCategoryFromTemplate: 複数の名前付き引数をリダイレクトごとに連番へ詰める', () => {
+  const wikitext = `{{リダイレクトの所属カテゴリ
+| redirect1 = A
+| 1-1 = 残す1
+| 1-2 = 削除対象
+| 1-3 = 残す2
+| redirect2 = B
+| 2-1 = 削除対象
+| 2-2 = 残す3
+| 2-4 = 残す4
+}}`;
+  const result = rct.removeCategoryFromTemplate(wikitext, '削除対象');
+
+  assert.equal(result.count, 2);
+  assert.match(result.wikitext, /\| 1-1 = 残す1/);
+  assert.match(result.wikitext, /\| 1-2 = 残す2/);
+  assert.match(result.wikitext, /\| 2-1 = 残す3/);
+  assert.match(result.wikitext, /\| 2-2 = 残す4/);
+  assert.doesNotMatch(result.wikitext, /[12]-[34] =/);
 });
 
 test('renameCategoryInTemplate: 複数リダイレクトにまたがる同一カテゴリを全て改名する', () => {

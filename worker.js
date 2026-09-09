@@ -5,6 +5,7 @@ const { pool } = require('./src/db');
 const { claimNextQueuedTask } = require('./src/worker/queue');
 const { runTask } = require('./src/worker/taskRunner');
 const { isEmergencyStopped } = require('./src/worker/emergencyStop');
+const { writeTaskLogSafely } = require('./src/worker/taskLog');
 
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS || 10000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,6 +38,11 @@ async function mainLoop() {
         console.log(`[worker] タスク ${task.id} の処理が一区切りしました`);
       } catch (err) {
         console.error(`[worker] タスク ${task.id} の処理中に予期しないエラーが発生しました:`, err);
+        await writeTaskLogSafely({
+          taskId: task.id,
+          level: 'error',
+          message: `予期しないエラーによりタスクを終了しました: ${String((err && err.message) || err)}`,
+        });
         await pool.query(`UPDATE tasks SET status = 'failed', updated_at = NOW() WHERE id = ?`, [task.id]);
       }
     } catch (outerErr) {

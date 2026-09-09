@@ -107,6 +107,20 @@ CREATE TABLE IF NOT EXISTS edit_log (
     FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+-- タスク実行の経過ログ。対象取得・ウェーブ遷移・停止理由などをWeb UIで追跡するために残す。
+CREATE TABLE IF NOT EXISTS task_logs (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  task_id     INT UNSIGNED NOT NULL,
+  stage       TINYINT UNSIGNED NULL,
+  page_title  VARCHAR(512) NULL,
+  level       ENUM('info', 'warning', 'error') NOT NULL DEFAULT 'info',
+  message     TEXT NOT NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_task_created (task_id, created_at),
+  CONSTRAINT fk_task_logs_task
+    FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- Category系（categoryRename/categoryRemove）の付随警告（仕様書6.3・6.4節・8章。フェーズ4）。
 -- 置換前Categoryページ自体への標準名前空間backlinksのうち、Template:リダイレクトの所属カテゴリ
 -- と旧カテゴリ名の共起が見つかったページを記録する。検出のみで自動編集はしない。
