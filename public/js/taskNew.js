@@ -479,12 +479,14 @@
   const $accountSection = $('<div>').addClass('nb-section');
   $accountSection.append(
     $('<div>').addClass('nb-section__title').text('Botアカウント'),
+    $('<p>').addClass('nb-section__hint').text('編集に使用するBotアカウントを選択してください。'),
     new OO.ui.FieldLayout(accountWidget, { label: 'アカウント', align: 'top' }).$element
   );
 
   const $rulesSection = $('<div>').addClass('nb-section');
   $rulesSection.append(
     $('<div>').addClass('nb-section__title').text('置換ルール'),
+    $('<p>').addClass('nb-section__hint').text('上から順にルールを適用します。同じページに複数ルールが該当する場合はまとめて準備します。'),
     $('<div>').css('margin-bottom', '12px').append(botreqBtn.$element),
     $botreqPanel,
     $rulesContainer,
@@ -494,6 +496,7 @@
   const $editSection = $('<div>').addClass('nb-section');
   $editSection.append(
     $('<div>').addClass('nb-section__title').text('編集設定'),
+    $('<p>').addClass('nb-section__hint').text('Botフラグと編集間隔は、実際の編集処理にも適用されます。'),
     new OO.ui.FieldLayout(botFlagWidget, { label: 'Botフラグを付与', align: 'inline' }).$element,
     new OO.ui.FieldLayout(minorEditWidget, { label: '細部の編集にする', align: 'inline' }).$element,
     new OO.ui.FieldLayout(editSummaryWidget, { label: '要約欄', align: 'top' }).$element,
@@ -503,6 +506,7 @@
   const $reviewSection = $('<div>').addClass('nb-section');
   $reviewSection.append(
     $('<div>').addClass('nb-section__title').text('実行モード'),
+    $('<p>').addClass('nb-section__hint').text('自動更新は指定秒数後に承認、確認待機は画面から承認・却下します。実行中にも切り替えできます。'),
     new OO.ui.FieldLayout(modeWidget, { label: 'モード', align: 'top' }).$element,
     $autoWaitField,
     $manualTimeoutField
@@ -511,6 +515,7 @@
   const $failureSection = $('<div>').addClass('nb-section');
   $failureSection.append(
     $('<div>').addClass('nb-section__title').text('失敗時の挙動'),
+    $('<p>').addClass('nb-section__hint').text('一時停止すると原因確認後に再開できます。'),
     new OO.ui.FieldLayout(onFailureWidget, { label: '失敗ページが出た場合', align: 'top' }).$element
   );
 

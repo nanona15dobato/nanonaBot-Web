@@ -15,7 +15,7 @@
   }
 
   const $notice = $('<div>');
-  const $refreshStatus = $('<span>').css({ marginLeft: '8px', color: '#54595d', fontSize: '0.9em' });
+  const $refreshStatus = $('<span>').addClass('nb-refresh-status');
   const $summarySection = $('<div>').addClass('nb-section');
   const $warningSection = $('<div>');
   const $reviewContainer = $('<div>');
@@ -52,7 +52,7 @@
     return result.html;
   }
 
-  function renderSummary(task) {
+  function renderSummary(task, pages) {
     $summarySection.empty();
     $summarySection.append($('<div>').addClass('nb-section__title').text('タスク概要'));
 
@@ -66,6 +66,25 @@
       )
     );
     $summarySection.append($line);
+
+    const counts = (pages || []).reduce((result, page) => {
+      result[page.status] = (result[page.status] || 0) + 1;
+      return result;
+    }, {});
+    const $progress = $('<div>').addClass('nb-progress-summary');
+    [
+      ['確認待ち', counts.awaiting_review || 0],
+      ['編集済み', counts.edited || 0],
+      ['失敗・却下', (counts.failed || 0) + (counts.rejected || 0)],
+    ].forEach(([label, value]) => {
+      $progress.append(
+        $('<div>').addClass('nb-progress-summary__item').append(
+          $('<span>').addClass('nb-progress-summary__label').text(label),
+          $('<span>').addClass('nb-progress-summary__value').text(value)
+        )
+      );
+    });
+    $summarySection.append($progress);
 
     if (['queued', 'running', 'paused'].includes(task.status)) {
       const cancelBtn = new OO.ui.ButtonWidget({ label: 'タスクを中止', flags: ['destructive'] });
@@ -187,8 +206,10 @@
     approveBtn.on('click', () => submitReview('approve', approveBtn));
     rejectBtn.on('click', () => submitReview('reject', rejectBtn));
     $panel.append(
-      $('<div>').css('margin-bottom', '8px').append(
-        $('<span>').text('確認モード: '), modeWidget.$element, ' ', approveBtn.$element, ' ', rejectBtn.$element
+      $('<div>').addClass('nb-review-panel__actions').append(
+        $('<span>').addClass('nb-review-panel__mode').append($('<span>').text('確認モード:'), modeWidget.$element),
+        approveBtn.$element,
+        rejectBtn.$element
       )
     );
 
@@ -300,7 +321,7 @@
     $refreshStatus.text('更新中…');
     try {
       const [task, pages, logs] = await Promise.all([loadTask(), loadPages(), loadLogs()]);
-      renderSummary(task);
+      renderSummary(task, pages);
       renderReviewPanel(task, pages);
       renderPageList(pages);
       renderLogs(logs);

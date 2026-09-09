@@ -53,6 +53,14 @@ function createFakeDb() {
       return [rows];
     }
 
+    if (s.includes("SET status = 'pending'") && s.includes('WHERE task_id = ?')) {
+      for (const page of taskPages.values()) {
+        if (page.task_id === params[0] && page.stage === params[1] && ['preparing', 'prepared'].includes(page.status)) {
+          page.status = 'pending';
+        }
+      }
+      return [{ affectedRows: 1 }];
+    }
     if (s.startsWith('UPDATE task_pages SET status = ?') === false && s.startsWith('UPDATE task_pages SET status')) {
       // 各種 UPDATE task_pages SET status = '...' ... WHERE id = ?
       const idParam = params[params.length - 1];
@@ -91,7 +99,7 @@ function createFakeDb() {
 
     if (s.startsWith('SELECT status, review_timeout_at')) {
       const t = tasks.get(params[0]);
-      return [t ? [{ status: t.status, mode: t.mode, review_timeout_at: t.review_timeout_at || null }] : []];
+      return [t ? [{ status: t.status, mode: t.mode, config_json: t.config_json, review_timeout_at: t.review_timeout_at || null }] : []];
     }
 
     if (s.startsWith('SELECT status FROM tasks WHERE id')) {
@@ -317,7 +325,7 @@ test('runStagePipeline: onFailure="pause"は失敗直後にタスクを止め、
 
   assert.equal(result.paused, true);
   assert.equal(db.tasks.get(2).status, 'paused');
-  // ページYはまだ編集されていない（先読みでprepareはされ得るが、editまでは進まない）
+  assert.ok(db.calls.some(({ sql }) => sql.includes("SET status = 'pending'") && sql.includes('status IN')));
   assert.deepEqual(editCallOrder, ['ページX(失敗)']);
 });
 
