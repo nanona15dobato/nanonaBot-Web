@@ -7,7 +7,7 @@ const router = express.Router();
 const oauthService = require('../services/oauth');
 const mediawiki = require('../services/mediawiki');
 const config = require('../config');
-const { determineRole } = require('../permissions');
+const { determineRole, normalizeUsername } = require('../permissions');
 const { escapeHtml } = require('../views/shell');
 
 router.get('/oauth/login', (req, res) => {
@@ -38,9 +38,21 @@ router.get('/oauth/callback', async (req, res) => {
       throw new Error('OAuthプロフィールにusernameが含まれていませんでした。');
     }
 
-    const isOwner = username === config.permissions.ownerUsername;
-    const groups = isOwner ? [] : await mediawiki.getUserGroups(username);
-    const role = determineRole({ username, ownerUsername: config.permissions.ownerUsername, groups });
+    const normalizedUsername = normalizeUsername(username);
+    const isOwner = config.permissions.ownerUsernames.some(
+      (configuredUsername) => normalizeUsername(configuredUsername) === normalizedUsername
+    );
+    const isEmergencyStopUser = config.permissions.emergencyStopUsernames.some(
+      (configuredUsername) => normalizeUsername(configuredUsername) === normalizedUsername
+    );
+    const groups = isOwner || isEmergencyStopUser ? [] : await mediawiki.getUserGroups(username);
+    const role = determineRole({
+      username,
+      ownerUsername: config.permissions.ownerUsername,
+      ownerUsernames: config.permissions.ownerUsernames,
+      emergencyStopUsernames: config.permissions.emergencyStopUsernames,
+      groups,
+    });
 
     // フェーズ1ではOAuthアクセストークン自体はセッションに保存しない。
     // 編集操作は各BotアカウントのBotPassword（.env/envvars）で行う設計であり

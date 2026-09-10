@@ -15,8 +15,10 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 
 **フェーズ1**
 - Wikimedia OAuth 2.0 ログイン
-- 権限判定（`Nanona15dobato` = owner / sysop = admin_emergency_only / それ以外 = denied）
-- 緊急停止API（誰でも停止可、解除はownerのみ）
+- 権限判定（`Nanona15dobato`・`なのな` = owner / sysop・拡張承認利用者・`nanona15` = admin_emergency_only / それ以外 = denied）
+- 緊急停止API（owner・admin_emergency_onlyが停止可、解除はownerのみ）
+- ワーカーの待機間隔は `WORKER_POLL_INTERVAL_MS`、レビュー状態の確認間隔は
+  `REVIEW_POLL_INTERVAL_MS` で調整できる（既定値はいずれも1秒）。
 - DBスキーマ（`tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `system_status`）
 - `Template:リダイレクトの所属カテゴリ` の実際の書式を確認するスクリプト（`scripts/`）
 
