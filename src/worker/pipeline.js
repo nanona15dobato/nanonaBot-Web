@@ -8,7 +8,7 @@ const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const MANUAL_POLL_MS = 3000;
+const MANUAL_POLL_MS = Number(process.env.REVIEW_POLL_INTERVAL_MS || 1000);
 
 /**
  * matchedRulesのうちcategoryRename/categoryRemoveについて、
@@ -71,7 +71,7 @@ async function prepareOnePage(row, ctx) {
        WHERE id = ?`,
       [page.revid, new Date(page.baseTimestamp), page.wikitext, newWikitext, row.id]
     );
-    return { status: 'prepared', row, page, newWikitext };
+    return { status: 'prepared', row, page, newWikitext, preparedAt: new Date() };
   } catch (err) {
     const msg = String((err && err.message) || err);
     await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [msg, row.id]);
@@ -242,7 +242,7 @@ async function runStagePipeline(ctx) {
         taskId: ctx.taskId,
         pageId: current.row.id,
         reviewSettings: ctx.reviewSettings,
-        preparedAt: current.row.prepared_at,
+        preparedAt: current.preparedAt || current.row.prepared_at,
       });
 
       // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
@@ -280,7 +280,9 @@ async function runStagePipeline(ctx) {
             return { completed: false, paused: true, hadFailures };
           }
         }
-        await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
+        if (i < rows.length - 1) {
+          await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
+        }
       }
     }
     // status === 'skipped' の場合は何もせず次へ

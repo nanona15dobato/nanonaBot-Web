@@ -52,6 +52,27 @@
     return result.html;
   }
 
+  function buildModeWidget(task, onChanged) {
+    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
+    const mode = reviewSettings.mode || task.mode;
+    const modeWidget = new OO.ui.DropdownInputWidget({
+      options: [{ label: '自動更新', value: 'auto' }, { label: '手動確認', value: 'manual' }],
+      value: mode,
+    });
+    modeWidget.on('change', async (nextMode) => {
+      modeWidget.setDisabled(true);
+      try {
+        await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
+        await onChanged();
+      } catch (e) {
+        C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
+        modeWidget.setValue(mode);
+        modeWidget.setDisabled(false);
+      }
+    });
+    return { mode, reviewSettings, modeWidget };
+  }
+
   function renderSummary(task, pages) {
     $summarySection.empty();
     $summarySection.append($('<div>').addClass('nb-section__title').text('タスク概要'));
@@ -66,6 +87,17 @@
       )
     );
     $summarySection.append($line);
+
+    const hasReviewingPage = (pages || []).some((page) => page.status === 'awaiting_review');
+    if (['queued', 'running'].includes(task.status) && !hasReviewingPage) {
+      const { modeWidget } = buildModeWidget(task, refreshAll);
+      $summarySection.append(
+        $('<p>').addClass('nb-review-panel__mode').append(
+          $('<span>').text('確認モード:'),
+          modeWidget.$element
+        )
+      );
+    }
 
     const counts = (pages || []).reduce((result, page) => {
       result[page.status] = (result[page.status] || 0) + 1;
@@ -171,23 +203,7 @@
     const $panel = $('<div>').addClass('nb-review-panel');
     $panel.append($('<div>').addClass('nb-review-panel__title').text('確認中: ' + reviewing.page_title));
 
-    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
-    const mode = reviewSettings.mode || task.mode;
-    const modeWidget = new OO.ui.DropdownInputWidget({
-      options: [{ label: '自動更新', value: 'auto' }, { label: '手動確認', value: 'manual' }],
-      value: mode,
-    });
-    modeWidget.on('change', async (nextMode) => {
-      modeWidget.setDisabled(true);
-      try {
-        await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
-        await refreshAll();
-      } catch (e) {
-        C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
-        modeWidget.setValue(mode);
-        modeWidget.setDisabled(false);
-      }
-    });
+    const { mode, reviewSettings, modeWidget } = buildModeWidget(task, refreshAll);
 
     const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
     const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
