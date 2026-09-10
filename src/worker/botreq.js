@@ -4,6 +4,7 @@ const config = require('../config');
 const WikitextParser = require('../../lib/WikitextParser');
 
 const BOTREQ_PAGE_TITLE = 'Wikipedia:Bot作業依頼';
+const BOTREQ_TOPIC_LIST_TITLE = 'Wikipedia:Bot作業依頼/topic list';
 const TEMPLATE_TITLE = 'Template:リンク修正依頼/改名';
 
 /**
@@ -157,11 +158,35 @@ function parseBotreqTemplates(wikitext) {
   });
 }
 
+/**
+ * topic listの自動生成テーブルから、依頼アンカーと進捗欄を取り出す。
+ * topic listは通常のwikitextテーブルなので、依頼セル内のリンク構文を保持したまま読む。
+ */
+function parseBotreqTopicList(wikitext) {
+  const entries = [];
+  for (const block of String(wikitext || '').split(/\n\|-/)) {
+    const lines = block.split(/\r?\n/);
+    const cells = lines.filter((line) => /^\|[^|]/.test(line)).map((line) => line.slice(1).trim());
+    if (cells.length < 3) continue;
+    const link = cells[1].match(/\[\[([^|\]]+)#([^|\]]+)(?:\|([^\]]+))?\]\]/);
+    if (!link) continue;
+    const progressTemplate = cells[2].match(/\{\{([^{}]+)\}\}/);
+    entries.push({
+      anchor: link[2].trim(),
+      title: (link[3] || link[2]).trim(),
+      progress: progressTemplate ? progressTemplate[1].trim() : cells[2].replace(/<[^>]+>/g, '').trim(),
+    });
+  }
+  return entries;
+}
+
 module.exports = {
   BOTREQ_PAGE_TITLE,
+  BOTREQ_TOPIC_LIST_TITLE,
   TEMPLATE_TITLE,
   fetchBotreqWikitext,
   stripNamespacePrefix,
   classifyPair,
   parseBotreqTemplates,
+  parseBotreqTopicList,
 };

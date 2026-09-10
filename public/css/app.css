@@ -100,6 +100,31 @@ body {
   margin-bottom: 8px;
 }
 
+.nb-botreq-progress {
+  margin: 8px 0 16px;
+  padding: 12px;
+  border: 1px solid #c8ccd1;
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.nb-botreq-progress__list {
+  margin-top: 8px;
+}
+
+.nb-botreq-progress__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid #eaecf0;
+}
+
+.nb-botreq-progress__status {
+  color: #54595d;
+  white-space: nowrap;
+}
+
 .nb-step-row {
   display: flex;
   gap: 8px;
@@ -229,6 +254,8 @@ body {
   .nb-app { padding: 16px 12px 32px; }
   .nb-section, .nb-review-panel { padding: 16px; }
   .nb-progress-summary { grid-template-columns: 1fr; }
+  .nb-botreq-progress__row { display: block; }
+  .nb-botreq-progress__status { display: block; margin-top: 2px; }
   .nb-task-log__row { grid-template-columns: 1fr; gap: 2px; }
 }
 

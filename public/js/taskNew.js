@@ -324,8 +324,23 @@
   const botreqBtn = new OO.ui.ButtonWidget({ label: 'Wikipedia:Bot作業依頼 から取得', icon: 'search' });
   const $botreqPanel = $('<div>');
 
-  function renderBotreqProposals(proposals) {
+  function renderBotreqProposals(proposals, topicProgress) {
     $botreqPanel.empty();
+    if (topicProgress && topicProgress.length > 0) {
+      const $progressPanel = $('<div>').addClass('nb-botreq-progress');
+      $progressPanel.append($('<strong>').text('topic listの依頼進捗'));
+      const $progressList = $('<div>').addClass('nb-botreq-progress__list');
+      topicProgress.forEach((entry) => {
+        $progressList.append(
+          $('<div>').addClass('nb-botreq-progress__row').append(
+            $('<span>').text(entry.title),
+            $('<span>').addClass('nb-botreq-progress__status').text(entry.progress)
+          )
+        );
+      });
+      $progressPanel.append($progressList);
+      $botreqPanel.append($progressPanel);
+    }
     if (!proposals || proposals.length === 0) {
       $botreqPanel.append($('<p>').text('{{リンク修正依頼/改名}}は見つかりませんでした。'));
       return;
@@ -376,7 +391,7 @@
     $botreqPanel.empty().append($('<p>').text('読み込み中…'));
     try {
       const data = await C.fetchJson('/api/botreq/proposals');
-      renderBotreqProposals(data.proposals);
+      renderBotreqProposals(data.proposals, data.topicProgress);
     } catch (e) {
       $botreqPanel.empty();
       C.showNotice($notice, 'error', 'BOTREQの取得に失敗しました: ' + e.message);
