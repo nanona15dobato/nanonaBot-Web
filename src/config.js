@@ -28,6 +28,14 @@ const config = {
 
   permissions: {
     ownerUsername: process.env.OWNER_USERNAME || 'Nanona15dobato',
+    ownerUsernames: (process.env.OWNER_USERNAMES || `${process.env.OWNER_USERNAME || 'Nanona15dobato'},なのな`)
+      .split(',')
+      .map((username) => username.trim())
+      .filter(Boolean),
+    emergencyStopUsernames: (process.env.EMERGENCY_STOP_USERNAMES || 'nanona15')
+      .split(',')
+      .map((username) => username.trim())
+      .filter(Boolean),
     adminCheckWikiHost: process.env.ADMIN_CHECK_WIKI_HOST || 'ja.wikipedia.org',
   },
 
