@@ -426,6 +426,41 @@
   });
   const autoWaitWidget = new OO.ui.NumberInputWidget({ min: 0, step: 1, value: 300 });
   const manualTimeoutWidget = new OO.ui.NumberInputWidget({ min: 1, step: 1, value: 72 });
+  const saveDefaultsBtn = new OO.ui.ButtonWidget({ label: 'このアカウントのデフォルトとして保存' });
+  let accountDefaults = {};
+
+  function applyAccountDefaults(account) {
+    const defaults = accountDefaults[account];
+    if (!defaults) return;
+    const edit = defaults.editSettings || {};
+    const review = defaults.reviewSettings || {};
+    botFlagWidget.setSelected(edit.botFlag !== false);
+    minorEditWidget.setSelected(edit.minorEdit !== false);
+    editSummaryWidget.setValue(edit.editSummary || '');
+    editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
+    modeWidget.setValue(review.mode || 'auto');
+    autoWaitWidget.setValue(Number(review.autoWaitSeconds) || 0);
+    manualTimeoutWidget.setValue(Number(review.manualTimeoutHours) || 72);
+    renderModeFields();
+  }
+
+  accountWidget.on('change', (account) => applyAccountDefaults(account));
+  saveDefaultsBtn.on('click', async () => {
+    saveDefaultsBtn.setDisabled(true);
+    try {
+      const config = buildConfig();
+      await C.putJson('/api/bot-accounts/' + encodeURIComponent(config.account) + '/defaults', {
+        editSettings: config.editSettings,
+        reviewSettings: config.reviewSettings,
+      });
+      accountDefaults[config.account] = { editSettings: config.editSettings, reviewSettings: config.reviewSettings };
+      C.showNotice($notice, 'success', 'アカウントのデフォルト設定を保存しました。');
+    } catch (e) {
+      C.showNotice($notice, 'error', 'デフォルト設定の保存に失敗しました: ' + e.message);
+    } finally {
+      saveDefaultsBtn.setDisabled(false);
+    }
+  });
   const $autoWaitField = new OO.ui.FieldLayout(autoWaitWidget, { label: '自動承認までの待機秒数', align: 'top' }).$element;
   const $manualTimeoutField = new OO.ui.FieldLayout(manualTimeoutWidget, {
     label: '無操作タイムアウト（時間）',
@@ -515,7 +550,8 @@
     new OO.ui.FieldLayout(botFlagWidget, { label: 'Botフラグを付与', align: 'inline' }).$element,
     new OO.ui.FieldLayout(minorEditWidget, { label: '細部の編集にする', align: 'inline' }).$element,
     new OO.ui.FieldLayout(editSummaryWidget, { label: '要約欄', align: 'top' }).$element,
-    new OO.ui.FieldLayout(editIntervalWidget, { label: '編集間隔（秒・5以上）', align: 'top' }).$element
+    new OO.ui.FieldLayout(editIntervalWidget, { label: '編集間隔（秒・5以上）', align: 'top' }).$element,
+    saveDefaultsBtn.$element
   );
 
   const $reviewSection = $('<div>').addClass('nb-section');
@@ -538,4 +574,10 @@
 
   renderModeFields();
   addRuleCard();
+  C.fetchJson('/api/bot-accounts/defaults')
+    .then((defaults) => {
+      accountDefaults = Object.fromEntries(defaults.map((item) => [item.account, item]));
+      applyAccountDefaults(accountWidget.getValue());
+    })
+    .catch((e) => C.showNotice($notice, 'error', 'アカウントデフォルト設定の取得に失敗しました: ' + e.message));
 })();
