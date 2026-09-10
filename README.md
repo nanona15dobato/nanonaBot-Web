@@ -19,6 +19,8 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - 緊急停止API（owner・admin_emergency_onlyが停止可、解除はownerのみ）
 - ワーカーの待機間隔は `WORKER_POLL_INTERVAL_MS`、レビュー状態の確認間隔は
   `REVIEW_POLL_INTERVAL_MS` で調整できる（既定値はいずれも1秒）。
+- Botアカウントごとの編集設定・実行モードのデフォルトは、タスク作成画面の
+  「このアカウントのデフォルトとして保存」から `bot_account_defaults` に保存できる。
 - DBスキーマ（`tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `system_status`）
 - `Template:リダイレクトの所属カテゴリ` の実際の書式を確認するスクリプト（`scripts/`）
 

@@ -32,6 +32,16 @@ INSERT INTO system_status (id, emergency_stopped)
   VALUES (1, FALSE)
   ON DUPLICATE KEY UPDATE id = id;
 
+-- Botアカウントごとのタスク設定デフォルト
+CREATE TABLE IF NOT EXISTS bot_account_defaults (
+  account              ENUM('Nanona15dobato', 'NanonaBot', 'NanonaBot3') NOT NULL PRIMARY KEY,
+  edit_settings_json   JSON NOT NULL,
+  review_settings_json JSON NOT NULL,
+  updated_by           VARCHAR(255) NOT NULL,
+  updated_at           DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                         ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- タスク（1キュー1タスク。仕様書4章）
 CREATE TABLE IF NOT EXISTS tasks (
   id                 INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
