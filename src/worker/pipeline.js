@@ -9,7 +9,8 @@ const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redi
 const { removePageFromHatnotes } = require('./hatnoteUnlink');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const MANUAL_POLL_MS = Number(process.env.REVIEW_POLL_INTERVAL_MS || 1000);
+// 承認待ちの確認間隔。画面での承認から編集開始までの遅れがこの間隔以内になる。
+const MANUAL_POLL_MS = Number(process.env.REVIEW_POLL_INTERVAL_MS || 500);
 
 /**
  * 正規表現では安全に扱えない、テンプレート引数の構造にもとづく書き換えを行う。
@@ -104,8 +105,13 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
   // 先読みで準備されたページは前のページの確認中に準備済みになっているため、
   // 自動承認の待機時間は「確認待ちになった時点」から数える。画面側のカウントダウンも
   // prepared_at を起点にしているので、ここで確認待ち開始時刻に揃える。
+  // 先読み中に画面から前もって承認・却下されたページ（status が approved/rejected）は
+  // 確認待ちに戻さず、そのまま結果を使う（待ち時間を無くすため）。
   const reviewStartedAt = Date.now();
-  await pool.query(`UPDATE task_pages SET status = 'awaiting_review', prepared_at = NOW() WHERE id = ?`, [pageId]);
+  await pool.query(
+    `UPDATE task_pages SET status = 'awaiting_review', prepared_at = NOW() WHERE id = ? AND status = 'prepared'`,
+    [pageId]
+  );
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -128,9 +134,13 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
       ...parseJsonColumn(task.config_json, {}).reviewSettings,
       mode: task.mode || reviewSettings.mode,
     };
+    let sleepMs = MANUAL_POLL_MS;
     if (currentSettings.mode === 'auto') {
       const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
-      if (Date.now() >= reviewStartedAt + autoWaitSeconds * 1000) {
+      const deadline = reviewStartedAt + autoWaitSeconds * 1000;
+      // 自動承認の予定時刻が次の確認より前なら、その時刻ちょうどに起きる
+      sleepMs = Math.max(0, Math.min(MANUAL_POLL_MS, deadline - Date.now()));
+      if (Date.now() >= deadline) {
         const [result] = await pool.query(
           `UPDATE task_pages SET status = 'approved', reviewed_at = NOW()
            WHERE id = ? AND status = 'awaiting_review'`,
@@ -145,7 +155,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
       return false;
     }
 
-    await sleep(MANUAL_POLL_MS);
+    await sleep(sleepMs);
   }
 }
 

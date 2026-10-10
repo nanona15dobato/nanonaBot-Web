@@ -27,6 +27,7 @@
     logLevel: '',
     lastReviewKey: null,
     reviewing: null,
+    clockOffset: 0, // サーバー時刻 − 端末時刻（ms）
   };
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
 
@@ -300,18 +301,50 @@
     $summary.append($facts);
   }
 
-  // ===== 確認中のページ =====
-  function countdownText(deadline) {
-    const remain = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-    return remain > 0 ? 'あと約' + remain + '秒で自動承認されます（目安）' : 'まもなく自動承認されます';
+  // ===== 確認・編集の進行パネル =====
+  // 優先順位: 確認待ち → 直前に編集が失敗したページ → 先読み済みの次のページ（編集中もこちらを表示） → 編集中のページ
+  const IN_FLIGHT_STATUSES = ['approved', 'editing'];
+  const seenInFlight = new Set(); // 画面で「編集中」を見たページ（失敗したらそのページに戻すため）
+  const dismissedFailures = new Set();
+  let countdown = null; // { deadline(端末時刻), total, $text, bar, format }
+
+  /** サーバー時刻の文字列を端末の時刻（ms）に直す（clockOffset = サーバー − 端末）。 */
+  function toClientTime(value) {
+    const t = value ? new Date(value).getTime() : NaN;
+    return Number.isNaN(t) ? null : t - state.clockOffset;
   }
 
-  let countdown = null; // { deadline, total, $text, bar }
+  function byOrder(a, b) {
+    return a.stage - b.stage || a.order_index - b.order_index;
+  }
+
+  /** 最後に編集が終わった時刻 + 編集間隔 ＝ ワーカーが次のページへ進む予定時刻（端末時刻）。 */
+  function nextEditAt(task, pages) {
+    const interval = Number((task.config_json && task.config_json.editSettings && task.config_json.editSettings.editIntervalSeconds) || 0);
+    const lastEdited = pages.reduce((max, p) => Math.max(max, toClientTime(p.edited_at) || 0), 0);
+    if (!lastEdited) return null;
+    const at = lastEdited + interval * 1000;
+    return at > Date.now() ? at : null;
+  }
+
+  function pickFocus(task, pages) {
+    pages.filter((p) => IN_FLIGHT_STATUSES.includes(p.status)).forEach((p) => seenInFlight.add(p.id));
+    const awaiting = pages.find((p) => p.status === 'awaiting_review');
+    const inFlight = pages.filter((p) => IN_FLIGHT_STATUSES.includes(p.status)).sort(byOrder)[0] || null;
+    const failed = pages.find((p) => p.status === 'failed' && seenInFlight.has(p.id) && !dismissedFailures.has(p.id));
+    const next = pages.filter((p) => p.status === 'prepared').sort(byOrder)[0] || null;
+    const lastEdited = pages.filter((p) => p.status === 'edited' && p.edited_at).sort((a, b) => toClientTime(b.edited_at) - toClientTime(a.edited_at))[0] || null;
+    if (awaiting) return { kind: 'review', page: awaiting, inFlight, lastEdited };
+    if (failed) return { kind: 'failed', page: failed, inFlight, lastEdited };
+    if (next && ['queued', 'running'].includes(task.status)) return { kind: 'next', page: next, inFlight, lastEdited };
+    if (inFlight) return { kind: 'editing', page: inFlight, inFlight: null, lastEdited };
+    return null;
+  }
 
   function renderReview(task, pages) {
-    const reviewing = pages.find((p) => p.status === 'awaiting_review');
-    state.reviewing = reviewing || null;
-    if (!reviewing) {
+    const focus = pickFocus(task, pages);
+    state.reviewing = focus && ['review', 'next'].includes(focus.kind) ? focus.page : null;
+    if (!focus) {
       $review.empty();
       state.lastReviewKey = null;
       countdown = null;
@@ -320,79 +353,149 @@
 
     const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
     const mode = reviewSettings.mode || task.mode;
+    const p = focus.page;
     // 自動更新で毎回作り直すと、開いているドロップダウンが閉じたりDiffのスクロール位置が
-    // 戻ったりするため、確認対象・モードが変わったときだけ作り直す（カウントダウンは別タイマーで更新）。
-    const key = [reviewing.id, mode, reviewing.prepared_at, reviewSettings.autoWaitSeconds].join('|');
+    // 戻ったりするため、表示内容が変わったときだけ作り直す（カウントダウンは別タイマーで更新）。
+    const key = [focus.kind, p.id, p.status, mode, p.prepared_at, reviewSettings.autoWaitSeconds, focus.inFlight && focus.inFlight.id, focus.lastEdited && focus.lastEdited.id].join('|');
     if (key === state.lastReviewKey) return;
     state.lastReviewKey = key;
 
-    const reviewable = pages.filter((p) => ['awaiting_review', 'pending', 'prepared', 'preparing'].includes(p.status)).length;
-    const $panel = $('<section>').addClass('nb-review').attr('aria-label', '確認中のページ');
-    const $head = $('<div>').addClass('nb-review__head').append(
-      $('<div>').addClass('nb-review__heading').append(
-        $('<span>').addClass('nb-review__label').text('確認中（W' + reviewing.stage + '・残り' + reviewable + '件）'),
-        $('<h2>').addClass('nb-review__title').append(C.wikiLink(reviewing.page_title))
-      )
-    );
-
-    const approveBtn = new OO.ui.ButtonWidget({ label: '承認して編集', icon: 'check', flags: ['primary', 'progressive'], title: '承認（キー: A）' });
-    const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', icon: 'close', flags: ['destructive'], title: '却下（キー: R）' });
-    const submit = async (action) => {
-      if (approveBtn.isDisabled()) return;
-      approveBtn.setDisabled(true);
-      rejectBtn.setDisabled(true);
-      try {
-        await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/' + action, {});
-        C.toast((action === 'approve' ? '承認しました: ' : '却下しました: ') + reviewing.page_title, action === 'approve' ? 'success' : 'notice');
-        await poller.refresh();
-      } catch (e) {
-        C.toast((action === 'approve' ? '承認' : '却下') + 'に失敗しました: ' + e.message, 'error');
-        approveBtn.setDisabled(false);
-        rejectBtn.setDisabled(false);
-      }
+    const remaining = pages.filter((x) => ['awaiting_review', 'pending', 'prepared', 'preparing'].includes(x.status)).length;
+    const LABELS = {
+      review: '確認待ち（W' + p.stage + '・残り' + remaining + '件）',
+      next: '次に編集するページ（準備完了・W' + p.stage + '・残り' + remaining + '件）',
+      failed: '編集に失敗しました（W' + p.stage + '）',
+      editing: '編集中（W' + p.stage + '）',
     };
-    approveBtn.on('click', () => submit('approve'));
-    rejectBtn.on('click', () => submit('reject'));
-    state.submitReview = submit;
-
-    $head.append(
-      $('<div>').addClass('nb-review__actions').append(
-        $('<label>').addClass('nb-review__mode').append($('<span>').text('確認モード'), buildModeWidget(task).$element),
-        rejectBtn.$element,
-        approveBtn.$element
-      )
+    const $panel = $('<section>').addClass('nb-review nb-review--' + focus.kind).attr('aria-label', LABELS[focus.kind]);
+    const $heading = $('<div>').addClass('nb-review__heading').append(
+      $('<span>').addClass('nb-review__label').text(LABELS[focus.kind]),
+      $('<h2>').addClass('nb-review__title').append(C.wikiLink(p.page_title), ' ', C.pageStatusBadge(p.status))
     );
-    $panel.append($head);
+    const $head = $('<div>').addClass('nb-review__head').append($heading);
 
+    // 進行状況の1行（編集中のページ・直前に編集したページ）
+    const $flow = $('<div>').addClass('nb-review__flow');
+    if (focus.inFlight) {
+      const viewBtn = new OO.ui.ButtonWidget({ label: '差分', icon: 'eye', framed: false, flags: ['progressive'] });
+      viewBtn.on('click', () => openDiff(focus.inFlight));
+      $flow.append(
+        $('<span>').addClass('nb-review__flow-item').append(
+          new OO.ui.ProgressBarWidget({ progress: false }).$element.addClass('nb-review__flow-bar'),
+          '編集中: ',
+          C.wikiLink(focus.inFlight.page_title),
+          viewBtn.$element
+        )
+      );
+    }
+    if (focus.lastEdited && (!focus.inFlight || focus.lastEdited.id !== focus.inFlight.id)) {
+      $flow.append($('<span>').addClass('nb-review__flow-item nb-review__flow-item--done').append('直前に編集: ', C.wikiLink(focus.lastEdited.page_title), ' （', C.timeElement(focus.lastEdited.edited_at), '）'));
+    }
+
+    // 操作ボタン
+    const canDecide = focus.kind === 'review' || focus.kind === 'next';
+    if (canDecide) {
+      const early = focus.kind === 'next';
+      const approveBtn = new OO.ui.ButtonWidget({
+        label: early ? '前もって承認' : '承認して編集',
+        icon: 'check',
+        flags: ['primary', 'progressive'],
+        title: (early ? '前のページの編集が終わったらすぐ編集します' : '承認') + '（キー: A）',
+      });
+      const rejectBtn = new OO.ui.ButtonWidget({ label: early ? '前もって却下' : '却下', icon: 'close', flags: ['destructive'], title: '却下（キー: R）' });
+      const submit = async (action) => {
+        if (approveBtn.isDisabled()) return;
+        approveBtn.setDisabled(true);
+        rejectBtn.setDisabled(true);
+        try {
+          await C.postJson('/api/tasks/' + taskId + '/pages/' + p.id + '/' + action, {});
+          C.toast((action === 'approve' ? '承認しました: ' : '却下しました: ') + p.page_title, action === 'approve' ? 'success' : 'notice');
+          await poller.refresh();
+        } catch (e) {
+          C.toast((action === 'approve' ? '承認' : '却下') + 'に失敗しました: ' + e.message, 'error');
+          approveBtn.setDisabled(false);
+          rejectBtn.setDisabled(false);
+          await poller.refresh();
+        }
+      };
+      approveBtn.on('click', () => submit('approve'));
+      rejectBtn.on('click', () => submit('reject'));
+      state.submitReview = submit;
+      $head.append(
+        $('<div>').addClass('nb-review__actions').append(
+          $('<label>').addClass('nb-review__mode').append($('<span>').text('確認モード'), buildModeWidget(task).$element),
+          rejectBtn.$element,
+          approveBtn.$element
+        )
+      );
+    } else if (focus.kind === 'failed') {
+      const dismissBtn = new OO.ui.ButtonWidget({ label: '閉じて次へ', icon: 'next' });
+      dismissBtn.on('click', () => {
+        dismissedFailures.add(p.id);
+        state.lastReviewKey = null;
+        renderReview(state.task, state.pages);
+      });
+      $head.append($('<div>').addClass('nb-review__actions').append(dismissBtn.$element));
+      state.submitReview = null;
+    } else {
+      state.submitReview = null;
+    }
+    $panel.append($head);
+    if ($flow.children().length > 0) $panel.append($flow);
+
+    if (focus.kind === 'failed' && p.error_message) {
+      $panel.append(new OO.ui.MessageWidget({ type: 'error', label: p.error_message }).$element.addClass('nb-review__error'));
+    }
+
+    // カウントダウン（自動承認／編集間隔が明けるまで）
     countdown = null;
-    if (mode === 'auto') {
+    if (focus.kind === 'review' && mode === 'auto') {
       const autoWaitSeconds = Number(reviewSettings.autoWaitSeconds) || 0;
-      const startedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
-      const bar = new OO.ui.ProgressBarWidget({ progress: 0 });
-      const $text = $('<span>');
-      countdown = { deadline: startedAt + autoWaitSeconds * 1000, total: autoWaitSeconds * 1000, $text, bar };
-      $panel.append($('<div>').addClass('nb-review__countdown').append($text, bar.$element));
+      const startedAt = toClientTime(p.prepared_at) || Date.now();
+      countdown = { deadline: startedAt + autoWaitSeconds * 1000, total: autoWaitSeconds * 1000, format: (s) => (s > 0 ? 'あと約' + s + '秒で自動承認されます' : 'まもなく自動承認されます') };
+    } else if (focus.kind === 'next') {
+      const at = nextEditAt(task, pages);
+      const interval = Number((task.config_json && task.config_json.editSettings && task.config_json.editSettings.editIntervalSeconds) || 0) * 1000;
+      if (at) {
+        countdown = {
+          deadline: at,
+          total: interval,
+          format: (s) => (s > 0 ? '編集間隔をあけています。あと約' + s + '秒でこのページの番になります' : 'まもなくこのページの番になります'),
+        };
+      }
+    }
+    if (countdown) {
+      countdown.bar = new OO.ui.ProgressBarWidget({ progress: 0 });
+      countdown.$text = $('<span>');
+      $panel.append($('<div>').addClass('nb-review__countdown').append(countdown.$text, countdown.bar.$element));
       updateCountdown();
     }
-    $panel.append($('<p>').addClass('nb-review__hint').text('キーボード: A＝承認して編集 / R＝却下'));
+    if (canDecide) {
+      $panel.append(
+        $('<p>').addClass('nb-review__hint').text(
+          (focus.kind === 'next' ? '前もって承認すると、確認待ちにならずにすぐ編集します。' : '') + 'キーボード: A＝承認 / R＝却下'
+        )
+      );
+    }
 
     const $diff = $('<div>').addClass('nb-diff').append(C.loading('差分を読み込み中…'));
     $panel.append($diff);
     $review.empty().append($panel);
 
     // 取得済みのDiffはcompareCacheから返るため、パネルを作り直してもaction=compareは再実行されない
-    loadCompare(reviewing.id)
+    loadCompare(p.id)
       .then((html) => $diff.empty().append(diffTable(html)))
       .catch((e) => $diff.empty().append(new OO.ui.MessageWidget({ type: 'error', label: '差分の取得に失敗しました: ' + e.message }).$element));
   }
 
   function updateCountdown() {
-    if (!countdown) return;
-    countdown.$text.text(countdownText(countdown.deadline));
-    const elapsed = countdown.total > 0 ? 1 - Math.max(0, countdown.deadline - Date.now()) / countdown.total : 1;
+    if (!countdown || !countdown.$text) return;
+    const remainMs = Math.max(0, countdown.deadline - Date.now());
+    countdown.$text.text(countdown.format(Math.ceil(remainMs / 1000)));
+    const elapsed = countdown.total > 0 ? 1 - remainMs / countdown.total : 1;
     countdown.bar.setProgress(Math.round(Math.min(1, Math.max(0, elapsed)) * 100));
   }
-  setInterval(updateCountdown, 1000);
+  setInterval(updateCountdown, 250);
 
   C.onShortcut('a', () => state.reviewing && state.submitReview && state.submitReview('approve'));
   C.onShortcut('r', () => state.reviewing && state.submitReview && state.submitReview('reject'));
@@ -631,6 +734,7 @@
         C.fetchJson('/api/tasks/' + taskId + '/pages'),
         C.fetchJson('/api/tasks/' + taskId + '/logs?limit=200'),
       ]);
+      if (task.server_time) state.clockOffset = new Date(task.server_time).getTime() - Date.now();
       state.task = task;
       state.pages = pages;
       state.logs = logs;
@@ -662,6 +766,50 @@
     }
   }
 
-  const poller = C.poll(refresh, 3000);
-  refreshBtn.on('click', () => poller.refresh());
+  /**
+   * 次に画面を更新するまでの時間。ワーカーの次の動き（自動承認の予定時刻・編集間隔が明ける時刻）が
+   * 分かっていればその直後に合わせ、編集中は短い間隔、動きの無いタスクは長い間隔にする。
+   */
+  function nextRefreshDelay() {
+    const task = state.task;
+    if (!task) return 2000;
+    const pages = state.pages;
+    const now = Date.now();
+    const base = ['queued', 'running'].includes(task.status) ? 2000 : 10000;
+    const events = [];
+    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
+    const awaiting = pages.find((p) => p.status === 'awaiting_review');
+    if (awaiting && (reviewSettings.mode || task.mode) === 'auto') {
+      const startedAt = toClientTime(awaiting.prepared_at);
+      if (startedAt) events.push(startedAt + (Number(reviewSettings.autoWaitSeconds) || 0) * 1000);
+    }
+    const editAt = nextEditAt(task, pages);
+    if (editAt) events.push(editAt);
+    if (pages.some((p) => IN_FLIGHT_STATUSES.includes(p.status) || p.status === 'preparing')) events.push(now + 700);
+    const soonest = events.filter((t) => t > now - 1000).sort((a, b) => a - b)[0];
+    // 予定時刻の少し後（ワーカーの反映を待つ分）に更新する
+    const delay = soonest ? soonest - now + 400 : base;
+    return Math.min(base, Math.max(300, delay));
+  }
+
+  let timer = null;
+  let running = false;
+  async function refreshNow() {
+    if (running) return;
+    running = true;
+    clearTimeout(timer);
+    try {
+      await refresh();
+    } finally {
+      running = false;
+      if (!document.hidden) timer = setTimeout(refreshNow, nextRefreshDelay());
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshNow();
+    else clearTimeout(timer);
+  });
+  const poller = { refresh: refreshNow };
+  refreshNow();
+  refreshBtn.on('click', () => refreshNow());
 })();
