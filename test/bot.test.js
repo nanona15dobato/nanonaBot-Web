@@ -227,3 +227,37 @@ test('MediaWikiBotClient: 存在しないページはexists=falseを返す', asy
     global.fetch = originalFetch;
   }
 });
+
+test('MediaWikiBotClient: セッション切れ（assertuserfailed）時は再ログインして1回だけ編集をやり直す', async () => {
+  const originalFetch = global.fetch;
+  const actions = [];
+  let editAttempts = 0;
+  global.fetch = async (input, init = {}) => {
+    const params =
+      (init.method || 'GET') === 'GET'
+        ? Object.fromEntries(new URL(String(input)).searchParams.entries())
+        : Object.fromEntries(new URLSearchParams(init.body).entries());
+    actions.push(params.type === 'login' ? 'logintoken' : params.action === 'query' ? 'csrf' : params.action);
+    const json = (body) => ({ ok: true, status: 200, headers: { getSetCookie: () => [] }, json: async () => body });
+    if (params.type === 'login') return json({ query: { tokens: { logintoken: 'T' } } });
+    if (params.action === 'login') return json({ login: { result: 'Success', lgusername: 'NanonaBot' } });
+    if (params.action === 'query') return json({ query: { tokens: { csrftoken: 'C' } } });
+    if (params.action === 'edit') {
+      assert.equal(params.assert, 'user', 'ログイン切れでIP編集にならないようassert=userを付ける');
+      assert.equal(params.nocreate, '1');
+      editAttempts++;
+      if (editAttempts === 1) return json({ error: { code: 'assertuserfailed', info: 'You are no longer logged in' } });
+      return json({ edit: { result: 'Success', newrevid: 5, newtimestamp: '2026-08-11T10:00:05Z' } });
+    }
+    throw new Error('unexpected');
+  };
+
+  try {
+    const client = new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', username: 'X@Y', password: 'z' });
+    const result = await client.edit({ title: 'A', text: 'B', summary: 's', bot: true, minor: true });
+    assert.equal(result.revid, 5);
+    assert.deepEqual(actions, ['csrf', 'edit', 'logintoken', 'login', 'csrf', 'edit']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

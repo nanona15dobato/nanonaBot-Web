@@ -193,3 +193,9 @@ test('linkRenameSteps: 先頭1文字だけ大文字小文字を許容する', ()
   const steps = presets.linkRenameSteps('Example', 'Sample');
   assert.equal(applyReplacementSteps('[[example]]', steps), '[[Sample]]');
 });
+
+test('linkRenameSteps: スペースとアンダースコアの表記ゆれにも一致する', () => {
+  const steps = presets.linkRenameSteps('Foo bar', 'Baz qux');
+  const out = applyReplacementSteps('[[Foo_bar]] と [[foo bar|表示]] と [[Foo  bar#節]]', steps);
+  assert.equal(out, '[[Baz qux]] と [[Baz qux|表示]] と [[Baz qux#節]]');
+});

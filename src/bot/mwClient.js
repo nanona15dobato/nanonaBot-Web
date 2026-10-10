@@ -3,6 +3,14 @@
 const { CookieJar } = require('./cookieJar');
 const { cleanParams } = require('./mwUtil');
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 編集時に指定するmaxlag（秒）。Bot運用の慣行どおり5秒（API:Etiquette）。 */
+const EDIT_MAXLAG_SECONDS = 5;
+const MAX_LAG_RETRIES = 5;
+/** ログインセッション切れを示すエラーコード。再ログインしてから1回だけ再試行する。 */
+const SESSION_LOST_CODES = ['assertuserfailed', 'assertbotfailed', 'badtoken', 'notloggedin'];
+
 /**
  * MediaWiki API (api.php) 向けの最小限のBotクライアント。
  * mwn等の既存ライブラリではなく、公式ドキュメント（API:Edit, API:Login）に
@@ -39,6 +47,18 @@ class MediaWikiBotClient {
    * @param {'GET'|'POST'} [method]
    */
   async request(params, method = 'GET') {
+    // サーバーのレプリケーション遅延（maxlag）で拒否された場合は、指示された秒数待ってから再試行する
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.requestOnce(params, method);
+      } catch (err) {
+        if (err.mwCode !== 'maxlag' || attempt >= MAX_LAG_RETRIES) throw err;
+        await sleep((err.retryAfterSeconds || EDIT_MAXLAG_SECONDS) * 1000);
+      }
+    }
+  }
+
+  async requestOnce(params, method) {
     const cleaned = cleanParams({ format: 'json', formatversion: '2', ...params });
     const headers = {
       'User-Agent': this.userAgent,
@@ -69,13 +89,17 @@ class MediaWikiBotClient {
       const err = new Error(`MediaWiki APIエラー [${data.error.code}]: ${data.error.info}`);
       err.mwCode = data.error.code;
       err.mwInfo = data.error.info;
+      const retryAfter = typeof res.headers.get === 'function' ? Number(res.headers.get('retry-after')) : NaN;
+      if (Number.isFinite(retryAfter) && retryAfter > 0) err.retryAfterSeconds = retryAfter;
       throw err;
     }
     return data;
   }
 
-  /** ログイン（Special:BotPasswords方式）。 */
+  /** ログイン（Special:BotPasswords方式）。再ログイン時は古いセッションCookieを捨ててからやり直す。 */
   async login() {
+    this.cookieJar = new CookieJar();
+    this.loggedIn = false;
     const tokenRes = await this.request({ action: 'query', meta: 'tokens', type: 'login' });
     const loginToken = tokenRes.query.tokens.logintoken;
 
@@ -162,7 +186,19 @@ class MediaWikiBotClient {
    * @param {string} params.startTimestamp
    * @returns {Promise<{revid:number, newTimestamp:string}>}
    */
-  async edit({ title, text, summary, bot, minor, baseTimestamp, startTimestamp }) {
+  async edit(params) {
+    try {
+      return await this.editOnce(params);
+    } catch (err) {
+      // 長時間稼働でBotPasswordのセッションが切れた場合（CSRFトークンが匿名用の "+\\" になる等）。
+      // assert=userにより匿名（IP）での編集は必ず拒否されるので、再ログインして1回だけやり直す。
+      if (!SESSION_LOST_CODES.includes(err.mwCode)) throw err;
+      await this.login();
+      return this.editOnce(params);
+    }
+  }
+
+  async editOnce({ title, text, summary, bot, minor, baseTimestamp, startTimestamp }) {
     const token = await this.getCsrfToken();
     const res = await this.request(
       {
@@ -171,6 +207,9 @@ class MediaWikiBotClient {
         text,
         summary,
         token,
+        assert: 'user', // ログインが切れていたらIPで編集せずエラーにする
+        maxlag: String(EDIT_MAXLAG_SECONDS),
+        nocreate: '1', // 準備後に削除されたページを再作成しない
         bot: bot ? '1' : undefined,
         minor: minor ? '1' : undefined,
         notminor: minor ? undefined : '1',

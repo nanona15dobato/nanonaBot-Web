@@ -362,7 +362,7 @@ curl -s -X POST "$BASE/api/tasks/1/pages/1/approve" -b "$COOKIE"
 # 却下
 curl -s -X POST "$BASE/api/tasks/1/pages/1/reject" -b "$COOKIE"
 
-# onFailure="pause"で止まったタスクの再開
+# 一時停止（onFailure="pause"）・緊急停止・期限切れで止まったタスクの再開
 curl -s -X POST "$BASE/api/tasks/1/resume" -b "$COOKIE"
 ```
 

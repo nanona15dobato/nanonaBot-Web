@@ -24,7 +24,7 @@
   $app.append($notice, $summarySection, $warningSection, $reviewContainer, $pageListSection, $logSection);
 
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
-  let lastReviewPageId = null;
+  let lastReviewPanelKey = null;
   let warningsLoaded = false;
   let refreshInProgress = false;
 
@@ -100,18 +100,35 @@
       $summarySection.append(msg.$element);
     }
 
-    if (task.status === 'paused') {
-      const msg = new OO.ui.MessageWidget({ type: 'error', label: 'エラーにより一時停止しています。' });
+    const RESUMABLE_MESSAGES = {
+      paused: { type: 'error', label: 'エラーにより一時停止しています。' },
+      emergency_stopped: {
+        type: 'error',
+        label: '緊急停止により中断しました。緊急停止を解除してから再開すると、未処理のページから続行します。',
+      },
+      expired: { type: 'warning', label: '再開すると無操作タイムアウトを取り直し、未処理のページから続行します。' },
+    };
+    if (RESUMABLE_MESSAGES[task.status]) {
+      if (task.status !== 'expired') {
+        $summarySection.append(new OO.ui.MessageWidget(RESUMABLE_MESSAGES[task.status]).$element);
+      }
       const resumeBtn = new OO.ui.ButtonWidget({ label: '再開する', flags: ['primary', 'progressive'] });
       resumeBtn.on('click', async () => {
+        resumeBtn.setDisabled(true);
         try {
           await C.postJson('/api/tasks/' + taskId + '/resume', {});
-          refreshAll();
+          await refreshAll();
         } catch (e) {
           C.showNotice($notice, 'error', '再開に失敗しました: ' + e.message);
+          resumeBtn.setDisabled(false);
         }
       });
-      $summarySection.append(msg.$element, $('<div>').css('margin-top', '8px').append(resumeBtn.$element));
+      $summarySection.append($('<div>').css('margin-top', '8px').append(resumeBtn.$element));
+      if (task.status === 'expired') {
+        $summarySection.append(
+          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(RESUMABLE_MESSAGES.expired.label)
+        );
+      }
     }
 
     if (task.status === 'completed_with_failures') {
@@ -142,30 +159,42 @@
 
   function renderReviewPanel(task, pages) {
     const reviewing = pages.find((p) => p.status === 'awaiting_review');
-    $reviewContainer.empty();
 
     if (!reviewing) {
-      lastReviewPageId = null;
+      $reviewContainer.empty();
+      lastReviewPanelKey = null;
       return;
     }
+
+    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
+    const mode = reviewSettings.mode || task.mode;
+
+    // 3秒ごとの更新で毎回作り直すと、開いているドロップダウンが閉じたりDiffのスクロール位置が
+    // 戻ったりするため、確認対象・モードが変わったときだけ作り直す（カウントダウンは別タイマーで更新）。
+    const panelKey = [reviewing.id, mode, reviewing.prepared_at, reviewSettings.autoWaitSeconds].join('|');
+    if (panelKey === lastReviewPanelKey) return;
+    lastReviewPanelKey = panelKey;
+    $reviewContainer.empty();
 
     const $panel = $('<div>').addClass('nb-review-panel');
     $panel.append($('<div>').addClass('nb-review-panel__title').text('確認中: ' + reviewing.page_title));
 
-    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
-    const mode = reviewSettings.mode || task.mode;
     const modeWidget = new OO.ui.DropdownInputWidget({
-      options: [{ label: '自動更新', value: 'auto' }, { label: '手動確認', value: 'manual' }],
+      options: [{ data: 'auto', label: '自動更新' }, { data: 'manual', label: '手動確認' }],
       value: mode,
     });
+    let revertingMode = false;
     modeWidget.on('change', async (nextMode) => {
+      if (revertingMode || nextMode === mode) return; // 失敗時の値の巻き戻しで再送信しない
       modeWidget.setDisabled(true);
       try {
         await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
         await refreshAll();
       } catch (e) {
         C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
+        revertingMode = true;
         modeWidget.setValue(mode);
+        revertingMode = false;
         modeWidget.setDisabled(false);
       }
     });
@@ -206,20 +235,16 @@
     $panel.append($diffArea);
     $reviewContainer.append($panel);
 
-    if (lastReviewPageId !== reviewing.id) {
-      lastReviewPageId = reviewing.id;
-      loadCompare(reviewing.id)
-        .then((html) => {
-          // action=compareが返すHTMLはMediaWiki本体の差分テーブルそのもの（信頼できる自ウィキAPIの出力）。
-          // 仕様書9章の設計どおり、そのまま埋め込む。
-          $diffArea.html(html || '<p>変更点がありません。</p>');
-        })
-        .catch((e) => {
-          $diffArea.text('Diffの取得に失敗しました: ' + e.message);
-        });
-    } else if (compareCache.has(reviewing.id)) {
-      $diffArea.html(compareCache.get(reviewing.id));
-    }
+    // 取得済みのDiffはcompareCacheから返るため、パネルを作り直してもaction=compareは再実行されない
+    loadCompare(reviewing.id)
+      .then((html) => {
+        // action=compareが返すHTMLはMediaWiki本体の差分テーブルそのもの（信頼できる自ウィキAPIの出力）。
+        // 仕様書9章の設計どおり、そのまま埋め込む。
+        $diffArea.html(html || '<p>変更点がありません。</p>');
+      })
+      .catch((e) => {
+        $diffArea.text('Diffの取得に失敗しました: ' + e.message);
+      });
   }
 
   function renderPageList(pages) {

@@ -12,6 +12,10 @@ function isValidNamespaces(namespaces) {
 }
 
 function validateStep(step, prefix, errors) {
+  if (!step || typeof step !== 'object') {
+    errors.push(`${prefix}: オブジェクトである必要があります`);
+    return;
+  }
   if (typeof step.pattern !== 'string' || step.pattern.length === 0) {
     errors.push(`${prefix}: patternは空でない文字列である必要があります`);
   } else {
@@ -64,6 +68,10 @@ function validateTargetSource(targetSource, prefix, errors) {
 
 function validateRule(rule, i, errors) {
   const prefix = `replacements[${i}]`;
+  if (!rule || typeof rule !== 'object') {
+    errors.push(`${prefix}: オブジェクトである必要があります`);
+    return;
+  }
   const type = rule.templateType;
 
   if (type === 'custom') {
@@ -111,7 +119,7 @@ function validateRule(rule, i, errors) {
 function validateTaskConfig(config) {
   const errors = [];
 
-  if (!config || typeof config !== 'object') {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
     return { valid: false, errors: ['configはオブジェクトである必要があります'] };
   }
 

@@ -43,11 +43,29 @@ function createApp() {
       saveUninitialized: false,
       cookie: {
         httpOnly: true,
+        sameSite: 'lax', // 他サイトからのPOSTにセッションCookieを付けない（CSRF対策）
         secure: process.env.NODE_ENV === 'production',
         maxAge: 1000 * 60 * 60 * 24 * 7, // 7日
       },
     })
   );
+
+  // 状態を変更するリクエストは同一オリジンからのものだけを受け付ける（CSRF対策。sameSiteと二重化）。
+  // Origin/Refererがどちらも無いリクエスト（curl等）はブラウザ経由のCSRFではないため通す。
+  const allowedHosts = new Set([new URL(config.server.baseUrl).host]);
+  app.use((req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    const source = req.get('origin') || req.get('referer');
+    if (!source) return next();
+    let sourceHost;
+    try {
+      sourceHost = new URL(source).host;
+    } catch (e) {
+      sourceHost = null;
+    }
+    if (sourceHost && (sourceHost === req.get('host') || allowedHosts.has(sourceHost))) return next();
+    res.status(403).json({ error: 'forbidden_origin', message: '別サイトからのリクエストは受け付けません。' });
+  });
 
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json({ limit: '2mb' })); // task作成時のreplacements/manualList titles等がある程度大きくても受け付けられるように
@@ -61,12 +79,17 @@ function createApp() {
   app.use(pagesRoutes);
 
   app.use((req, res) => {
+    if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'not_found' });
     res.status(404).send('Not Found');
   });
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     console.error(err);
+    // クライアントJSがエラーメッセージを表示できるよう、APIにはJSONで返す
+    if (req.path.startsWith('/api/')) {
+      return res.status(500).json({ error: 'server_error', message: 'サーバーエラーが発生しました。' });
+    }
     res.status(500).send('サーバーエラーが発生しました。');
   });
 

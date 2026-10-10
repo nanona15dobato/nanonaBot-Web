@@ -26,12 +26,33 @@ function namespacesOrDefault(namespaces, defaultNamespaces = [0]) {
  * "custom" はユーザー指定のstepsをそのまま使う。テンプレート系（5種類）は
  * templatePresets.js で自動生成する（仕様書6章。ハットノート正規表現の修正済み版を使用）。
  */
+const NAMESPACE_PREFIXES_BY_TYPE = {
+  categoryRename: /^\s*(?:Category|category|カテゴリ)\s*:\s*/,
+  categoryRemove: /^\s*(?:Category|category|カテゴリ)\s*:\s*/,
+  templateRename: /^\s*(?:Template|template|テンプレート)\s*:\s*/,
+  templateSubst: /^\s*(?:Template|template|テンプレート)\s*:\s*/,
+};
+
+/**
+ * from/toの前後空白と、種別ごとに不要な名前空間プレフィックス（画面上「省略可」としているもの）を除く。
+ * 例: categoryRenameの "Category:日本の橋" → "日本の橋"。プレフィックス付きのまま置換パターンを作ると
+ * "[[Category:Category:日本の橋]]" を探すことになり、何も置換されないため。
+ */
+function normalizeRuleName(templateType, name) {
+  if (typeof name !== 'string') return name;
+  const prefix = NAMESPACE_PREFIXES_BY_TYPE[templateType];
+  const trimmed = name.trim();
+  return prefix ? trimmed.replace(prefix, '') : trimmed;
+}
+
 function materializeReplacements(replacements) {
   return (replacements || []).map((rule) => {
     if (rule.templateType === 'custom') return rule;
     if (KNOWN_PRESET_TEMPLATE_TYPES.includes(rule.templateType)) {
-      const steps = buildStepsForTemplateType(rule.templateType, { from: rule.from, to: rule.to });
-      return { ...rule, steps };
+      const from = normalizeRuleName(rule.templateType, rule.from);
+      const to = normalizeRuleName(rule.templateType, rule.to);
+      const steps = buildStepsForTemplateType(rule.templateType, { from, to });
+      return { ...rule, from, to, steps };
     }
     throw new Error(`materializeReplacements: 未知のtemplateType "${rule.templateType}"`);
   });
