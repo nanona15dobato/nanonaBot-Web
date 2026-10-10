@@ -66,6 +66,23 @@ const TEMPLATE_PREFIXES = ['Template', 'template', 'テンプレート'];
  * @param {string} rawTo
  * @returns {{type: string, from?: string, to?: string, rawFrom: string, rawTo: string, reason?: string}}
  */
+/**
+ * 「ページ名#節{{!}}表示名」形式の指定を分解する（各要素は省略可）。
+ * @param {string} spec
+ * @returns {{title: string, anchor: string|null, label: string|null}}
+ */
+function splitLinkSpec(spec) {
+  const [titleAndAnchor, ...labelParts] = String(spec).split('{{!}}');
+  const label = labelParts.length > 0 ? labelParts.join('{{!}}').trim() || null : null;
+  const hashAt = titleAndAnchor.indexOf('#');
+  if (hashAt === -1) return { title: titleAndAnchor.trim(), anchor: null, label };
+  return {
+    title: titleAndAnchor.slice(0, hashAt).trim(),
+    anchor: titleAndAnchor.slice(hashAt + 1).trim() || null,
+    label,
+  };
+}
+
 function classifyPair(rawFrom, rawTo) {
   const from = String(rawFrom).trim();
   const to = String(rawTo).trim();
@@ -91,10 +108,32 @@ function classifyPair(rawFrom, rawTo) {
   if (/^https?:\/\//i.test(from) || /^https?:\/\//i.test(to)) {
     return { type: 'unsupported', reason: 'URL', rawFrom: from, rawTo: to };
   }
-  // アンカー(#)・{{!}}によるパイプラベル指定は、ページ単位の単純な改名を超える
-  // 精密な指定のため、フェーズ1では自動処理対象に含めず「要手動確認」とする。
+  // アンカー(#)・{{!}}によるパイプラベル指定（フェーズ9）:
+  // 「改名元#節1{{!}}ラベル |改名先#節2{{!}}ラベル」は [[改名元#節1|ラベル]] を
+  // [[改名先#節2|ラベル]] に直す指定（Template:リンク修正依頼/改名/doc の書式例）。
+  // 通常記事どうしのリンクに限り linkRenameExact として扱い、Category/Template・
+  // 改名元/改名先のページ名が空のもの（同一ページ内の節リンク等）は要手動確認のまま残す。
   if (from.includes('#') || to.includes('#') || from.includes('{{!}}') || to.includes('{{!}}')) {
-    return { type: 'unsupported', reason: 'anchor_or_label', rawFrom: from, rawTo: to };
+    const fromSpec = splitLinkSpec(from);
+    const toSpec = splitLinkSpec(to);
+    const hasNamespacePrefix = [fromSpec.title, toSpec.title].some(
+      (title) => stripNamespacePrefix(title, CATEGORY_PREFIXES) !== null || stripNamespacePrefix(title, TEMPLATE_PREFIXES) !== null
+    );
+    const hasBrokenLabel = [fromSpec.label, toSpec.label].some((label) => label !== null && /\[\[|\]\]|\|/.test(label));
+    if (!fromSpec.title || !toSpec.title || hasNamespacePrefix || hasBrokenLabel) {
+      return { type: 'unsupported', reason: 'anchor_or_label', rawFrom: from, rawTo: to };
+    }
+    return {
+      type: 'linkRenameExact',
+      from: fromSpec.title,
+      to: toSpec.title,
+      fromAnchor: fromSpec.anchor,
+      toAnchor: toSpec.anchor,
+      fromLabel: fromSpec.label,
+      toLabel: toSpec.label,
+      rawFrom: from,
+      rawTo: to,
+    };
   }
 
   const catFrom = stripNamespacePrefix(from, CATEGORY_PREFIXES);
@@ -244,6 +283,7 @@ module.exports = {
   TEMPLATE_TITLE,
   fetchBotreqWikitext,
   stripNamespacePrefix,
+  splitLinkSpec,
   classifyPair,
   parseBotreqTemplates,
   parseBotreqTopicList,

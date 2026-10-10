@@ -9,6 +9,18 @@ const { validateTaskConfig } = require('../worker/taskConfig');
 const { toJsonColumn, parseJsonColumn } = require('../dbJson');
 const mediawiki = require('../services/mediawiki');
 const config = require('../config');
+const { writeTaskLogSafely } = require('../worker/taskLog');
+
+/** 操作者による操作を、誰が行ったかとともにタスクログへ残す（監査用。フェーズ9）。 */
+function auditLog(req, taskId, message, extra = {}) {
+  return writeTaskLogSafely({ taskId, level: 'info', ...extra, message: `${message}（操作: ${req.session.username}）` });
+}
+
+/** 承認・却下したページの情報（ログ用）。 */
+async function reviewedPage(pageId) {
+  const [rows] = await pool.query('SELECT stage, page_title FROM task_pages WHERE id = ?', [pageId]);
+  return rows[0] || {};
+}
 
 // ログイン中ユーザー情報（クライアントJSがUI出し分けに使う）
 router.get('/api/whoami', (req, res) => {
@@ -31,6 +43,7 @@ router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
        VALUES (?, ?, ?, 'queued', ?)`,
       [req.session.username, taskConfig.account, taskConfig.reviewSettings.mode, toJsonColumn(taskConfig)]
     );
+    await auditLog(req, result.insertId, 'タスクを作成しました');
     res.status(201).json({ id: result.insertId });
   } catch (err) {
     next(err);
@@ -172,6 +185,8 @@ router.post('/api/tasks/:id/pages/:pageId/approve', requireRole('owner'), async 
     if (result.affectedRows === 0) {
       return res.status(409).json({ error: 'not_awaiting_review' });
     }
+    const page = await reviewedPage(req.params.pageId);
+    await auditLog(req, req.params.id, '承認しました', { stage: page.stage, pageTitle: page.page_title });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -188,6 +203,8 @@ router.post('/api/tasks/:id/pages/:pageId/reject', requireRole('owner'), async (
     if (result.affectedRows === 0) {
       return res.status(409).json({ error: 'not_awaiting_review' });
     }
+    const page = await reviewedPage(req.params.pageId);
+    await auditLog(req, req.params.id, '却下しました', { stage: page.stage, pageTitle: page.page_title });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -223,6 +240,7 @@ router.post('/api/tasks/:id/review-mode', requireRole('owner'), async (req, res,
         [mode, toJsonColumn(taskConfig), req.params.id]
       );
     }
+    await auditLog(req, req.params.id, `確認モードを${mode === 'auto' ? '自動更新' : '手動確認'}に切り替えました`);
     res.json({ ok: true, mode });
   } catch (err) {
     next(err);
@@ -238,10 +256,7 @@ router.post('/api/tasks/:id/cancel', requireRole('owner'), async (req, res, next
       [req.params.id]
     );
     if (result.affectedRows === 0) return res.status(409).json({ error: 'not_cancellable' });
-    await pool.query(
-      `INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', 'タスクが中止されました。')`,
-      [req.params.id]
-    );
+    await auditLog(req, req.params.id, 'タスクを中止しました');
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -262,9 +277,7 @@ router.post('/api/tasks/:id/resume', requireRole('owner'), async (req, res, next
     if (result.affectedRows === 0) {
       return res.status(409).json({ error: 'not_resumable', message: 'このタスクは再開できる状態ではありません' });
     }
-    await pool.query(`INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', 'タスクの再開が要求されました。')`, [
-      req.params.id,
-    ]);
+    await auditLog(req, req.params.id, 'タスクの再開を要求しました');
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -301,6 +314,8 @@ router.post('/api/tasks/:id/retry-failed', requireRole('owner'), async (req, res
        VALUES (?, ?, ?, 'queued', ?, ?)`,
       [req.session.username, originalTask.account, originalTask.mode, toJsonColumn(retryConfig), originalTask.id]
     );
+    await auditLog(req, originalTask.id, `失敗ページ${failedTitles.length}件の再試行タスク #${result.insertId} を作成しました`);
+    await auditLog(req, result.insertId, `タスク #${originalTask.id} の失敗ページ${failedTitles.length}件の再試行として作成しました`);
     res.status(201).json({ id: result.insertId, retriedPageCount: failedTitles.length });
   } catch (err) {
     next(err);

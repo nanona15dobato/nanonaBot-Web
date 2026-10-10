@@ -85,9 +85,28 @@ test('classifyPair: URLペアは未対応', () => {
   assert.equal(classifyPair('http://a', 'http://b').type, 'unsupported');
 });
 
-test('classifyPair: アンカー・{{!}}パイプラベル付きは未対応（フェーズ1では単純改名のみ）', () => {
-  assert.equal(classifyPair('改名元2#アンカー1', '改名先2#アンカー2').reason, 'anchor_or_label');
-  assert.equal(classifyPair('改名元3#アンカー1{{!}}ラベル', '改名先3#アンカー2{{!}}ラベル').reason, 'anchor_or_label');
+test('classifyPair: アンカー・{{!}}パイプラベル付きはlinkRenameExactとして分解する（フェーズ9）', () => {
+  assert.deepEqual(classifyPair('改名元2#アンカー1', '改名先2#アンカー2'), {
+    type: 'linkRenameExact',
+    from: '改名元2',
+    to: '改名先2',
+    fromAnchor: 'アンカー1',
+    toAnchor: 'アンカー2',
+    fromLabel: null,
+    toLabel: null,
+    rawFrom: '改名元2#アンカー1',
+    rawTo: '改名先2#アンカー2',
+  });
+  const labeled = classifyPair('改名元3#アンカー1{{!}}ラベル', '改名先3#アンカー2{{!}}ラベル');
+  assert.equal(labeled.type, 'linkRenameExact');
+  assert.equal(labeled.fromLabel, 'ラベル');
+  assert.equal(labeled.toLabel, 'ラベル');
+});
+
+test('classifyPair: 節付きでもCategory/Template・ページ名が空の指定は未対応のまま', () => {
+  assert.equal(classifyPair('Category:A#x', 'Category:B').reason, 'anchor_or_label');
+  assert.equal(classifyPair('Template:A', 'Template:B#x').reason, 'anchor_or_label');
+  assert.equal(classifyPair('#節', 'B#節').reason, 'anchor_or_label');
 });
 
 test('classifyPair: 片方だけCategory:/Template:の不整合ペアは未対応', () => {
@@ -147,15 +166,15 @@ test('parseBotreqTemplates: 該当テンプレートが無ければ空配列', (
   assert.deepEqual(parseBotreqTemplates('本文のみ、テンプレートなし'), []);
 });
 
-test('parseBotreqTemplates: {{!}}を含むアンカー付きペアも例外を起こさずunsupportedになる', () => {
+test('parseBotreqTemplates: {{!}}を含むアンカー付きペアも例外を起こさずlinkRenameExactになる', () => {
   const wikitext = `
 {{リンク修正依頼/改名
 |改名元3#アンカー1{{!}}リンクラベル |改名先3#アンカー2{{!}}リンクラベル
 }}
 `;
   const proposals = parseBotreqTemplates(wikitext);
-  assert.equal(proposals[0].pairs[0].type, 'unsupported');
-  assert.equal(proposals[0].pairs[0].reason, 'anchor_or_label');
+  assert.equal(proposals[0].pairs[0].type, 'linkRenameExact');
+  assert.equal(proposals[0].pairs[0].fromLabel, 'リンクラベル');
 });
 
 test('parseBotreqTopicList: 依頼アンカーと進捗テンプレートを取得する', () => {
@@ -254,8 +273,9 @@ test('resolveRedirectTargets: REDIRECT_TARGETを取得時点の解決先で通�
   assert.equal(linkPair.redirectResolved, true);
   assert.equal(templatePair.type, 'templateRename');
   assert.equal(templatePair.to, '新テンプレ');
-  assert.equal(anchorPair.type, 'unsupported'); // 節付きは引き続き要手動
-  assert.equal(anchorPair.reason, 'anchor_or_label');
+  assert.equal(anchorPair.type, 'linkRenameExact'); // 節へのリダイレクトは [[記事#節]] へ付け替える
+  assert.equal(anchorPair.to, '記事');
+  assert.equal(anchorPair.toAnchor, '節');
   assert.equal(notRedirect.type, 'unsupported');
   assert.equal(notRedirect.reason, 'REDIRECT_TARGET_NOT_REDIRECT');
   assert.equal(plain.type, 'linkRename'); // REDIRECT_TARGET以外は変更しない

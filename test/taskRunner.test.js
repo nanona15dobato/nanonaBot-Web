@@ -375,3 +375,51 @@ test('nullEditTemplateTransclusionsIfNeeded: Category系で編集したテンプ
     fakeModule.exports.pool.query = originalQuery;
   }
 });
+
+test('nullEditTemplateTransclusionsIfNeeded: purge指定時は使用ページを50件ずつまとめてforcelinkupdateする', async () => {
+  const originalFetch = global.fetch;
+  const originalQuery = fakeModule.exports.pool.query;
+  const task = { id: 2, target_titles_json: null };
+  const transclusions = Array.from({ length: 120 }, (_, i) => ({ title: `記事${i}`, ns: 0 }));
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ query: { embeddedin: transclusions } }) });
+  const logs = [];
+  fakeModule.exports.pool.query = async (sql, params) => {
+    const s = sql.replace(/\s+/g, ' ').trim();
+    if (s.startsWith('SELECT target_titles_json FROM tasks')) return [[{ target_titles_json: task.target_titles_json }]];
+    if (s.startsWith('SELECT page_title, matched_rule_indices FROM task_pages')) {
+      return [[{ page_title: 'Template:カテゴリ付き', matched_rule_indices: '[0]' }]];
+    }
+    if (s.startsWith('SELECT emergency_stopped')) return [[{ emergency_stopped: 0 }]];
+    if (s.startsWith('SELECT status FROM tasks')) return [[{ status: 'running' }]];
+    if (s.startsWith('INSERT INTO task_logs')) {
+      logs.push(params);
+      return [{}];
+    }
+    if (s.startsWith('UPDATE tasks SET target_titles_json')) {
+      task.target_titles_json = params[0];
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error('想定外のSQL: ' + s);
+  };
+  const batches = [];
+  const mwClient = {
+    nullEdit: async () => {
+      throw new Error('purge指定時はnull editしない');
+    },
+    purgeWithLinkUpdate: async (titles) => {
+      batches.push(titles.length);
+      return { purged: titles.filter((t) => t !== '記事7'), failed: titles.filter((t) => t === '記事7') };
+    },
+  };
+
+  try {
+    const result = await nullEditTemplateTransclusionsIfNeeded(task, [{ templateType: 'categoryRemove', from: '旧' }], mwClient, 'purge');
+    assert.deepEqual(result, { stopped: null });
+    assert.deepEqual(batches, [50, 50, 20]);
+    const messages = logs.map((p) => p[p.length - 1]);
+    assert.ok(messages.some((m) => m.includes('120件中1件失敗')));
+  } finally {
+    global.fetch = originalFetch;
+    fakeModule.exports.pool.query = originalQuery;
+  }
+});

@@ -41,6 +41,59 @@ function firstLetterFlexiblePattern(name) {
   return `[${escapeRegExp(upper)}${escapeRegExp(lower)}]${rest}`;
 }
 
+/** 節名・表示名など、タイトル以外の文字列を正規表現にする（空白とアンダースコアは同一視）。 */
+function flexibleTextPattern(text) {
+  return escapeRegExp(String(text).trim()).replace(/[ _]+/g, '[ _]+');
+}
+
+/**
+ * 節（アンカー）・表示名を指定したリンク置換（フェーズ9。BOTREQの
+ * 「改名元#節1{{!}}ラベル |改名先#節2{{!}}ラベル」形式）。
+ *
+ * - fromAnchor 指定時はその節へのリンクだけ、未指定時は節なしのリンクだけを対象にする
+ * - fromLabel 指定時はその表示名のリンクだけを対象にし、表示名は toLabel（無ければ fromLabel）にする
+ * - fromLabel 未指定時は、表示名付きのリンクは表示名をそのまま残し、表示名なしのリンクには
+ *   toLabel があればそれを付ける
+ *
+ * @param {object} params
+ * @param {string} params.from
+ * @param {string} params.to
+ * @param {string|null} [params.fromAnchor]
+ * @param {string|null} [params.toAnchor]
+ * @param {string|null} [params.fromLabel]
+ * @param {string|null} [params.toLabel]
+ */
+function linkRenameExactSteps({ from, to, fromAnchor, toAnchor, fromLabel, toLabel }) {
+  const f = firstLetterFlexiblePattern(from);
+  const anchorPattern = fromAnchor ? `\\s*\\#\\s*${flexibleTextPattern(fromAnchor)}\\s*` : '\\s*';
+  const target = escapeReplacementDollar(String(to).trim() + (toAnchor ? `#${String(toAnchor).trim()}` : ''));
+
+  if (fromLabel) {
+    const label = escapeReplacementDollar(String(toLabel || fromLabel).trim());
+    return [
+      {
+        pattern: `\\[\\[\\s*${f}${anchorPattern}\\|\\s*${flexibleTextPattern(fromLabel)}\\s*\\]\\]`,
+        flags: 'g',
+        replacement: `[[${target}|${label}]]`,
+      },
+    ];
+  }
+  return [
+    {
+      // 表示名付きのリンク: 表示名はそのまま残す
+      pattern: `\\[\\[\\s*${f}${anchorPattern}\\|([^\\]]*)\\]\\]`,
+      flags: 'g',
+      replacement: `[[${target}|$1]]`,
+    },
+    {
+      // 表示名なしのリンク
+      pattern: `\\[\\[\\s*${f}${anchorPattern}\\]\\]`,
+      flags: 'g',
+      replacement: toLabel ? `[[${target}|${escapeReplacementDollar(String(toLabel).trim())}]]` : `[[${target}]]`,
+    },
+  ];
+}
+
 /**
  * ハットノート系テンプレート（{{See also|X}}等）内の素の参照を修正する共通ステップ。
  * 6.1/6.2/6.3節で共有される「共通ステップA」。
@@ -191,8 +244,8 @@ function templateRenameSteps(from, to) {
 /**
  * リンク解除（フェーズ6。BOTREQの DELETE_PAGE 相当）。
  * [[from]] → from、[[from|表示名]] → 表示名、[[from#アンカー]] → from のように、
- * 通常のwikilinkを地の文に変換する。ハットノート系テンプレート内の参照解除は対象外
- * （フェーズ1範囲外。必要な場合はcustom置換で個別対応する）。
+ * 通常のwikilinkを地の文に変換する。ハットノート系テンプレート内の参照解除は、引数の構造を
+ * 見る必要があるため正規表現ではなく hatnoteUnlink.js（pipelineの構造編集）で行う（フェーズ9）。
  */
 function unlinkPageSteps(from) {
   const f = firstLetterFlexiblePattern(from);
@@ -237,8 +290,11 @@ function templateSubstSteps(from) {
  * @param {{from?: string, to?: string}} params
  * @returns {Array} steps配列
  */
-function buildStepsForTemplateType(templateType, { from, to }) {
+function buildStepsForTemplateType(templateType, params) {
+  const { from, to } = params;
   switch (templateType) {
+    case 'linkRenameExact':
+      return linkRenameExactSteps(params);
     case 'linkRename':
       return linkRenameSteps(from, to);
     case 'linkRename2':
@@ -258,10 +314,11 @@ function buildStepsForTemplateType(templateType, { from, to }) {
   }
 }
 
-const TEMPLATE_TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'categoryRename', 'templateRename'];
+const TEMPLATE_TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'linkRenameExact', 'categoryRename', 'templateRename'];
 const KNOWN_PRESET_TEMPLATE_TYPES = [
   'linkRename',
   'linkRename2',
+  'linkRenameExact',
   'categoryRename',
   'categoryRemove',
   'templateRename',
@@ -275,6 +332,7 @@ module.exports = {
   hatnoteStep,
   linkRenameSteps,
   linkRename2Steps,
+  linkRenameExactSteps,
   categoryRenameSteps,
   categoryRemoveSteps,
   categoryTextSteps,

@@ -172,26 +172,73 @@ function removeCategoryFromTemplate(wikitext, category) {
   return { wikitext: result, changed: count > 0, count };
 }
 
+const WARNING_MARKER = 'リダイレクトの所属カテゴリ';
+const SNIPPET_BEFORE = 60;
+const SNIPPET_AFTER = 240;
+
 /**
- * 指定カテゴリを標準名前空間のbacklinks候補から探し、実際に構造的に一致する
- * （＝安全に自動編集できる）ページ一覧を返す。taskRunner.jsの対象ページ列挙で使う。
+ * wikitext中の WARNING_MARKER 周辺を抜き出す（Diff確認画面でのプレビュー用）。
+ */
+function extractSnippet(wikitext, markerIndex) {
+  const start = Math.max(0, markerIndex - SNIPPET_BEFORE);
+  const end = Math.min(wikitext.length, markerIndex + SNIPPET_AFTER);
+  return (start > 0 ? '…' : '') + wikitext.slice(start, end) + (end < wikitext.length ? '…' : '');
+}
+
+/**
+ * Category:category への標準名前空間backlinksの本文を1回だけ取得し、
+ * - 構造的に一致する（自動編集できる）ページ: matches
+ * - テンプレート名と旧カテゴリ名の緩い共起だけがあるページ: warnings（自動編集しない）
+ * に振り分ける（フェーズ9: 警告収集とウェーブ3の対象確認で本文取得を共有するため）。
+ * cache（Map）を渡すと、同じタスク実行中は同じカテゴリの走査結果を使い回す。
+ *
  * @param {object} params
  * @param {string} params.category - Category:プレフィックスを除いた素の名前
  * @param {import('../bot/mwClient').MediaWikiBotClient} params.mwClient
+ * @param {Map<string, Promise>} [params.cache]
+ * @returns {Promise<{matches: Array<{title:string, namespace:number}>, warnings: Array<{pageTitle:string, namespace:number, snippet:string}>}>}
+ */
+function scanCategoryBacklinks({ category, mwClient, cache }) {
+  if (cache && cache.has(category)) return cache.get(category);
+  const promise = (async () => {
+    // eslint-disable-next-line global-require
+    const { resolveBacklinks } = require('./targetResolvers');
+    const candidates = await resolveBacklinks({ page: `Category:${category}`, namespaces: [0] });
+    const matches = [];
+    const warnings = [];
+    for (const c of candidates) {
+      const page = await mwClient.getPage(c.title);
+      if (!page || !page.exists || !page.wikitext) continue;
+      const namespace = c.namespace ?? 0;
+      if (findCalls(page.wikitext).some((call) => findMatchingCategoryArgs(call, category).length > 0)) {
+        matches.push({ title: c.title, namespace });
+        continue;
+      }
+      const markerIndex = page.wikitext.indexOf(WARNING_MARKER);
+      if (markerIndex !== -1 && page.wikitext.includes(category)) {
+        warnings.push({ pageTitle: c.title, namespace, snippet: extractSnippet(page.wikitext, markerIndex) });
+      }
+    }
+    return { matches, warnings };
+  })();
+  if (cache) {
+    cache.set(category, promise);
+    promise.catch(() => cache.delete(category)); // 失敗した走査は次回やり直せるようにする
+  }
+  return promise;
+}
+
+/**
+ * 指定カテゴリを標準名前空間のbacklinks候補から探し、実際に構造的に一致する
+ * （＝安全に自動編集できる）ページ一覧を返す。taskRunner.jsのウェーブ3の対象ページ列挙で使う。
+ * @param {object} params
+ * @param {string} params.category - Category:プレフィックスを除いた素の名前
+ * @param {import('../bot/mwClient').MediaWikiBotClient} params.mwClient
+ * @param {Map<string, Promise>} [params.cache] - scanCategoryBacklinks の結果キャッシュ
  * @returns {Promise<Array<{title:string, namespace:number}>>}
  */
-async function findCandidatePages({ category, mwClient }) {
-  // eslint-disable-next-line global-require
-  const { resolveBacklinks } = require('./targetResolvers');
-  const candidates = await resolveBacklinks({ page: `Category:${category}`, namespaces: [0] });
-  const matched = [];
-  for (const c of candidates) {
-    const page = await mwClient.getPage(c.title);
-    if (!page || !page.exists || !page.wikitext) continue;
-    const hasMatch = findCalls(page.wikitext).some((call) => findMatchingCategoryArgs(call, category).length > 0);
-    if (hasMatch) matched.push({ title: c.title, namespace: c.namespace ?? 0 });
-  }
-  return matched;
+async function findCandidatePages({ category, mwClient, cache }) {
+  return (await scanCategoryBacklinks({ category, mwClient, cache })).matches;
 }
 
 module.exports = {
@@ -202,4 +249,7 @@ module.exports = {
   renameCategoryInTemplate,
   removeCategoryFromTemplate,
   findCandidatePages,
+  scanCategoryBacklinks,
+  extractSnippet,
+  WARNING_MARKER,
 };

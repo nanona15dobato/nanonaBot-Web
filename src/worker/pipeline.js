@@ -6,13 +6,16 @@ const { isEmergencyStopped } = require('./emergencyStop');
 const { writeEditLog } = require('./editLog');
 const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
+const { removePageFromHatnotes } = require('./hatnoteUnlink');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MANUAL_POLL_MS = Number(process.env.REVIEW_POLL_INTERVAL_MS || 1000);
 
 /**
- * matchedRulesのうちcategoryRename/categoryRemoveについて、
- * Template:リダイレクトの所属カテゴリ内の該当カテゴリ引数も書き換える（仕様書6.3/6.4節・8章）。
+ * 正規表現では安全に扱えない、テンプレート引数の構造にもとづく書き換えを行う。
+ * - categoryRename/categoryRemove: Template:リダイレクトの所属カテゴリ内の該当カテゴリ引数
+ *   （仕様書6.3/6.4節・8章）
+ * - unlinkPage: 一覧型ハットノート（{{See also}}等）内の該当ページ引数（フェーズ9）
  * 該当箇所が無ければ何もしない（安全に無変化で返る）。
  * @param {string} wikitext
  * @param {Array} matchedRules
@@ -25,6 +28,8 @@ function applyRedirectCategoryTemplateEdits(wikitext, matchedRules) {
       text = renameCategoryInTemplate(text, rule.from, rule.to).wikitext;
     } else if (rule.templateType === 'categoryRemove') {
       text = removeCategoryFromTemplate(text, rule.from).wikitext;
+    } else if (rule.templateType === 'unlinkPage') {
+      text = removePageFromHatnotes(text, rule.from).wikitext;
     }
   }
   return text;
@@ -59,8 +64,9 @@ async function prepareOnePage(row, ctx) {
     const matchedRules = ruleIndices.map((idx) => ctx.replacements[idx]).filter(Boolean);
     const steps = matchedRules.flatMap((r) => r.steps || []);
     let newWikitext = applyReplacementSteps(page.wikitext, steps);
-    // Category置換/除去ルールが含まれる場合、{{リダイレクトの所属カテゴリ}}内の
-    // 該当カテゴリ引数も併せて書き換える（該当が無いページには影響しない）
+    // Category置換/除去ルールが含まれる場合は{{リダイレクトの所属カテゴリ}}内の該当カテゴリ引数を、
+    // リンク解除ルールが含まれる場合はハットノート内の該当ページ引数を併せて書き換える
+    // （該当が無いページには影響しない）
     newWikitext = applyRedirectCategoryTemplateEdits(newWikitext, matchedRules);
 
     if (newWikitext === page.wikitext) {

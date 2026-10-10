@@ -290,3 +290,27 @@ test('MediaWikiBotClient: nullEditは本文を変えない編集（appendtext空
     global.fetch = originalFetch;
   }
 });
+
+test('MediaWikiBotClient: purgeWithLinkUpdateはforcelinkupdate付きでまとめてpurgeし、失敗ページを返す', async () => {
+  const originalFetch = global.fetch;
+  let purgeParams;
+  global.fetch = async (input, init = {}) => {
+    purgeParams = Object.fromEntries(new URLSearchParams(init.body).entries());
+    return {
+      ok: true,
+      status: 200,
+      headers: { getSetCookie: () => [] },
+      json: async () => ({ purge: [{ title: 'A', purged: true, linkupdate: true }, { title: 'B', missing: true }] }),
+    };
+  };
+  try {
+    const client = new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', username: 'X@Y', password: 'z' });
+    const result = await client.purgeWithLinkUpdate(['A', 'B']);
+    assert.equal(purgeParams.action, 'purge');
+    assert.equal(purgeParams.titles, 'A|B');
+    assert.equal(purgeParams.forcelinkupdate, '1');
+    assert.deepEqual(result, { purged: ['A'], failed: ['B'] });
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

@@ -1,6 +1,6 @@
-# NanonaBot Tool（フェーズ1-8）
+# NanonaBot Tool（フェーズ1-9）
 
-Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜8実装です。
+Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜9実装です。
 
 **実環境で最初から最後まで確認したい場合**は、本READMEより先に
 [`docs/DEPLOY_VERIFICATION.md`](docs/DEPLOY_VERIFICATION.md) のチェックリストに沿って進めることを推奨する
@@ -142,7 +142,29 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - 対象ページ取得が件数上限（`MAX_RESULTS`）で打ち切られた場合、タスクログに警告として残す。
   対象取得時の警告内容（検索エラー等）もタスクログのメッセージに含める
 
-**含まれないもの（フェーズ9以降）**: BOTREQの外部URL・アンカー付きペアへの対応。
+**フェーズ9**
+- **節・表示名指定のリンク置換**（templateType `linkRenameExact`）: BOTREQの
+  「改名元#節1{{!}}ラベル |改名先#節2{{!}}ラベル」形式（Template:リンク修正依頼/改名/doc の書式例）を
+  `[[改名元#節1|ラベル]]` → `[[改名先#節2|ラベル]]` の付け替えとして自動ルール化する。
+  節を指定した場合はその節へのリンクだけ、表示名を指定した場合はその表示名のリンクだけが対象。
+  リンク置換と同じ2ウェーブ構成。節へのリダイレクトに対する`REDIRECT_TARGET`もこの種別になる。
+  Category/Template・同一ページ内の節リンクを含む指定は引き続き要手動設定
+- **ハットノート内のリンク解除**（`src/worker/hatnoteUnlink.js`）: リンク解除（`unlinkPage`）で、
+  一覧型ハットノート（`{{See also}}`・`{{Seealso}}`・`{{See}}`・`{{Main}}`・`{{混同}}`）内の該当ページ引数も除く。
+  引数が残らなければ呼び出しごと（その行だけの呼び出しは行ごと）除く。`{{Otheruses}}`等の役割の違う
+  引数を持つものや、名前付き引数（表示名指定等）を含む呼び出しは変更しない
+- **Category系の本文取得の共有**（`scanCategoryBacklinks`）: 警告収集とウェーブ3の対象確認で、
+  同じリンク元ページの本文取得を1回にまとめ、タスク実行中は結果を使い回す
+- **テンプレート使用ページの更新方法の選択**（`editSettings.linkUpdateMethod`）: Category系ルールの
+  ウェーブ1後の更新を、null edit（1件ずつ・既定）か`action=purge&forcelinkupdate=1`（50件ずつ一括）から選べる。
+  レート制限に当たった場合は`RATE_LIMIT_WAIT_MS`（既定60秒）待って1回だけやり直す
+- **通知**（`src/services/notify.js`）: 環境変数`NOTIFY_WEBHOOK_URL`にSlack/DiscordのWebhook URLを
+  設定すると、緊急停止・解除と、タスクの一時停止・失敗・期限切れ・緊急停止による中断・完了を通知する。
+  `NOTIFY_EVENTS`（カンマ区切り）で種類を絞れる。通知の失敗で本来の処理は止めない
+- **操作の監査ログ**: タスクの作成・承認・却下・確認モード切替・中止・再開・再試行タスク作成を、
+  操作者名つきでタスクの実行ログに残す
+
+**含まれないもの（フェーズ10以降）**: BOTREQの外部URLの付け替え。
 
 ---
 
@@ -437,6 +459,7 @@ src/routes/tasks.js         タスクCRUD・進捗確認・承認/却下/再開�
 src/routes/pages.js          HTMLページルート（/、/tasks/new、/tasks/:id、/edit-log）
 src/routes/botreq.js         BOTREQ取得API（仕様書7章）
 src/services/mediawiki.js    ユーザーグループ確認・action=compareによるDiff HTML取得
+src/services/notify.js       Slack/Discord Webhookへの通知（緊急停止・タスクの停止/失敗/完了。フェーズ9）
 src/bot/mwClient.js          MediaWiki Botクライアント（生fetch実装。ログイン/取得/編集）
 src/bot/cookieJar.js         ログインセッション保持用の簡易CookieJar
 src/bot/mwUtil.js            タイムスタンプ変換等の純粋関数
@@ -447,6 +470,7 @@ src/worker/templatePresets.js テンプレート機能8種類のsteps自動生�
                               firstLetterFlexiblePatternでMediaWikiのタイトル規則に対応）
 src/worker/targetResolvers.js 対象ページ自動取得（category/backlinks/embeddedin/regexSearch）
 src/worker/categoryWarnings.js Category系warningSource収集（構造一致は自動編集対象のため除外。フェーズ7で更新）
+src/worker/hatnoteUnlink.js  リンク解除時の一覧型ハットノート内の参照除去（フェーズ9）
 src/worker/redirectCategoryTemplate.js Template:リダイレクトの所属カテゴリの検出・カテゴリ引数の
                               改名/除去（仕様書8章。フェーズ7、実テンプレート本文・実例で確認済み）
 src/worker/taskConfig.js     タスクconfig_jsonのバリデーション（純粋関数。8種類のtemplateType対応）
@@ -488,23 +512,23 @@ test/botreq.test.js          BOTREQパーサーのテスト（ユーザー提示
 ブラウザのDOM/OOUIに依存するためこのテストスイートの対象外（構文チェックとAPI呼び出し先の
 突合はレビュー済み。3.7節の手順で実ブラウザから確認すること）。
 
-## 6. 既知の制約（フェーズ8時点）
+## 6. 既知の制約（フェーズ9時点）
 
-- BOTREQ連携は外部URL/アンカー・パイプラベル付き/名前空間不整合なペアと、節付きリダイレクト・
-  リダイレクトでない`REDIRECT_TARGET`指定を検出のみ行い、自動でルール化しない（仕様書7.2節）。
-  対応する場合はタスク作成画面で手動でルールを追加する。
+- BOTREQ連携は外部URL・名前空間不整合なペア、Category/Template・同一ページ内の節を含む
+  アンカー/パイプラベル付き指定、リダイレクトでない`REDIRECT_TARGET`指定を検出のみ行い、
+  自動でルール化しない（仕様書7.2節）。対応する場合はタスク作成画面で手動でルールを追加する。
 - `REDIRECT_TARGET`の解決先はBOTREQ取得時点のもので、取り込んだ後にリダイレクトが
   付け替えられても追従しない（取り込み前に画面の解決先を確認すること）。
-- `unlinkPage`（リンク解除）はハットノートテンプレート内の参照解除には対応していない
-  （通常のwikilink `[[X]]` `[[X|label]]` `[[X#anchor]]` のみ対象）。
-- Category系で、`Template:リダイレクトの所属カテゴリ`の構造確認（ウェーブ3）と警告収集
-  （`collectWarningsIfNeeded`）が、同じbacklinks候補ページに対して独立に本文取得している。
-  実運用でAPI呼び出し数が問題になれば、取得結果を共有する最適化の余地がある（仕様書14章）。
+- `unlinkPage`（リンク解除）のハットノート対応は一覧型（`{{See also}}`・`{{Main}}`・`{{混同}}`等）のみ。
+  `{{Otheruses}}`・`{{For}}`のように引数ごとに役割が違うもの、名前付き引数を含む呼び出しは変更しない。
+- Category系のウェーブ3の対象確認は、タスク開始時の警告収集で取得した本文の判定結果を使う
+  （実際の編集内容は準備時に改めて本文を取得して作るため、編集が古い本文にもとづくことはない）。
 - Category置換の「Category:旧 の記述も置換する」は、旧カテゴリ名の直後に和文が区切りなく続く
   記述（例: `Category:日本の橋を参照`）を、別カテゴリ名（`Category:日本の橋梁`等）と
   区別できないため置換しない。
 - Category系のnull editは1件ずつ（既定1秒間隔、`NULL_EDIT_INTERVAL_MS`）行うため、
-  使用ページの多いテンプレートでは時間がかかる。途中で中断した場合は再開時に最初からやり直す。
+  使用ページの多いテンプレートでは時間がかかる（その場合は更新方法にpurgeを選ぶ）。
+  途中で中断した場合は再開時に最初からやり直す。
 - 失敗ページ再試行（`forceTargets`）は、元タスクの置換ルールをそのまま引き継ぐが、
   ウェーブ分割・名前空間フィルタは行わない（指定ページを直接対象にするだけの単純な再試行）。
 - 対象ページ取得の件数上限は暫定値（`targetResolvers.js`の`MAX_RESULTS=5000`）。
@@ -530,7 +554,6 @@ Toolforgeのポリシー上、公開するコードはOSI承認ライセンス�
 
 ## 8. 次のフェーズ
 
-フェーズ9候補: BOTREQのアンカー・パイプラベル付きペアへの対応、ハットノート内リンク解除への対応、
-Category系の本文取得の共有（ウェーブ3の構造確認と警告収集）、null editを`action=purge&forcelinkupdate=1`
-の一括処理に切り替える選択肢（使用ページの多いテンプレート向け）、監査・通知機能の強化
-（緊急停止・失敗タスクの通知等）。
+フェーズ10候補: BOTREQの外部URL付け替え（`[http://旧 ...]`→`[https://新 ...]`）への対応、
+null edit/purgeの途中再開（処理済みページの記録）、通知先の画面からの設定・テスト送信、
+実環境（Toolforge/ToolsDB/jawiki）での通し確認結果を踏まえたチューニング。

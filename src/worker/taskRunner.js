@@ -21,7 +21,7 @@ const { isEmergencyStopped } = require('./emergencyStop');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** ウェーブ1=Template名前空間 → ウェーブ2=その他ページ の2ウェーブで処理する種別 */
-const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2'];
+const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2', 'linkRenameExact'];
 /**
  * ウェーブ1=Template名前空間のカテゴリメンバー（編集後、そのテンプレートの使用ページをnull edit）
  * → ウェーブ2=カテゴリメンバーを取り直して残りを編集
@@ -30,8 +30,29 @@ const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2'];
  */
 const CATEGORY_TEMPLATE_TYPES = ['categoryRename', 'categoryRemove'];
 const TEMPLATE_NAMESPACE = 10;
-/** null edit同士の間隔（ミリ秒）。版を作らない軽い操作のため通常の編集間隔より短くする。 */
+/** null edit（purge時は1バッチ）同士の間隔（ミリ秒）。版を作らない軽い操作のため通常の編集間隔より短くする。 */
 const NULL_EDIT_INTERVAL_MS = Number(process.env.NULL_EDIT_INTERVAL_MS || 1000);
+/** purge（forcelinkupdate）1リクエストあたりのページ数（action=purge の titles 上限） */
+const PURGE_BATCH_SIZE = 50;
+/** レート制限（ratelimited）に当たったときに待つ時間（ミリ秒） */
+const RATE_LIMIT_WAIT_MS = Number(process.env.RATE_LIMIT_WAIT_MS || 60000);
+
+/** 1ページをnull editし、失敗したページ名の配列を返す（例外はそのまま投げる）。 */
+async function nullEditOne(mwClient, title) {
+  await mwClient.nullEdit(title);
+  return [];
+}
+
+/** purgeを1バッチ行い、更新できなかったページ名の配列を返す。レート制限時は待ってから1回だけやり直す。 */
+async function purgeBatch(mwClient, titles) {
+  try {
+    return (await mwClient.purgeWithLinkUpdate(titles)).failed;
+  } catch (err) {
+    if (err.mwCode !== 'ratelimited') throw err;
+    await sleep(RATE_LIMIT_WAIT_MS);
+    return (await mwClient.purgeWithLinkUpdate(titles)).failed;
+  }
+}
 
 /**
  * 未指定（旧APIクライアント等）は種別ごとの既定値を使うが、明示的なnullは
@@ -71,7 +92,7 @@ function materializeReplacements(replacements) {
     if (KNOWN_PRESET_TEMPLATE_TYPES.includes(rule.templateType)) {
       const from = normalizeRuleName(rule.templateType, rule.from);
       const to = normalizeRuleName(rule.templateType, rule.to);
-      let steps = buildStepsForTemplateType(rule.templateType, { from, to });
+      let steps = buildStepsForTemplateType(rule.templateType, { ...rule, from, to });
       // 「Category:旧 の記述も置換する」が選ばれたCategory置換（設定キーは互換のためfixCategoryLinksのまま）
       if (rule.templateType === 'categoryRename' && rule.fixCategoryLinks) {
         steps = [...steps, ...categoryTextSteps(from, to)];
@@ -114,7 +135,7 @@ function includesTemplateNamespace(namespaces) {
  *   Template:リダイレクトの所属カテゴリの構造一致ページを調べるのに使う（省略時はスキップする）
  * @returns {Promise<{results: Array<{title:string, namespace:number}>, error: string|null}>}
  */
-async function resolveRuleTargetsForStage(rule, stage, mwClient) {
+async function resolveRuleTargetsForStage(rule, stage, mwClient, options = {}) {
   // 失敗ページ再試行（フェーズ6）: 通常のtargetSource解決をバイパスし、
   // 指定されたページ名だけを対象にする。templateTypeによらず常に有効。
   if (rule.forceTargets) {
@@ -135,6 +156,7 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
 
     case 'linkRename':
     case 'linkRename2':
+    case 'linkRenameExact':
       if (stage === 1) {
         // ウェーブ1: Template名前空間固定（仕様書6.1/6.2節）
         return { results: await resolveBacklinks({ page: rule.from, namespaces: [10] }), error: null };
@@ -161,7 +183,7 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
         if (members.truncated) results.truncated = true;
         return { results, error: null };
       }
-      return resolveCategoryMentionTargets(rule, mwClient);
+      return resolveCategoryMentionTargets(rule, mwClient, options.scanCache);
     }
 
     case 'templateRename':
@@ -191,14 +213,14 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
  *   記述は backlinks に出てこないため検索で補う）。該当箇所が無いページは準備段階で
  *   「変更なし」としてスキップされる。
  */
-async function resolveCategoryMentionTargets(rule, mwClient) {
+async function resolveCategoryMentionTargets(rule, mwClient, scanCache) {
   const MAIN_NAMESPACE = [0];
   const errors = [];
 
   let templateResults = [];
   if (mwClient) {
     try {
-      templateResults = await findRedirectCategoryTemplatePages({ category: rule.from, mwClient });
+      templateResults = await findRedirectCategoryTemplatePages({ category: rule.from, mwClient, cache: scanCache });
     } catch (err) {
       console.warn(
         `[taskRunner] Template:リダイレクトの所属カテゴリの対象確認に失敗しました（${rule.from}）:`,
@@ -238,7 +260,7 @@ async function resolveCategoryMentionTargets(rule, mwClient) {
  * @param {number} stage
  * @param {import('../bot/mwClient').MediaWikiBotClient} mwClient
  */
-async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
+async function enumerateStageIfNeeded(task, replacements, stage, mwClient, options = {}) {
   const [existingCountRows] = await pool.query(
     'SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ? AND stage = ?',
     [task.id, stage]
@@ -254,7 +276,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
     const rule = replacements[idx];
     if (!ruleAppliesToStage(rule, stage)) continue;
 
-    const { results, error } = await resolveRuleTargetsForStage(rule, stage, mwClient);
+    const { results, error } = await resolveRuleTargetsForStage(rule, stage, mwClient, options);
     if (error) {
       stageErrors.push(`replacements[${idx}] (${rule.templateType}): ${error}`);
     }
@@ -314,7 +336,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
  * Template:リダイレクトの所属カテゴリ絡みの警告を収集する（仕様書6.3/6.4節・8章）。
  * 主対象の編集とは独立しており、検出のみ・自動編集は行わない。1回のみ実行する（冪等）。
  */
-async function collectWarningsIfNeeded(task, replacements, mwClient) {
+async function collectWarningsIfNeeded(task, replacements, mwClient, scanCache) {
   const [existingRows] = await pool.query('SELECT COUNT(*) AS cnt FROM task_warnings WHERE task_id = ?', [task.id]);
   if (existingRows[0].cnt > 0) return;
 
@@ -323,7 +345,7 @@ async function collectWarningsIfNeeded(task, replacements, mwClient) {
     const rule = replacements[idx];
     if (!CATEGORY_TEMPLATE_TYPES.includes(rule.templateType)) continue;
     try {
-      const warnings = await collectCategoryWarnings({ from: rule.from, mwClient });
+      const warnings = await collectCategoryWarnings({ from: rule.from, mwClient, cache: scanCache });
       for (const w of warnings) allWarnings.push({ ruleIndex: idx, ...w });
     } catch (err) {
       console.warn(`[taskRunner] タスク${task.id} replacements[${idx}] の警告収集に失敗:`, err.message || err);
@@ -347,7 +369,7 @@ async function collectWarningsIfNeeded(task, replacements, mwClient) {
  *
  * @returns {Promise<{stopped: null|'emergency'|'cancelled'}>}
  */
-async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient) {
+async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient, method = 'nullEdit') {
   const [taskRows] = await pool.query('SELECT target_titles_json FROM tasks WHERE id = ?', [task.id]);
   const targetTitles = parseJsonColumn(taskRows[0] && taskRows[0].target_titles_json, {}) || {};
   if (targetTitles.nullEditDone) return { stopped: null };
@@ -382,29 +404,45 @@ async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClien
       taskId: task.id,
       stage: 1,
       level: 'info',
-      message: `編集したテンプレート${editedTemplates.length}件の使用ページ${titles.length}件をnull editします。`,
+      message: `編集したテンプレート${editedTemplates.length}件の使用ページ${titles.length}件を${
+        method === 'purge' ? 'purge（forcelinkupdate）で' : 'null editで'
+      }更新します。`,
     });
   }
 
+  const usePurge = method === 'purge';
+  const methodLabel = usePurge ? 'purge（forcelinkupdate）' : 'null edit';
+  const batchSize = usePurge ? PURGE_BATCH_SIZE : 1;
   let failures = 0;
-  for (let i = 0; i < titles.length; i++) {
+  for (let i = 0; i < titles.length; i += batchSize) {
     if (await isEmergencyStopped()) return { stopped: 'emergency' };
     const [statusRows] = await pool.query('SELECT status FROM tasks WHERE id = ?', [task.id]);
     if (!statusRows[0] || statusRows[0].status === 'cancelled') return { stopped: 'cancelled' };
 
+    const batch = titles.slice(i, i + batchSize);
     try {
-      await mwClient.nullEdit(titles[i]);
+      const failedTitles = usePurge ? await purgeBatch(mwClient, batch) : await nullEditOne(mwClient, batch[0]);
+      for (const title of failedTitles) {
+        failures++;
+        await writeTaskLogSafely({
+          taskId: task.id,
+          stage: 1,
+          pageTitle: title,
+          level: 'warning',
+          message: `${methodLabel}できませんでした（ページが存在しない等）。`,
+        });
+      }
     } catch (err) {
-      failures++;
+      failures += batch.length;
       await writeTaskLogSafely({
         taskId: task.id,
         stage: 1,
-        pageTitle: titles[i],
+        pageTitle: batch.length === 1 ? batch[0] : null,
         level: 'warning',
-        message: `null editに失敗しました: ${String((err && (err.mwInfo || err.message)) || err)}`,
+        message: `${methodLabel}に失敗しました（${batch.length}件）: ${String((err && (err.mwInfo || err.message)) || err)}`,
       });
     }
-    if (i < titles.length - 1) await sleep(NULL_EDIT_INTERVAL_MS);
+    if (i + batchSize < titles.length) await sleep(NULL_EDIT_INTERVAL_MS);
   }
 
   if (editedTemplates.length > 0) {
@@ -414,8 +452,8 @@ async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClien
       level: failures > 0 ? 'warning' : 'info',
       message:
         failures > 0
-          ? `null editが完了しました（${titles.length}件中${failures}件失敗）。`
-          : `null editが完了しました（${titles.length}件）。`,
+          ? `${methodLabel}が完了しました（${titles.length}件中${failures}件失敗）。`
+          : `${methodLabel}が完了しました（${titles.length}件）。`,
     });
   }
 
@@ -450,8 +488,12 @@ async function runTask(task) {
 
   const mwClient = await getClient(task.account);
 
+  // Category系の警告収集とウェーブ3の対象確認は、同じリンク元ページの本文を使うため
+  // タスク実行中は走査結果を共有する（フェーズ9）
+  const scanCache = new Map();
+
   // Category系の警告収集は主対象の編集を待たず、同じ準備フェーズ内で並行して行える（9章）
-  await collectWarningsIfNeeded(task, replacements, mwClient);
+  await collectWarningsIfNeeded(task, replacements, mwClient, scanCache);
 
   const hasCategoryWaves = replacements.some((r) => ruleStageCount(r) === 3);
 
@@ -461,7 +503,7 @@ async function runTask(task) {
 
     // 前のウェーブの編集完了後に対象を取り直す（前のウェーブの対象が0件でも後続ウェーブは必ず実行する）
     await writeTaskLogSafely({ taskId: task.id, stage, level: 'info', message: `${label}の対象ページを取得します。` });
-    const enumeration = await enumerateStageIfNeeded(task, replacements, stage, mwClient);
+    const enumeration = await enumerateStageIfNeeded(task, replacements, stage, mwClient, { scanCache });
     await writeTaskLogSafely({
       taskId: task.id,
       stage,
@@ -512,7 +554,8 @@ async function runTask(task) {
 
     // Category系: ウェーブ1で直したテンプレートの使用ページをnull editしてからウェーブ2を取得する
     if (stage === 1 && hasCategoryWaves) {
-      const { stopped } = await nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient);
+      const linkUpdateMethod = (config.editSettings && config.editSettings.linkUpdateMethod) || 'nullEdit';
+      const { stopped } = await nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient, linkUpdateMethod);
       if (stopped === 'emergency') {
         await writeTaskLogSafely({ taskId: task.id, stage, level: 'warning', message: '緊急停止を検知したため、null editを中断しました。' });
         await pool.query(`UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ?`, [task.id]);
