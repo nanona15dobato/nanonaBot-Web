@@ -135,19 +135,25 @@ function categoryRenameSteps(from, to) {
 }
 
 /**
- * カテゴリページへのリンク（[[:Category:from]]・[[:Category:from|表示]]・[[:Category:from#節]]）を
- * [[:Category:to...]] に置換する。カテゴリへの所属（[[Category:from]]）ではなく、
- * 先頭コロン付きの通常リンクだけが対象。Category置換で「カテゴリへのリンクも置換する」を
- * 選んだ場合のみ使う（タスク作成画面のチェックボックス）。
+ * 本文中の「Category:from」という記述（リンクの形かどうかを問わない）を「Category:to」に置換する。
+ * [[:Category:from]]・{{Cat|...}}の外に書かれた「Category:from」・テンプレート引数内の記述などが対象。
+ * 名前空間の表記（Category/category/カテゴリ）は元の書き方を保つ。
+ * Category置換で「Category:旧 の記述も置換する」を選んだ場合のみ使う（タスク作成画面のチェックボックス）。
+ *
+ * 別カテゴリの名前の一部（from="日本の橋" に対する "Category:日本の橋梁" や
+ * "Category:Foo" に対する "Category:Foo bar"）を書き換えないよう、直後がカテゴリ名の
+ * 区切りになっている箇所だけを置換する: ]] | # } < 改行・文末、和文の句読点・閉じ括弧、
+ * または空白の後に英数字以外が続く場合（"Category:日本の橋 を参照" 等）。
  */
-function categoryLinkSteps(from, to) {
+function categoryTextSteps(from, to) {
   const f = firstLetterFlexiblePattern(from);
   const tRep = escapeReplacementDollar(to);
+  const boundary = '(?=[ _]*(?:[\\]|#}<\\n、。，．）」』)]|$)|[ _]+[^A-Za-z0-9 _])';
   return [
     {
-      pattern: `\\[\\[\\s*:\\s*(Category|category|カテゴリ)\\s*:\\s*${f}\\s*(\\]\\]|\\#[^\\]]*\\]\\]|\\|[^\\]]*\\]\\])`,
+      pattern: `(?<![A-Za-z])(Category|category|カテゴリ)(\\s*:\\s*)${f}${boundary}`,
       flags: 'g',
-      replacement: `[[:$1:${tRep}$2`,
+      replacement: `$1$2${tRep}`,
     },
   ];
 }
@@ -271,7 +277,7 @@ module.exports = {
   linkRename2Steps,
   categoryRenameSteps,
   categoryRemoveSteps,
-  categoryLinkSteps,
+  categoryTextSteps,
   templateRenameSteps,
   unlinkPageSteps,
   templateSubstSteps,

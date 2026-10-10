@@ -131,31 +131,46 @@ test('resolveRuleTargetsForStage: Category系のウェーブ2は取り直した�
   }
 });
 
-test('resolveRuleTargetsForStage: Category置換のウェーブ3はfixCategoryLinks指定時のみカテゴリのリンク元を加える', async () => {
+test('resolveRuleTargetsForStage: Category置換のウェーブ3はfixCategoryLinks指定時のみ、標準名前空間のリンク元と本文検索結果を加える', async () => {
   const originalFetch = global.fetch;
-  const requests = stubWikiApi({ backlinks: [{ title: 'Wikipedia:カテゴリ一覧', ns: 4 }] });
+  const requests = stubWikiApi({
+    backlinks: [{ title: 'リンクのある記事', ns: 0 }],
+    search: [
+      { title: '記述だけの記事', ns: 0 },
+      { title: 'リンクのある記事', ns: 0 },
+    ],
+  });
   try {
     const without = await resolveRuleTargetsForStage({ templateType: 'categoryRename', from: '旧', to: '新', namespaces: null }, 3);
     assert.deepEqual(without.results, []);
     assert.equal(requests.length, 0);
 
-    const withLinks = await resolveRuleTargetsForStage(
+    // ルールの名前空間指定（全名前空間）によらず、ウェーブ3は標準名前空間のみ
+    const withText = await resolveRuleTargetsForStage(
       { templateType: 'categoryRename', from: '旧', to: '新', namespaces: null, fixCategoryLinks: true },
       3
     );
-    assert.deepEqual(withLinks.results, [{ title: 'Wikipedia:カテゴリ一覧', namespace: 4 }]);
-    assert.equal(requests[0].bltitle, 'Category:旧');
+    assert.deepEqual(withText.results, [
+      { title: 'リンクのある記事', namespace: 0 },
+      { title: '記述だけの記事', namespace: 0 },
+    ]);
+    const backlinksRequest = requests.find((r) => r.list === 'backlinks');
+    const searchRequest = requests.find((r) => r.list === 'search');
+    assert.equal(backlinksRequest.bltitle, 'Category:旧');
+    assert.equal(backlinksRequest.blnamespace, '0');
+    assert.equal(searchRequest.srsearch, 'insource:"Category:旧"');
+    assert.equal(searchRequest.srnamespace, '0');
   } finally {
     global.fetch = originalFetch;
   }
 });
 
-test('materializeReplacements: fixCategoryLinks指定のCategory置換は[[:Category:旧]]リンクも置換する', () => {
-  const [withLinks] = materializeReplacements([{ templateType: 'categoryRename', from: '旧', to: '新', fixCategoryLinks: true }]);
-  const [withoutLinks] = materializeReplacements([{ templateType: 'categoryRename', from: '旧', to: '新' }]);
-  const text = '[[Category:旧]] [[:Category:旧|一覧]]';
-  assert.equal(applyReplacementSteps(text, withLinks.steps), '[[Category:新]] [[:Category:新|一覧]]');
-  assert.equal(applyReplacementSteps(text, withoutLinks.steps), '[[Category:新]] [[:Category:旧|一覧]]');
+test('materializeReplacements: fixCategoryLinks指定のCategory置換は「Category:旧」の記述もリンク形式によらず置換する', () => {
+  const [withText] = materializeReplacements([{ templateType: 'categoryRename', from: '旧', to: '新', fixCategoryLinks: true }]);
+  const [withoutText] = materializeReplacements([{ templateType: 'categoryRename', from: '旧', to: '新' }]);
+  const text = '[[Category:旧]] [[:Category:旧|一覧]] {{Cat|Category:旧}} Category:旧。 Category:旧橋';
+  assert.equal(applyReplacementSteps(text, withText.steps), '[[Category:新]] [[:Category:新|一覧]] {{Cat|Category:新}} Category:新。 Category:旧橋');
+  assert.equal(applyReplacementSteps(text, withoutText.steps), '[[Category:新]] [[:Category:旧|一覧]] {{Cat|Category:旧}} Category:旧。 Category:旧橋');
 });
 
 test('2ウェーブ構成: ウェーブ1の対象が0件でもlinkRename系はウェーブ2の対象取得対象である', () => {
@@ -234,7 +249,7 @@ test('resolveRuleTargetsForStage: forceTargets指定時は通常のAPI解決を�
 
 // ---- フェーズ7: リダイレクトの所属カテゴリ構造一致ページはCategory系のウェーブ3で扱う ----
 
-test('resolveRuleTargetsForStage: Category系のウェーブ3はリダイレクトの所属カテゴリ一致ページとリンク元を重複なく統合する', async () => {
+test('resolveRuleTargetsForStage: Category系のウェーブ3はリダイレクトの所属カテゴリ一致ページと記述のあるページを重複なく統合する', async () => {
   const originalFetch = global.fetch;
   global.fetch = async (url) => {
     const u = new URL(String(url));
@@ -242,8 +257,18 @@ test('resolveRuleTargetsForStage: Category系のウェーブ3はリダイレク�
       return {
         ok: true,
         status: 200,
-        json: async () => ({ query: { backlinks: [{ title: 'テンプレ一致ページ', ns: 0 }, { title: 'リンクのみのページ', ns: 0 }] } }),
+        json: async () => ({
+          query: {
+            backlinks: [
+              { title: 'テンプレ一致ページ', ns: 0 },
+              { title: 'リンクのみのページ', ns: 0 },
+            ],
+          },
+        }),
       };
+    }
+    if (u.searchParams.get('list') === 'search') {
+      return { ok: true, status: 200, json: async () => ({ query: { search: [{ title: '記述のみのページ', ns: 0 }] } }) };
     }
     throw new Error('想定外のAPI呼び出し: ' + u.search);
   };
@@ -260,9 +285,9 @@ test('resolveRuleTargetsForStage: Category系のウェーブ3はリダイレク�
     const plain = await resolveRuleTargetsForStage(rule, 3, mwClient);
     assert.deepEqual(plain.results.map((r) => r.title), ['テンプレ一致ページ']);
 
-    // チェックボックス有り: リンク元全体を加える（構造一致ページとは重複させない）
-    const withLinks = await resolveRuleTargetsForStage({ ...rule, fixCategoryLinks: true }, 3, mwClient);
-    assert.deepEqual(withLinks.results.map((r) => r.title).sort(), ['テンプレ一致ページ', 'リンクのみのページ']);
+    // チェックボックス有り: リンク元と本文検索の結果を加える（構造一致ページとは重複させない）
+    const withText = await resolveRuleTargetsForStage({ ...rule, fixCategoryLinks: true }, 3, mwClient);
+    assert.deepEqual(withText.results.map((r) => r.title).sort(), ['テンプレ一致ページ', 'リンクのみのページ', '記述のみのページ'].sort());
   } finally {
     global.fetch = originalFetch;
   }

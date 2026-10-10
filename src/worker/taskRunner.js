@@ -4,8 +4,14 @@ const { pool } = require('../db');
 const { getClient } = require('../bot/accounts');
 const { parseJsonColumn, toJsonColumn } = require('../dbJson');
 const { runStagePipeline } = require('./pipeline');
-const { buildStepsForTemplateType, categoryLinkSteps, KNOWN_PRESET_TEMPLATE_TYPES } = require('./templatePresets');
-const { resolveTargetSource, resolveCategoryMembers, resolveBacklinks, resolveEmbeddedIn } = require('./targetResolvers');
+const { buildStepsForTemplateType, categoryTextSteps, KNOWN_PRESET_TEMPLATE_TYPES } = require('./templatePresets');
+const {
+  resolveTargetSource,
+  resolveCategoryMembers,
+  resolveBacklinks,
+  resolveEmbeddedIn,
+  resolveRegexSearch,
+} = require('./targetResolvers');
 const { collectCategoryWarnings } = require('./categoryWarnings');
 const { findCandidatePages: findRedirectCategoryTemplatePages } = require('./redirectCategoryTemplate');
 const { writeTaskLogSafely } = require('./taskLog');
@@ -18,7 +24,7 @@ const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2'];
 /**
  * ウェーブ1=Template名前空間のカテゴリメンバー（編集後、そのテンプレートの使用ページをnull edit）
  * → ウェーブ2=カテゴリメンバーを取り直して残りを編集
- * → ウェーブ3=カテゴリのリンク元（Template:リダイレクトの所属カテゴリ・任意で[[:Category:旧]]リンク）
+ * → ウェーブ3=標準名前空間のうちTemplate:リダイレクトの所属カテゴリ・任意で「Category:旧」の記述があるページ
  * の3ウェーブで処理する種別
  */
 const CATEGORY_TEMPLATE_TYPES = ['categoryRename', 'categoryRemove'];
@@ -65,9 +71,9 @@ function materializeReplacements(replacements) {
       const from = normalizeRuleName(rule.templateType, rule.from);
       const to = normalizeRuleName(rule.templateType, rule.to);
       let steps = buildStepsForTemplateType(rule.templateType, { from, to });
-      // 「カテゴリへのリンク（[[:Category:旧]]）も置換する」が選ばれたCategory置換
+      // 「Category:旧 の記述も置換する」が選ばれたCategory置換（設定キーは互換のためfixCategoryLinksのまま）
       if (rule.templateType === 'categoryRename' && rule.fixCategoryLinks) {
-        steps = [...steps, ...categoryLinkSteps(from, to)];
+        steps = [...steps, ...categoryTextSteps(from, to)];
       }
       return { ...rule, from, to, steps };
     }
@@ -152,7 +158,7 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
         const members = await resolveCategoryMembers({ category: rule.from, namespaces: otherNamespaces });
         return { results: members.filter((m) => m.namespace !== TEMPLATE_NAMESPACE), error: null };
       }
-      return resolveCategoryLinkTargets(rule, namespaces, mwClient);
+      return resolveCategoryMentionTargets(rule, mwClient);
     }
 
     case 'templateRename':
@@ -173,14 +179,19 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
 }
 
 /**
- * Category系のウェーブ3: カテゴリページのリンク元を対象にする。
+ * Category系のウェーブ3: 標準名前空間（ns=0）のうち、旧カテゴリ名を本文に記述しているページを対象にする
+ * （ルールの名前空間指定によらず常に標準名前空間のみ）。
  * - Template:リダイレクトの所属カテゴリ内で構造的にこのカテゴリ名を保持しているページ
  *   （8章で確認済みの書式にもとづき自動編集する。mwClient無しでは判定できないためスキップ）
- * - fixCategoryLinks指定時（Category置換のみ）は、[[:Category:旧]] リンクを置換するため
- *   リンク元全体（ルールの名前空間指定に従う）も対象に加える。該当箇所が無いページは
- *   準備段階で「変更なし」としてスキップされる。
+ * - fixCategoryLinks指定時（Category置換のみ）は、「Category:旧」という記述を置換するため、
+ *   カテゴリページのリンク元と insource:"Category:旧" の検索結果も加える（リンクになっていない
+ *   記述は backlinks に出てこないため検索で補う）。該当箇所が無いページは準備段階で
+ *   「変更なし」としてスキップされる。
  */
-async function resolveCategoryLinkTargets(rule, namespaces, mwClient) {
+async function resolveCategoryMentionTargets(rule, mwClient) {
+  const MAIN_NAMESPACE = [0];
+  const errors = [];
+
   let templateResults = [];
   if (mwClient) {
     try {
@@ -192,19 +203,26 @@ async function resolveCategoryLinkTargets(rule, namespaces, mwClient) {
       );
     }
   }
-  const linkResults =
-    rule.templateType === 'categoryRename' && rule.fixCategoryLinks
-      ? await resolveBacklinks({ page: `Category:${rule.from}`, namespaces })
-      : [];
+
+  let mentionResults = [];
+  if (rule.templateType === 'categoryRename' && rule.fixCategoryLinks) {
+    const backlinks = await resolveBacklinks({ page: `Category:${rule.from}`, namespaces: MAIN_NAMESPACE });
+    const search = await resolveRegexSearch({
+      query: `insource:"Category:${rule.from.replace(/"/g, '')}"`,
+      namespaces: MAIN_NAMESPACE,
+    });
+    if (search.error) errors.push(`insource検索: ${search.error}`);
+    mentionResults = [...backlinks, ...search.results];
+  }
 
   const seen = new Set();
   const merged = [];
-  for (const p of [...templateResults, ...linkResults]) {
-    if (seen.has(p.title)) continue;
+  for (const p of [...templateResults, ...mentionResults]) {
+    if (p.namespace !== 0 || seen.has(p.title)) continue;
     seen.add(p.title);
     merged.push(p);
   }
-  return { results: merged, error: null };
+  return { results: merged, error: errors.length > 0 ? errors.join(' / ') : null };
 }
 
 /**

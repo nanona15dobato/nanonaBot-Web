@@ -65,10 +65,11 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - **Category置換／Category除去の3ウェーブ構成**（`src/worker/taskRunner.js`）:
   ウェーブ1でTemplate名前空間のカテゴリメンバーを先に編集し、編集したテンプレートの使用ページ
   （embeddedin、全名前空間）をnull editしてカテゴリ所属を即時に再計算→ウェーブ2でカテゴリメンバーを
-  取り直してTemplate以外の残りを編集→ウェーブ3でカテゴリのリンク元のうち
+  取り直してTemplate以外の残りを編集→ウェーブ3で標準名前空間のうち
   `Template:リダイレクトの所属カテゴリ`で旧カテゴリ名を保持しているページを編集。
   Category置換ではタスク作成時のチェックボックス（`fixCategoryLinks`）で、ウェーブ3に
-  カテゴリのリンク元全体を加え `[[:Category:旧]]` リンクも `[[:Category:新]]` に置換できる。
+  「Category:旧」という記述がある標準名前空間のページ（カテゴリのリンク元＋`insource:`検索）を加え、
+  リンクの形かどうかを問わず「Category:新」に置換できる（別カテゴリ名の一部になっている箇所は変更しない）。
   null editの間隔は環境変数 `NULL_EDIT_INTERVAL_MS`（既定1秒）で調整できる
 - **Category系の`warningSource`**（`src/worker/categoryWarnings.js`）: 置換前Categoryページ
   自体への標準名前空間backlinksを取得し、`Template:リダイレクトの所属カテゴリ`と旧カテゴリ名の
