@@ -125,6 +125,64 @@ function classifyPair(rawFrom, rawTo) {
   return { type, from, to, rawFrom: from, rawTo: to };
 }
 
+const REDIRECT_QUERY_BATCH = 50; // action=query の titles に一度に渡せる上限（非Bot権限での既定）
+
+/**
+ * REDIRECT_TARGET 指定のペアについて、取得時点のリダイレクト解決先を問い合わせ、
+ * 通常のペア（linkRename/linkRename2/templateRename等）に置き換える（フェーズ8）。
+ *
+ * 解決先は時間とともに変わりうるため、自動で追従はしない。BOTREQ取得の時点で解決先を
+ * 確定させ、`redirectResolved` として画面に「改名元 → 解決先」を明示したうえで、
+ * 操作者が取り込むかどうかを判断する（取り込んだ時点の解決先がルールの to に固定される）。
+ * 次の場合は引き続き未対応（要手動設定）のまま残す:
+ * - 改名元がリダイレクトではない／存在しない（REDIRECT_TARGET_NOT_REDIRECT）
+ * - 解決先が節（#アンカー）付き、または解決先が改名元と同じ名前空間種別に収まらない等で
+ *   classifyPair が未対応と判定したもの
+ *
+ * @param {Array} proposals - parseBotreqTemplates() の戻り値（破壊的に更新する）
+ * @param {(params: object) => Promise<object>} [apiGetFn] - テスト用に差し替え可能なAPI呼び出し
+ * @returns {Promise<Array>} 同じ proposals
+ */
+async function resolveRedirectTargets(proposals, apiGetFn) {
+  // eslint-disable-next-line global-require
+  const apiGet = apiGetFn || require('./targetResolvers').apiGet;
+  const pending = [];
+  for (const proposal of proposals) {
+    proposal.pairs.forEach((pair, index) => {
+      if (pair.type === 'unsupported' && pair.reason === 'REDIRECT_TARGET') pending.push({ proposal, index, pair });
+    });
+  }
+  if (pending.length === 0) return proposals;
+
+  const titles = [...new Set(pending.map(({ pair }) => pair.rawFrom))];
+  /** @type {Map<string, {to: string, fragment: string|null}>} */
+  const resolved = new Map();
+  for (let i = 0; i < titles.length; i += REDIRECT_QUERY_BATCH) {
+    const batch = titles.slice(i, i + REDIRECT_QUERY_BATCH);
+    const data = await apiGet({ action: 'query', titles: batch.join('|'), redirects: '1' });
+    const query = data.query || {};
+    // 入力名 → 正規化名 → リダイレクト元 の順に辿る
+    const normalized = new Map((query.normalized || []).map((n) => [n.from, n.to]));
+    const redirects = new Map((query.redirects || []).map((r) => [r.from, r]));
+    for (const title of batch) {
+      const redirect = redirects.get(normalized.get(title) || title);
+      if (redirect) resolved.set(title, { to: redirect.to, fragment: redirect.tofragment || null });
+    }
+  }
+
+  for (const { proposal, index, pair } of pending) {
+    const target = resolved.get(pair.rawFrom);
+    if (!target) {
+      proposal.pairs[index] = { ...pair, reason: 'REDIRECT_TARGET_NOT_REDIRECT' };
+      continue;
+    }
+    const resolvedTo = target.fragment ? `${target.to}#${target.fragment}` : target.to;
+    const classified = classifyPair(pair.rawFrom, resolvedTo);
+    proposal.pairs[index] = { ...classified, rawTo: pair.rawTo, redirectResolved: true, resolvedTo };
+  }
+  return proposals;
+}
+
 /**
  * wikitext中の {{リンク修正依頼/改名}} 呼び出しをすべて検出し、パースする。
  * WikitextParserのargsOrdered（出現順配列）を使うことで、キー名に依存せず
@@ -189,4 +247,5 @@ module.exports = {
   classifyPair,
   parseBotreqTemplates,
   parseBotreqTopicList,
+  resolveRedirectTargets,
 };

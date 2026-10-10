@@ -11,6 +11,7 @@ const {
   resolveBacklinks,
   resolveEmbeddedIn,
   resolveRegexSearch,
+  MAX_RESULTS,
 } = require('./targetResolvers');
 const { collectCategoryWarnings } = require('./categoryWarnings');
 const { findCandidatePages: findRedirectCategoryTemplatePages } = require('./redirectCategoryTemplate');
@@ -156,7 +157,9 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient) {
         const otherNamespaces = namespaces ? namespaces.filter((n) => n !== TEMPLATE_NAMESPACE) : null;
         if (otherNamespaces && otherNamespaces.length === 0) return { results: [], error: null };
         const members = await resolveCategoryMembers({ category: rule.from, namespaces: otherNamespaces });
-        return { results: members.filter((m) => m.namespace !== TEMPLATE_NAMESPACE), error: null };
+        const results = members.filter((m) => m.namespace !== TEMPLATE_NAMESPACE);
+        if (members.truncated) results.truncated = true;
+        return { results, error: null };
       }
       return resolveCategoryMentionTargets(rule, mwClient);
     }
@@ -213,6 +216,7 @@ async function resolveCategoryMentionTargets(rule, mwClient) {
     });
     if (search.error) errors.push(`insource検索: ${search.error}`);
     mentionResults = [...backlinks, ...search.results];
+    if (backlinks.truncated || search.results.truncated) mentionResults.truncated = true;
   }
 
   const seen = new Set();
@@ -222,6 +226,7 @@ async function resolveCategoryMentionTargets(rule, mwClient) {
     seen.add(p.title);
     merged.push(p);
   }
+  if (mentionResults.truncated) merged.truncated = true;
   return { results: merged, error: errors.length > 0 ? errors.join(' / ') : null };
 }
 
@@ -252,6 +257,11 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient) {
     const { results, error } = await resolveRuleTargetsForStage(rule, stage, mwClient);
     if (error) {
       stageErrors.push(`replacements[${idx}] (${rule.templateType}): ${error}`);
+    }
+    if (results.truncated) {
+      stageErrors.push(
+        `replacements[${idx}] (${rule.templateType}): 対象ページが上限（${MAX_RESULTS}件）に達したため、以降は取得していません`
+      );
     }
     for (const item of results) {
       if (!titleToInfo.has(item.title)) {
@@ -456,9 +466,12 @@ async function runTask(task) {
       taskId: task.id,
       stage,
       level: enumeration.errors.length > 0 ? 'warning' : 'info',
-      message: enumeration.alreadyEnumerated
-        ? `${label}は既に列挙済みです（${enumeration.targetCount}件）。`
-        : `${label}の対象ページ取得が完了しました（${enumeration.targetCount}件）。`,
+      // 取得時の警告（検索エラー・件数上限での打ち切り等）は内容もWeb上で確認できるようにする
+      message:
+        (enumeration.alreadyEnumerated
+          ? `${label}は既に列挙済みです（${enumeration.targetCount}件）。`
+          : `${label}の対象ページ取得が完了しました（${enumeration.targetCount}件）。`) +
+        (enumeration.errors.length > 0 ? ` 注意: ${enumeration.errors.join(' / ')}` : ''),
     });
 
     const result = await runStagePipeline({

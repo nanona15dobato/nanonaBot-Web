@@ -9,6 +9,7 @@ const {
   parseBotreqTemplates,
   fetchBotreqWikitext,
   parseBotreqTopicList,
+  resolveRedirectTargets,
 } = require('../src/worker/botreq');
 
 // ---- stripNamespacePrefix ----
@@ -217,4 +218,69 @@ test('fetchBotreqWikitext: ページが存在しなければ例外', async () =>
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+// ---- フェーズ8: REDIRECT_TARGET の解決 ----
+
+test('resolveRedirectTargets: REDIRECT_TARGETを取得時点の解決先で通常のペアに置き換える', async () => {
+  const proposals = parseBotreqTemplates(`{{リンク修正依頼/改名|提案=x
+|旧記事 |REDIRECT_TARGET
+|Template:旧テンプレ |REDIRECT_TARGET
+|節へのリダイレクト |REDIRECT_TARGET
+|普通の記事 |REDIRECT_TARGET
+|改名元 |改名先
+}}`);
+  const calls = [];
+  const apiGet = async (params) => {
+    calls.push(params);
+    return {
+      query: {
+        redirects: [
+          { from: '旧記事', to: '新記事（曖昧さ回避）' },
+          { from: 'Template:旧テンプレ', to: 'Template:新テンプレ' },
+          { from: '節へのリダイレクト', to: '記事', tofragment: '節' },
+        ],
+      },
+    };
+  };
+
+  await resolveRedirectTargets(proposals, apiGet);
+  const [linkPair, templatePair, anchorPair, notRedirect, plain] = proposals[0].pairs;
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].redirects, '1');
+  assert.equal(linkPair.type, 'linkRename2'); // 改名先にだけ全角括弧があるので表示保持
+  assert.equal(linkPair.to, '新記事（曖昧さ回避）');
+  assert.equal(linkPair.redirectResolved, true);
+  assert.equal(templatePair.type, 'templateRename');
+  assert.equal(templatePair.to, '新テンプレ');
+  assert.equal(anchorPair.type, 'unsupported'); // 節付きは引き続き要手動
+  assert.equal(anchorPair.reason, 'anchor_or_label');
+  assert.equal(notRedirect.type, 'unsupported');
+  assert.equal(notRedirect.reason, 'REDIRECT_TARGET_NOT_REDIRECT');
+  assert.equal(plain.type, 'linkRename'); // REDIRECT_TARGET以外は変更しない
+});
+
+test('resolveRedirectTargets: タイトルの正規化（先頭小文字・アンダースコア）を辿って解決する', async () => {
+  const proposals = parseBotreqTemplates(`{{リンク修正依頼/改名|提案=x
+|foo_bar |REDIRECT_TARGET
+}}`);
+  await resolveRedirectTargets(proposals, async () => ({
+    query: {
+      normalized: [{ from: 'foo_bar', to: 'Foo bar' }],
+      redirects: [{ from: 'Foo bar', to: 'Baz' }],
+    },
+  }));
+  assert.equal(proposals[0].pairs[0].type, 'linkRename');
+  assert.equal(proposals[0].pairs[0].to, 'Baz');
+});
+
+test('resolveRedirectTargets: REDIRECT_TARGETが無ければAPIを呼ばない', async () => {
+  const proposals = parseBotreqTemplates(`{{リンク修正依頼/改名|提案=x
+|A |B
+}}`);
+  await resolveRedirectTargets(proposals, async () => {
+    throw new Error('呼ばれない想定');
+  });
+  assert.equal(proposals[0].pairs[0].type, 'linkRename');
 });

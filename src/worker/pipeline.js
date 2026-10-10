@@ -42,6 +42,13 @@ async function prepareOnePage(row, ctx) {
   try {
     const page = await ctx.mwClient.getPage(row.page_title);
 
+    // 手入力・再試行で追加したページは列挙時点では名前空間が分からず0で登録されているため、
+    // 実際の名前空間に直す（ページ一覧・edit_log・Template判定に使われる）
+    if (page && Number.isInteger(page.namespace) && page.namespace !== row.namespace) {
+      await pool.query('UPDATE task_pages SET namespace = ? WHERE id = ?', [page.namespace, row.id]);
+      row.namespace = page.namespace;
+    }
+
     if (!page || !page.exists) {
       const msg = 'ページが存在しません（削除済みまたはタイトル誤り）';
       await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [msg, row.id]);

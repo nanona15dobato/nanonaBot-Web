@@ -38,11 +38,33 @@ router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
 });
 
 // タスク一覧・詳細・ページ一覧はowner専用（仕様書2章: admin_emergency_onlyは緊急停止以外閲覧不可）
+const TASK_LIST_COLUMNS = `id, created_by, account, mode, status, progress_current, progress_total, created_at, updated_at,
+  (SELECT COUNT(*) FROM task_pages tp WHERE tp.task_id = tasks.id AND tp.status = 'awaiting_review') AS awaiting_review_count`;
+
 router.get('/api/tasks', requireRole('owner'), async (req, res, next) => {
   try {
+    const [rows] = await pool.query(`SELECT ${TASK_LIST_COLUMNS} FROM tasks ORDER BY id DESC LIMIT 50`);
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ダッシュボードの「要対応」一覧（フェーズ8）。古いタスクでも、操作者の対応を待っているものは載せる:
+// - 確認待ちのページがある実行中/待機中タスク
+// - 一時停止・緊急停止・期限切れ（再開できる）
+// - 失敗ページがあり、まだ再試行タスクを作っていないもの（直近14日以内）
+router.get('/api/tasks/attention', requireRole('owner'), async (req, res, next) => {
+  try {
     const [rows] = await pool.query(
-      `SELECT id, created_by, account, mode, status, progress_current, progress_total, created_at, updated_at
-       FROM tasks ORDER BY id DESC LIMIT 50`
+      `SELECT ${TASK_LIST_COLUMNS} FROM tasks
+       WHERE status IN ('paused', 'emergency_stopped', 'expired')
+          OR (status IN ('queued', 'running') AND EXISTS (
+                SELECT 1 FROM task_pages tp WHERE tp.task_id = tasks.id AND tp.status = 'awaiting_review'))
+          OR (status IN ('completed_with_failures', 'failed')
+              AND updated_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+              AND NOT EXISTS (SELECT 1 FROM tasks r WHERE r.retry_of_task_id = tasks.id))
+       ORDER BY updated_at DESC LIMIT 50`
     );
     res.json(rows);
   } catch (err) {

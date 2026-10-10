@@ -20,8 +20,29 @@
 
   const $notice = $('<div>');
   const $statusSection = $('<div>').addClass('nb-section');
+  const $attentionSection = $('<div>').addClass('nb-section nb-attention').hide();
   const $taskListSection = $('<div>').addClass('nb-section');
-  $app.append($notice, $statusSection, $taskListSection);
+  $app.append($notice, $statusSection, $attentionSection, $taskListSection);
+
+  /** 要対応一覧に出す理由（操作者が次に何をすればよいか）。 */
+  function attentionReason(task) {
+    const awaiting = Number(task.awaiting_review_count) || 0;
+    if (awaiting > 0) return '確認待ちのページが' + awaiting + '件あります。';
+    switch (task.status) {
+      case 'paused':
+        return '失敗により一時停止しています。原因を確認して再開してください。';
+      case 'emergency_stopped':
+        return '緊急停止で中断しています。解除後に再開できます。';
+      case 'expired':
+        return '無操作タイムアウトで期限切れになりました。再開できます。';
+      case 'completed_with_failures':
+        return '失敗したページがあります。失敗ページのみ再試行できます。';
+      case 'failed':
+        return 'タスクがエラーで終了しました。実行ログを確認してください。';
+      default:
+        return '';
+    }
+  }
 
   async function refreshEmergencyStatus() {
     try {
@@ -57,15 +78,22 @@
     }
   }
 
-  function taskRow(task) {
+  function taskRow(task, options) {
     const $row = $('<a>').addClass('nb-task-row').attr('href', '/tasks/' + task.id).css('text-decoration', 'none').css('color', 'inherit');
     const $left = $('<div>');
     $left.append($('<strong>').text('#' + task.id + ' '));
     $left.append(C.taskStatusBadge(task.status));
+    const awaiting = Number(task.awaiting_review_count) || 0;
     $left.append(
       $('<div>').addClass('nb-task-row__meta')
-        .text('account=' + task.account + ' / mode=' + task.mode + ' / 進捗 ' + task.progress_current + '/' + task.progress_total)
+        .text(
+          'account=' + task.account + ' / mode=' + task.mode + ' / 進捗 ' + task.progress_current + '/' + task.progress_total +
+            (awaiting > 0 ? ' / 確認待ち ' + awaiting + '件' : '')
+        )
     );
+    if (options && options.reason) {
+      $left.append($('<div>').addClass('nb-attention__reason').text(options.reason));
+    }
     const $right = $('<div>').addClass('nb-task-row__meta').text(C.formatDateTime(task.updated_at));
     return $row.append($left, $right);
   }
@@ -87,8 +115,26 @@
     }
   }
 
+  async function refreshAttention() {
+    try {
+      const tasks = await C.fetchJson('/api/tasks/attention');
+      $attentionSection.empty();
+      if (tasks.length === 0) {
+        $attentionSection.hide();
+        return;
+      }
+      $attentionSection.append($('<div>').addClass('nb-section__title').text('要対応（' + tasks.length + '件）'));
+      const $list = $('<div>').addClass('nb-task-list');
+      tasks.forEach((t) => $list.append(taskRow(t, { reason: attentionReason(t) })));
+      $attentionSection.append($list).show();
+    } catch (e) {
+      C.showNotice($notice, 'error', '要対応一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
   function refreshAll() {
     refreshEmergencyStatus();
+    refreshAttention();
     refreshTaskList();
   }
 
