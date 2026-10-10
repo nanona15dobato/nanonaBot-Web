@@ -160,6 +160,9 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
   レート制限に当たった場合は`RATE_LIMIT_WAIT_MS`（既定60秒）待って1回だけやり直す
 - **通知**（`src/services/notify.js`）: 環境変数`NOTIFY_WEBHOOK_URL`にSlack/DiscordのWebhook URLを
   設定すると、緊急停止・解除と、タスクの一時停止・失敗・期限切れ・緊急停止による中断・完了を通知する。
+  `NOTIFY_MAIL_TO`（カンマ区切り）と`NOTIFY_MAIL_FROM`を設定すると、Toolforgeの
+  `mail.tools.wmcloud.org`経由でメールでも送る（Fromは`"表示名" <ツール名.任意@toolforge.org>`形式。
+  宛先の`利用者名@toolforge.org`は開発者アカウントに登録したメールアドレスへ転送される）。
   `NOTIFY_EVENTS`（カンマ区切り）で種類を絞れる。通知の失敗で本来の処理は止めない
 - **操作の監査ログ**: タスクの作成・承認・却下・確認モード切替・中止・再開・再試行タスク作成を、
   操作者名つきでタスクの実行ログに残す
@@ -459,7 +462,7 @@ src/routes/tasks.js         タスクCRUD・進捗確認・承認/却下/再開�
 src/routes/pages.js          HTMLページルート（/、/tasks/new、/tasks/:id、/edit-log）
 src/routes/botreq.js         BOTREQ取得API（仕様書7章）
 src/services/mediawiki.js    ユーザーグループ確認・action=compareによるDiff HTML取得
-src/services/notify.js       Slack/Discord Webhookへの通知（緊急停止・タスクの停止/失敗/完了。フェーズ9）
+src/services/notify.js       Slack/Discord Webhook・メールへの通知（緊急停止・タスクの停止/失敗/完了。フェーズ9）
 src/bot/mwClient.js          MediaWiki Botクライアント（生fetch実装。ログイン/取得/編集）
 src/bot/cookieJar.js         ログインセッション保持用の簡易CookieJar
 src/bot/mwUtil.js            タイムスタンプ変換等の純粋関数
