@@ -135,6 +135,24 @@ function categoryRenameSteps(from, to) {
 }
 
 /**
+ * カテゴリページへのリンク（[[:Category:from]]・[[:Category:from|表示]]・[[:Category:from#節]]）を
+ * [[:Category:to...]] に置換する。カテゴリへの所属（[[Category:from]]）ではなく、
+ * 先頭コロン付きの通常リンクだけが対象。Category置換で「カテゴリへのリンクも置換する」を
+ * 選んだ場合のみ使う（タスク作成画面のチェックボックス）。
+ */
+function categoryLinkSteps(from, to) {
+  const f = firstLetterFlexiblePattern(from);
+  const tRep = escapeReplacementDollar(to);
+  return [
+    {
+      pattern: `\\[\\[\\s*:\\s*(Category|category|カテゴリ)\\s*:\\s*${f}\\s*(\\]\\]|\\#[^\\]]*\\]\\]|\\|[^\\]]*\\]\\])`,
+      flags: 'g',
+      replacement: `[[:$1:${tRep}$2`,
+    },
+  ];
+}
+
+/**
  * 6.4 Category除去（標準）。fromはCategory:プレフィックスを除いた素の名前。
  * Step2（Template:リダイレクトの所属カテゴリの更新）は8章の方針により自動編集しない。
  */
@@ -253,6 +271,7 @@ module.exports = {
   linkRename2Steps,
   categoryRenameSteps,
   categoryRemoveSteps,
+  categoryLinkSteps,
   templateRenameSteps,
   unlinkPageSteps,
   templateSubstSteps,

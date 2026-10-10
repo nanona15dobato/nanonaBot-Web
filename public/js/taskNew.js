@@ -243,15 +243,37 @@
         const ns = buildNamespaceField(null, '既定は全名前空間（原則すべてのカテゴリ呼び出し先が対象）。');
         $body.append(
           $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
-            'カテゴリメンバー全体を対象にします。加えて、Template:リダイレクトの所属カテゴリ内で' +
-              'このカテゴリ名を保持しているページも自動的に検出し、該当箇所を書き換えます。' +
+            'このルールは3ウェーブ構成で処理されます: ' +
+              'ウェーブ1でTemplate名前空間のカテゴリメンバーを先に編集し、編集したテンプレートの使用ページをnull edit → ' +
+              'ウェーブ2でカテゴリメンバーを取り直して残りを編集 → ' +
+              'ウェーブ3でカテゴリのリンク元のうちTemplate:リダイレクトの所属カテゴリでこのカテゴリ名を保持しているページを書き換えます。' +
               '構造的に確認できない緩い一致のみは、自動編集せず警告として表示します。'
           ),
           ns.$element
         );
+        let fixLinksWidget = null;
+        if (type === 'categoryRename') {
+          fixLinksWidget = new OO.ui.CheckboxInputWidget({ selected: false });
+          $body.append(
+            new OO.ui.FieldLayout(fixLinksWidget, {
+              label: 'カテゴリへのリンク（[[:Category:旧]]）も置換する',
+              align: 'inline',
+              help:
+                'ウェーブ3でカテゴリのリンク元全体（上の名前空間指定に従う）を対象に加え、[[:Category:旧]] のリンクを [[:Category:新]] に置換します。' +
+                '全名前空間のままだとノートページ等の議論中のリンクも書き換えるため、必要に応じて名前空間を絞ってください。',
+              helpInline: true,
+            }).$element
+          );
+        }
         rule.getConfig = () =>
           type === 'categoryRename'
-            ? { templateType: 'categoryRename', from: fromWidget.getValue(), to: toWidget.getValue(), namespaces: namespacesOrNull(ns.widget) }
+            ? {
+                templateType: 'categoryRename',
+                from: fromWidget.getValue(),
+                to: toWidget.getValue(),
+                namespaces: namespacesOrNull(ns.widget),
+                fixCategoryLinks: fixLinksWidget.isSelected(),
+              }
             : { templateType: 'categoryRemove', from: fromWidget.getValue(), namespaces: namespacesOrNull(ns.widget) };
       } else if (type === 'templateRename') {
         const ns = buildNamespaceField([0], '既定は標準名前空間のみ。テンプレートの入れ子呼び出しまで洗い出したい場合はTemplateも追加してください。');
