@@ -16,12 +16,18 @@
     { data: 'custom', label: 'カスタム' },
     { data: 'linkRename', label: 'リンク置換' },
     { data: 'linkRename2', label: 'リンク置換2（表示保持）' },
+    { data: 'linkRenameExact', label: 'リンク置換（節・表示名指定）' },
     { data: 'categoryRename', label: 'Category置換' },
     { data: 'categoryRemove', label: 'Category除去' },
     { data: 'templateRename', label: 'テンプレート置換' },
     { data: 'unlinkPage', label: 'リンク解除' },
     { data: 'templateSubst', label: 'テンプレートのsubst化' },
   ];
+
+  /** 「ページ名#節|表示名」形式で表示する（節・表示名は省略可）。 */
+  function formatLinkSpec(title, anchor, label) {
+    return title + (anchor ? '#' + anchor : '') + (label ? '|' + label : '');
+  }
 
   // toが不要な種別（fromのみで完結する）
   const TYPES_WITHOUT_TO = ['categoryRemove', 'unlinkPage', 'templateSubst'];
@@ -222,7 +228,39 @@
         $body.append(new OO.ui.FieldLayout(toWidget, { label: '改名先（to）', align: 'top' }).$element);
       }
 
-      if (type === 'linkRename' || type === 'linkRename2') {
+      if (type === 'linkRenameExact') {
+        const textField = (value, placeholder) => new OO.ui.TextInputWidget({ value: value || '', placeholder });
+        const fromAnchorWidget = textField(prefill && prefill.fromAnchor, '未入力=節なしのリンクだけが対象');
+        const toAnchorWidget = textField(prefill && prefill.toAnchor, '未入力=節なし');
+        const fromLabelWidget = textField(prefill && prefill.fromLabel, '未入力=表示名を問わない（表示名は残す）');
+        const toLabelWidget = textField(prefill && prefill.toLabel, '未入力=元の表示名のまま');
+        const ns = buildNamespaceField(
+          [0],
+          'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。'
+        );
+        $body.append(
+          new OO.ui.FieldLayout(fromAnchorWidget, { label: '改名元の節', align: 'top' }).$element,
+          new OO.ui.FieldLayout(fromLabelWidget, { label: '改名元の表示名', align: 'top' }).$element,
+          new OO.ui.FieldLayout(toAnchorWidget, { label: '改名先の節', align: 'top' }).$element,
+          new OO.ui.FieldLayout(toLabelWidget, { label: '改名先の表示名', align: 'top' }).$element,
+          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
+            '[[改名元#節|表示名]] の形のリンクだけを [[改名先#節|表示名]] に付け替えます（BOTREQの「改名元#節{{!}}ラベル」形式）。' +
+              'リンク置換と同じく2ウェーブ構成で処理されます。'
+          ),
+          ns.$element
+        );
+        const orNull = (widget) => widget.getValue().trim() || null;
+        rule.getConfig = () => ({
+          templateType: 'linkRenameExact',
+          from: fromWidget.getValue(),
+          to: toWidget.getValue(),
+          fromAnchor: orNull(fromAnchorWidget),
+          toAnchor: orNull(toAnchorWidget),
+          fromLabel: orNull(fromLabelWidget),
+          toLabel: orNull(toLabelWidget),
+          namespaces: namespacesOrNull(ns.widget),
+        });
+      } else if (type === 'linkRename' || type === 'linkRename2') {
         const ns = buildNamespaceField(
           [0],
           'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。'
@@ -289,7 +327,7 @@
         $body.append(
           $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
             '[[対象]]・[[対象|表示名]]・[[対象#アンカー]] を地の文に変換します（BOTREQのDELETE_PAGE相当）。' +
-              'ハットノートテンプレート内の参照解除はフェーズ6では対象外です。'
+              '一覧型のハットノート（{{See also}}・{{Main}}・{{混同}}）内の参照も取り除きます（他に引数が無ければテンプレートごと除去。名前付き引数を含む呼び出しは変更しません）。'
           ),
           ns.$element
         );
@@ -339,7 +377,7 @@
     REDIRECT_TARGET_NOT_REDIRECT: 'REDIRECT_TARGET指定だが改名元がリダイレクトではない（または存在しない）',
     subst: 'テンプレートのsubst化指定',
     URL: '外部URLの付け替え',
-    anchor_or_label: 'アンカー/パイプラベル付き指定',
+    anchor_or_label: 'Category/Template・同一ページ内の節を含むアンカー/パイプラベル付き指定',
     namespace_mismatch: '改名元・改名先の名前空間が噛み合っていない',
   };
   const RULE_TYPE_LABEL_MAP = Object.fromEntries(RULE_TYPES.map((t) => [t.data, t.label]));
@@ -384,12 +422,16 @@
           );
         } else if (pair.to === undefined) {
           $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + pair.from);
-        } else if (pair.redirectResolved) {
-          // 解決先は取得時点のもの。取り込むとこの値がルールの改名先に固定される
-          $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '（リダイレクト解決）] ' + pair.from + ' → ' + pair.to);
-          $row.append($('<span>').css({ color: '#54595d', marginLeft: '6px' }).text('※取得時点の解決先'));
         } else {
-          $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + pair.from + ' → ' + pair.to);
+          const fromText = formatLinkSpec(pair.from, pair.fromAnchor, pair.fromLabel);
+          const toText = formatLinkSpec(pair.to, pair.toAnchor, pair.toLabel);
+          if (pair.redirectResolved) {
+            // 解決先は取得時点のもの。取り込むとこの値がルールの改名先に固定される
+            $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '（リダイレクト解決）] ' + fromText + ' → ' + toText);
+            $row.append($('<span>').css({ color: '#54595d', marginLeft: '6px' }).text('※取得時点の解決先'));
+          } else {
+            $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + fromText + ' → ' + toText);
+          }
         }
         $pairList.append($row);
       });
@@ -403,7 +445,17 @@
       importBtn.on('click', () => {
         p.pairs
           .filter((pair) => pair.type !== 'unsupported')
-          .forEach((pair) => addRuleCard({ templateType: pair.type, from: pair.from, to: pair.to }));
+          .forEach((pair) =>
+            addRuleCard({
+              templateType: pair.type,
+              from: pair.from,
+              to: pair.to,
+              fromAnchor: pair.fromAnchor,
+              toAnchor: pair.toAnchor,
+              fromLabel: pair.fromLabel,
+              toLabel: pair.toLabel,
+            })
+          );
         C.showNotice($notice, 'success', supportedCount + '件のルールを追加しました。内容を確認してから送信してください。');
         window.scrollTo(0, document.body.scrollHeight);
       });
@@ -442,6 +494,13 @@
   const minorEditWidget = new OO.ui.CheckboxInputWidget({ selected: true });
   const editSummaryWidget = new OO.ui.TextInputWidget({ placeholder: '例: Bot: リンク修正' });
   const editIntervalWidget = new OO.ui.NumberInputWidget({ min: 5, step: 1, value: 10 });
+  const linkUpdateMethodWidget = new OO.ui.DropdownInputWidget({
+    options: [
+      { data: 'nullEdit', label: 'null edit（1件ずつ・既定）' },
+      { data: 'purge', label: 'purge＋forcelinkupdate（50件ずつ一括）' },
+    ],
+    value: 'nullEdit',
+  });
 
   // ---- 実行モード ----
   const modeWidget = new OO.ui.RadioSelectInputWidget({
@@ -465,6 +524,7 @@
     minorEditWidget.setSelected(edit.minorEdit !== false);
     editSummaryWidget.setValue(edit.editSummary || '');
     editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
+    linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'nullEdit');
     modeWidget.setValue(review.mode || 'auto');
     autoWaitWidget.setValue(Number(review.autoWaitSeconds) || 0);
     manualTimeoutWidget.setValue(Number(review.manualTimeoutHours) || 72);
@@ -531,6 +591,7 @@
         minorEdit: minorEditWidget.isSelected(),
         editSummary: editSummaryWidget.getValue(),
         editIntervalSeconds: Number(editIntervalWidget.getValue()),
+        linkUpdateMethod: linkUpdateMethodWidget.getValue(),
       },
       reviewSettings,
       onFailure: onFailureWidget.getValue(),
@@ -578,6 +639,14 @@
     new OO.ui.FieldLayout(minorEditWidget, { label: '細部の編集にする', align: 'inline' }).$element,
     new OO.ui.FieldLayout(editSummaryWidget, { label: '要約欄', align: 'top' }).$element,
     new OO.ui.FieldLayout(editIntervalWidget, { label: '編集間隔（秒・5以上）', align: 'top' }).$element,
+    new OO.ui.FieldLayout(linkUpdateMethodWidget, {
+      label: 'テンプレート使用ページの更新方法（Category系ルールのウェーブ1後）',
+      align: 'top',
+      help:
+        'ウェーブ1で編集したテンプレートの使用ページのカテゴリ所属を更新する方法です。' +
+        '使用ページが多いテンプレートではpurge（50件ずつ一括）の方が速く終わります。',
+      helpInline: true,
+    }).$element,
     saveDefaultsBtn.$element
   );
 

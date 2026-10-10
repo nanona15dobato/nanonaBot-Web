@@ -6,6 +6,7 @@ const { claimNextQueuedTask } = require('./src/worker/queue');
 const { runTask } = require('./src/worker/taskRunner');
 const { isEmergencyStopped } = require('./src/worker/emergencyStop');
 const { writeTaskLogSafely } = require('./src/worker/taskLog');
+const { notifyTaskStatus } = require('./src/services/notify');
 
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS || 1000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,10 +59,12 @@ async function mainLoop() {
       }
 
       console.log(`[worker] タスク ${task.id} の処理を開始します（account=${task.account}, mode=${task.mode}）`);
+      let errorDetail = null;
       try {
         await runTask(task);
         console.log(`[worker] タスク ${task.id} の処理が一区切りしました`);
       } catch (err) {
+        errorDetail = String((err && err.message) || err);
         console.error(`[worker] タスク ${task.id} の処理中に予期しないエラーが発生しました:`, err);
         await writeTaskLogSafely({
           taskId: task.id,
@@ -73,6 +76,10 @@ async function mainLoop() {
           task.id,
         ]);
       }
+
+      // 処理が止まった/終わった理由を通知する（一時停止・失敗・期限切れ・緊急停止・完了）
+      const [statusRows] = await pool.query('SELECT status FROM tasks WHERE id = ?', [task.id]);
+      if (statusRows[0]) await notifyTaskStatus(task, statusRows[0].status, { detail: errorDetail });
     } catch (outerErr) {
       // DB接続断など、タスク単位より外側のエラー。ループ自体は止めない。
       console.error('[worker] ワーカーループでエラーが発生しました:', outerErr);

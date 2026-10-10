@@ -104,6 +104,11 @@ function validateRule(rule, i, errors) {
   if (!isValidNamespaces(rule.namespaces)) {
     errors.push(`${prefix}.namespaces: 0以上の整数の配列、またはnull/省略である必要があります`);
   }
+  for (const key of ['fromAnchor', 'toAnchor', 'fromLabel', 'toLabel']) {
+    if (rule[key] !== undefined && rule[key] !== null && typeof rule[key] !== 'string') {
+      errors.push(`${prefix}.${key}: 文字列またはnullである必要があります`);
+    }
+  }
   if (rule.fixCategoryLinks !== undefined && typeof rule.fixCategoryLinks !== 'boolean') {
     errors.push(`${prefix}.fixCategoryLinks: 真偽値である必要があります`);
   }
@@ -140,6 +145,10 @@ function validateTaskConfig(config) {
   } else {
     if (typeof config.editSettings.editSummary !== 'string' || !config.editSettings.editSummary.trim()) {
       errors.push('editSettings.editSummaryは空でない文字列である必要があります');
+    }
+    const { linkUpdateMethod } = config.editSettings;
+    if (linkUpdateMethod !== undefined && !['nullEdit', 'purge'].includes(linkUpdateMethod)) {
+      errors.push('editSettings.linkUpdateMethodは"nullEdit"または"purge"である必要があります');
     }
     const interval = config.editSettings.editIntervalSeconds;
     if (typeof interval !== 'number' || interval < 5) {

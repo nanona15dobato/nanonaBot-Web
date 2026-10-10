@@ -219,3 +219,28 @@ test('categoryTextSteps: 「Category:旧」の記述を置換し、別カテゴ�
   assert.equal(applyReplacementSteps('Category:Foo bar', latin), 'Category:Foo bar');
   assert.equal(applyReplacementSteps('Category:foo#x', latin), 'Category:Baz#x');
 });
+
+test('linkRenameExactSteps: 節指定は指定した節へのリンクだけを付け替え、表示名は残す', () => {
+  const steps = presets.linkRenameExactSteps({ from: '改名元', to: '改名先', fromAnchor: '旧 節', toAnchor: '新節' });
+  const text = '[[改名元#旧_節]] [[改名元#旧 節|表示]] [[改名元]] [[改名元#別の節]]';
+  assert.equal(applyReplacementSteps(text, steps), '[[改名先#新節]] [[改名先#新節|表示]] [[改名元]] [[改名元#別の節]]');
+});
+
+test('linkRenameExactSteps: 表示名指定はその表示名のリンクだけを対象にする', () => {
+  const steps = presets.linkRenameExactSteps({
+    from: '改名元',
+    to: '改名先',
+    fromAnchor: 'A',
+    toAnchor: 'B',
+    fromLabel: 'ラベル',
+    toLabel: '新ラベル',
+  });
+  const text = '[[改名元#A|ラベル]] [[改名元#A|他の表示]] [[改名元#A]]';
+  assert.equal(applyReplacementSteps(text, steps), '[[改名先#B|新ラベル]] [[改名元#A|他の表示]] [[改名元#A]]');
+});
+
+test('linkRenameExactSteps: 節なし→節ありの付け替えでは節なしのリンクだけを対象にし、改名先の表示名を付ける', () => {
+  const steps = presets.linkRenameExactSteps({ from: '旧記事', to: '新記事', toAnchor: '節', toLabel: '旧記事' });
+  const text = '[[旧記事]] [[旧記事|別名]] [[旧記事#他]]';
+  assert.equal(applyReplacementSteps(text, steps), '[[新記事#節|旧記事]] [[新記事#節|別名]] [[旧記事#他]]');
+});

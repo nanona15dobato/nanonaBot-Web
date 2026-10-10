@@ -568,3 +568,11 @@ test('runStagePipeline: 手入力で名前空間0として登録したページ�
   // writeEditLogのパラメータ順: task_id, stage, page_title, namespace, ...
   assert.equal(db.editLogRows[0][3], 10);
 });
+
+test('applyRedirectCategoryTemplateEdits: unlinkPageルールがあればハットノート内の参照も除く', () => {
+  return withStubbedDb(createFakeDb().pool, () => {
+    const { applyRedirectCategoryTemplateEdits } = require('../src/worker/pipeline');
+    const result = applyRedirectCategoryTemplateEdits('{{See also|削除|残る}}\n本文', [{ templateType: 'unlinkPage', from: '削除' }]);
+    assert.equal(result, '{{See also|残る}}\n本文');
+  });
+});

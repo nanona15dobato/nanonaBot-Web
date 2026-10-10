@@ -5,6 +5,7 @@ const router = express.Router();
 
 const { requireRole } = require('../middleware/auth');
 const { pool } = require('../db');
+const { notify } = require('../services/notify');
 
 // 素のHTMLフォーム送信（フェーズ1のダッシュボード）とJSON API呼び出し
 // （フェーズ3以降のOOUIフロントエンド）の両方に対応するため、
@@ -35,6 +36,8 @@ router.post('/api/emergency-stop', requireRole('owner', 'admin_emergency_only'),
       [req.session.username]
     );
     console.warn(`[EMERGENCY STOP] triggered by ${req.session.username}`);
+    // 通知の完了を待たずに応答する（通知の失敗・遅延で緊急停止の操作を妨げない）
+    notify({ event: 'emergency_stop', title: `緊急停止が実行されました（${req.session.username}）`, path: '/' });
     respondOkOrRedirect(req, res, { ok: true });
   } catch (err) {
     next(err);
@@ -48,6 +51,7 @@ router.post('/api/emergency-stop/clear', requireRole('owner'), async (req, res, 
       'UPDATE system_status SET emergency_stopped = 0, emergency_stopped_by = NULL, emergency_stopped_at = NULL WHERE id = 1'
     );
     console.warn(`[EMERGENCY STOP CLEARED] by ${req.session.username}`);
+    notify({ event: 'emergency_clear', title: `緊急停止が解除されました（${req.session.username}）`, path: '/' });
     respondOkOrRedirect(req, res, { ok: true });
   } catch (err) {
     next(err);

@@ -68,3 +68,41 @@ test('collectCategoryWarnings: 存在しないページはスキップする', a
     global.fetch = originalFetch;
   }
 });
+
+test('scanCategoryBacklinks: キャッシュを渡すと警告収集とウェーブ3の対象確認で本文取得を共有する', async () => {
+  const { findCandidatePages } = require('../src/worker/redirectCategoryTemplate');
+  const originalFetch = global.fetch;
+  let backlinkRequests = 0;
+  global.fetch = async () => {
+    backlinkRequests++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ query: { backlinks: [{ title: '一致', ns: 0 }, { title: '緩い一致', ns: 0 }] } }),
+    };
+  };
+  const fetchedPages = [];
+  const mwClient = {
+    getPage: async (title) => {
+      fetchedPages.push(title);
+      return {
+        exists: true,
+        wikitext:
+          title === '一致'
+            ? '{{リダイレクトの所属カテゴリ|redirect1=X|1-1=旧}}'
+            : '<!-- {{リダイレクトの所属カテゴリ}} -->旧',
+      };
+    },
+  };
+  try {
+    const cache = new Map();
+    const warnings = await collectCategoryWarnings({ from: '旧', mwClient, cache });
+    const matches = await findCandidatePages({ category: '旧', mwClient, cache });
+    assert.deepEqual(warnings.map((w) => w.pageTitle), ['緩い一致']);
+    assert.deepEqual(matches, [{ title: '一致', namespace: 0 }]);
+    assert.equal(backlinkRequests, 1);
+    assert.deepEqual(fetchedPages, ['一致', '緩い一致']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

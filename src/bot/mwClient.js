@@ -207,6 +207,34 @@ class MediaWikiBotClient {
   }
 
   /**
+   * 複数ページをまとめて purge し、forcelinkupdate でリンク表・カテゴリ所属を再計算させる（フェーズ9）。
+   * null editと同じ目的で使える一括版。版は作成されない。titlesは最大50件ずつ渡すこと。
+   * @param {string[]} titles
+   * @returns {Promise<{purged: string[], failed: string[]}>}
+   */
+  async purgeWithLinkUpdate(titles) {
+    return this.withSessionRetry(async () => {
+      const res = await this.request(
+        {
+          action: 'purge',
+          titles: titles.join('|'),
+          forcelinkupdate: '1',
+          assert: 'user',
+          maxlag: String(EDIT_MAXLAG_SECONDS),
+        },
+        'POST'
+      );
+      const purged = [];
+      const failed = [];
+      for (const entry of res.purge || []) {
+        if (entry.purged) purged.push(entry.title);
+        else failed.push(entry.title);
+      }
+      return { purged, failed };
+    });
+  }
+
+  /**
    * null edit（本文を変えない編集）を行い、ページのリンク表・カテゴリ所属を再計算させる。
    * テンプレートを編集した直後、そのテンプレートを使っているページのカテゴリ所属を
    * ジョブキューの処理を待たずに更新するために使う。版は作成されない。
