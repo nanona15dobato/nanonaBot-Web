@@ -144,7 +144,7 @@
         task.stage_count === 3
           ? 'Category系ルールを含むため3ウェーブ構成です（現在ウェーブ' + task.current_stage + '/3）。' +
             'ウェーブ1=Template名前空間（編集後に使用ページをnull edit）、ウェーブ2=その他のカテゴリメンバー（取り直し）、' +
-            'ウェーブ3=カテゴリのリンク元（Template:リダイレクトの所属カテゴリ等）。'
+            'ウェーブ3=標準名前空間のうちカテゴリ名の記述があるページ（Template:リダイレクトの所属カテゴリ等）。'
           : 'リンク置換系ルールを含むため2ウェーブ構成です（現在ウェーブ' + task.current_stage + '/2）。' +
             'ウェーブ1=Template名前空間、ウェーブ2=その他ページ（ウェーブ1完了後に再取得）。';
       $summarySection.append($('<p>').css('color', '#54595d').text(description));

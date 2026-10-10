@@ -199,3 +199,23 @@ test('linkRenameSteps: スペースとアンダースコアの表記ゆれにも
   const out = applyReplacementSteps('[[Foo_bar]] と [[foo bar|表示]] と [[Foo  bar#節]]', steps);
   assert.equal(out, '[[Baz qux]] と [[Baz qux|表示]] と [[Baz qux#節]]');
 });
+
+test('categoryTextSteps: 「Category:旧」の記述を置換し、別カテゴリ名の一部は変えない', () => {
+  const steps = presets.categoryTextSteps('日本の橋', '日本の橋梁');
+  const cases = [
+    ['[[:Category:日本の橋]]', '[[:Category:日本の橋梁]]'],
+    ['|cat=Category:日本の橋}}', '|cat=Category:日本の橋梁}}'],
+    ['カテゴリ:日本の橋|表示', 'カテゴリ:日本の橋梁|表示'],
+    ['Category:日本の橋。', 'Category:日本の橋梁。'],
+    ['Category:日本の橋 を参照', 'Category:日本の橋梁 を参照'],
+    ['Category:日本の橋梁', 'Category:日本の橋梁'], // 既に新名・別カテゴリの一部
+    ['SubCategory:日本の橋]]', 'SubCategory:日本の橋]]'],
+    ['<nowiki>Category:日本の橋</nowiki>', '<nowiki>Category:日本の橋</nowiki>'],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(applyReplacementSteps(input, steps), expected, input);
+  }
+  const latin = presets.categoryTextSteps('Foo', 'Baz');
+  assert.equal(applyReplacementSteps('Category:Foo bar', latin), 'Category:Foo bar');
+  assert.equal(applyReplacementSteps('Category:foo#x', latin), 'Category:Baz#x');
+});
