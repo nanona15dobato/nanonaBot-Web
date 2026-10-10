@@ -19,9 +19,16 @@ const baseUrl = process.env.TOOL_BASE_URL || `http://localhost:${port}`;
 const config = {
   server: { port, baseUrl },
 
+  // OAuth・セッション秘密鍵はWebサーバーでしか使わないため、参照時に検証する
+  // （ワーカーやテストがこれらの環境変数なしでも config を読み込めるようにするため）。
+  // Webサーバーは起動時に assertWebEnv() を呼んで早期に失敗させる。
   oauth: {
-    clientId: requireEnv('OAUTH_CLIENT_ID'),
-    clientSecret: requireEnv('OAUTH_CLIENT_SECRET'),
+    get clientId() {
+      return requireEnv('OAUTH_CLIENT_ID');
+    },
+    get clientSecret() {
+      return requireEnv('OAUTH_CLIENT_SECRET');
+    },
     callbackUrl: process.env.OAUTH_CALLBACK_URL || `${baseUrl}/oauth/callback`,
     wikiHost: process.env.OAUTH_WIKI_HOST || 'meta.wikimedia.org',
   },
@@ -47,7 +54,9 @@ const config = {
   },
 
   session: {
-    secret: requireEnv('SESSION_SECRET'),
+    get secret() {
+      return requireEnv('SESSION_SECRET');
+    },
   },
 
   db: {
@@ -66,5 +75,14 @@ const config = {
     process.env.WIKI_USER_AGENT ||
     'NanonaBotTool/0.1 (Toolforge; https://ja.wikipedia.org/wiki/User:Nanona15dobato)',
 };
+
+/** Webサーバー起動時に必須の環境変数がそろっているか検証する（未設定なら例外）。 */
+function assertWebEnv() {
+  requireEnv('OAUTH_CLIENT_ID');
+  requireEnv('OAUTH_CLIENT_SECRET');
+  requireEnv('SESSION_SECRET');
+}
+
+Object.defineProperty(config, 'assertWebEnv', { value: assertWebEnv, enumerable: false });
 
 module.exports = config;

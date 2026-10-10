@@ -54,6 +54,9 @@ router.get('/oauth/callback', async (req, res) => {
       groups,
     });
 
+    // ログイン前のセッションIDを使い回さない（セッション固定攻撃対策）。
+    await new Promise((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
+
     // フェーズ1ではOAuthアクセストークン自体はセッションに保存しない。
     // 編集操作は各BotアカウントのBotPassword（.env/envvars）で行う設計であり
     // （仕様書2章「認証は2系統に分離する」）、操作者自身のトークンを保持し続ける
@@ -62,7 +65,7 @@ router.get('/oauth/callback', async (req, res) => {
     req.session.role = role;
 
     if (role === 'denied') {
-      return res.status(403).send(`${username} さんはこのツールの利用権限がありません。`);
+      return res.status(403).send(`${escapeHtml(username)} さんはこのツールの利用権限がありません。`);
     }
     res.redirect('/');
   } catch (err) {

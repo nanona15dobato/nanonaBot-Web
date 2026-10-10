@@ -71,7 +71,7 @@ async function prepareOnePage(row, ctx) {
        WHERE id = ?`,
       [page.revid, new Date(page.baseTimestamp), page.wikitext, newWikitext, row.id]
     );
-    return { status: 'prepared', row, page, newWikitext, preparedAt: new Date() };
+    return { status: 'prepared', row, page, newWikitext };
   } catch (err) {
     const msg = String((err && err.message) || err);
     await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [msg, row.id]);
@@ -87,9 +87,12 @@ async function prepareOnePage(row, ctx) {
  *
  * @returns {Promise<boolean>} 承認されたらtrue、却下/期限切れ/緊急停止ならfalse
  */
-async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
-  await pool.query(`UPDATE task_pages SET status = 'awaiting_review' WHERE id = ?`, [pageId]);
-  const approvalStartedAt = Date.now();
+async function waitForApproval({ taskId, pageId, reviewSettings }) {
+  // 先読みで準備されたページは前のページの確認中に準備済みになっているため、
+  // 自動承認の待機時間は「確認待ちになった時点」から数える。画面側のカウントダウンも
+  // prepared_at を起点にしているので、ここで確認待ち開始時刻に揃える。
+  const reviewStartedAt = Date.now();
+  await pool.query(`UPDATE task_pages SET status = 'awaiting_review', prepared_at = NOW() WHERE id = ?`, [pageId]);
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -114,8 +117,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
     };
     if (currentSettings.mode === 'auto') {
       const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
-      const preparedTime = preparedAt ? new Date(preparedAt).getTime() : approvalStartedAt;
-      if (Date.now() >= preparedTime + autoWaitSeconds * 1000) {
+      if (Date.now() >= reviewStartedAt + autoWaitSeconds * 1000) {
         const [result] = await pool.query(
           `UPDATE task_pages SET status = 'approved', reviewed_at = NOW()
            WHERE id = ? AND status = 'awaiting_review'`,
@@ -126,7 +128,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings, preparedAt }) {
     }
 
     if (task.review_timeout_at && new Date(task.review_timeout_at).getTime() < Date.now()) {
-      await pool.query(`UPDATE tasks SET status = 'expired' WHERE id = ?`, [taskId]);
+      await pool.query(`UPDATE tasks SET status = 'expired', updated_at = NOW() WHERE id = ?`, [taskId]);
       return false;
     }
 
@@ -199,106 +201,138 @@ async function editOnePage(prepared, ctx) {
  * @param {'pause'|'skipAndContinue'} ctx.onFailure
  * @returns {Promise<{completed:boolean, paused?:boolean, emergencyStopped?:boolean, expired?:boolean, cancelled?:boolean, hadFailures:boolean}>}
  */
+/**
+ * 前回の実行が途中で止まった（一時停止・緊急停止・期限切れ・ワーカー再起動）際に
+ * 処理途中の状態で残ったページを、再開時に処理し直せる状態へ戻す。
+ * runStagePipelineはpendingのページだけを処理するため、これをしないと
+ * 先読み済み・確認待ちだったページが永久に処理されないまま残ってしまう。
+ * 編集API呼び出し中に止まったページ（editing）は実際に編集されたか分からないため、
+ * 二重編集を避けて失敗扱いにし、edit_log/再試行で確認できるようにする。
+ */
+async function resetInterruptedPages(ctx) {
+  await pool.query(
+    `UPDATE task_pages SET status = 'pending'
+     WHERE task_id = ? AND stage = ? AND status IN ('preparing', 'prepared', 'awaiting_review', 'approved')`,
+    [ctx.taskId, ctx.stage]
+  );
+  await pool.query(
+    `UPDATE task_pages SET status = 'failed', error_message = ?
+     WHERE task_id = ? AND stage = ? AND status = 'editing'`,
+    ['編集中に処理が中断されたため、編集結果を確認できませんでした（ページ履歴を確認してください）', ctx.taskId, ctx.stage]
+  );
+}
+
+/** 進捗は処理が確定したページ数から求める（再開を挟んでも数え漏れ・二重計上が起きないように）。 */
+async function updateProgress(taskId) {
+  await pool.query(
+    `UPDATE tasks SET progress_current = (
+       SELECT COUNT(*) FROM task_pages
+       WHERE task_id = ? AND status IN ('edited', 'skipped', 'failed', 'rejected')
+     ), updated_at = NOW() WHERE id = ?`,
+    [taskId, taskId]
+  );
+}
+
 async function runStagePipeline(ctx) {
+  await resetInterruptedPages(ctx);
+
   const [rows] = await pool.query(
     `SELECT * FROM task_pages WHERE task_id = ? AND stage = ? AND status = 'pending' ORDER BY order_index ASC`,
     [ctx.taskId, ctx.stage]
   );
   if (rows.length === 0) return { completed: true, hadFailures: false };
 
-  let hadFailures = false;
-
   if (await isEmergencyStopped()) {
-    return { completed: false, emergencyStopped: true, hadFailures };
+    return { completed: false, emergencyStopped: true, hadFailures: false };
   }
 
+  let hadFailures = false;
   let current = await prepareOnePage(rows[0], ctx);
   let nextPromise = rows[1] ? prepareOnePage(rows[1], ctx) : null;
 
-  for (let i = 0; i < rows.length; i++) {
-    if (await isEmergencyStopped()) {
-      return { completed: false, emergencyStopped: true, hadFailures };
-    }
-    const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
-    if (!taskRows[0] || taskRows[0].status === 'cancelled') {
-      return { completed: false, cancelled: true, hadFailures };
-    }
-
-    if (current.status === 'failed') {
-      hadFailures = true;
-      if (ctx.onFailure === 'pause') {
-        if (nextPromise) await nextPromise;
-        await pool.query(
-          `UPDATE task_pages SET status = 'pending'
-           WHERE task_id = ? AND stage = ? AND status IN ('preparing', 'prepared')`,
-          [ctx.taskId, ctx.stage]
-        );
-        await pool.query(`UPDATE tasks SET status = 'paused' WHERE id = ?`, [ctx.taskId]);
-        return { completed: false, paused: true, hadFailures };
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      if (await isEmergencyStopped()) {
+        return { completed: false, emergencyStopped: true, hadFailures };
       }
-      // skipAndContinue: 何もせず次へ
-    } else if (current.status === 'prepared') {
-      const approved = await waitForApproval({
-        taskId: ctx.taskId,
-        pageId: current.row.id,
-        reviewSettings: ctx.reviewSettings,
-        preparedAt: current.preparedAt || current.row.prepared_at,
-      });
-
-      // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
       const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
-      const taskStatus = taskRows[0] && taskRows[0].status;
-      if (['expired', 'emergency_stopped', 'cancelled'].includes(taskStatus)) {
-        return {
-          completed: false,
-          expired: taskStatus === 'expired',
-          emergencyStopped: taskStatus === 'emergency_stopped',
-          cancelled: taskStatus === 'cancelled',
-          hadFailures,
-        };
+      if (!taskRows[0] || taskRows[0].status === 'cancelled') {
+        return { completed: false, cancelled: true, hadFailures };
       }
 
-      if (!approved) {
-        await pool.query(`UPDATE task_pages SET status = 'rejected', reviewed_at = NOW() WHERE id = ? AND status != 'rejected'`, [
-          current.row.id,
-        ]);
-      } else {
+      if (current.status === 'failed') {
+        hadFailures = true;
+        if (ctx.onFailure === 'pause') {
+          await pauseTask(ctx.taskId);
+          return { completed: false, paused: true, hadFailures };
+        }
+        // skipAndContinue: 何もせず次へ
+      } else if (current.status === 'prepared') {
+        const approved = await waitForApproval({
+          taskId: ctx.taskId,
+          pageId: current.row.id,
+          reviewSettings: ctx.reviewSettings,
+        });
+
+        // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
+        const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
+        const taskStatus = taskRows[0] && taskRows[0].status;
+        if (['expired', 'emergency_stopped', 'cancelled'].includes(taskStatus)) {
+          return {
+            completed: false,
+            expired: taskStatus === 'expired',
+            emergencyStopped: taskStatus === 'emergency_stopped',
+            cancelled: taskStatus === 'cancelled',
+            hadFailures,
+          };
+        }
+        // 確認待ちの間に緊急停止された場合、そのページは却下ではなく未処理のまま残す
+        // （再開時にpendingへ戻して改めて確認できるようにする）
         if (await isEmergencyStopped()) {
           return { completed: false, emergencyStopped: true, hadFailures };
         }
-        const editResult = await editOnePage(current, ctx);
-        if (!editResult.ok) {
-          hadFailures = true;
-          if (ctx.onFailure === 'pause') {
-            if (nextPromise) await nextPromise;
-            await pool.query(
-              `UPDATE task_pages SET status = 'pending'
-               WHERE task_id = ? AND stage = ? AND status IN ('preparing', 'prepared')`,
-              [ctx.taskId, ctx.stage]
-            );
-            await pool.query(`UPDATE tasks SET status = 'paused' WHERE id = ?`, [ctx.taskId]);
-            return { completed: false, paused: true, hadFailures };
+
+        if (!approved) {
+          await pool.query(
+            `UPDATE task_pages SET status = 'rejected', reviewed_at = NOW() WHERE id = ? AND status != 'rejected'`,
+            [current.row.id]
+          );
+        } else {
+          const editResult = await editOnePage(current, ctx);
+          if (!editResult.ok) {
+            hadFailures = true;
+            if (ctx.onFailure === 'pause') {
+              await pauseTask(ctx.taskId);
+              return { completed: false, paused: true, hadFailures };
+            }
+          }
+          if (i < rows.length - 1) {
+            await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
           }
         }
-        if (i < rows.length - 1) {
-          await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
-        }
+      }
+      // status === 'skipped' の場合は何もせず次へ
+
+      await updateProgress(ctx.taskId);
+
+      if (nextPromise) {
+        current = await nextPromise;
+        const after = rows[i + 2];
+        nextPromise = after ? prepareOnePage(after, ctx) : null;
       }
     }
-    // status === 'skipped' の場合は何もせず次へ
-
-    await pool.query(`UPDATE tasks SET progress_current = progress_current + 1, updated_at = NOW() WHERE id = ?`, [
-      ctx.taskId,
-    ]);
-
-    if (nextPromise) {
-      current = await nextPromise;
-      const after = rows[i + 2];
-      nextPromise = after ? prepareOnePage(after, ctx) : null;
-    }
+  } finally {
+    // 途中で抜けた場合も、裏で走っている先読みの完了を待ってから戻る
+    // （放置するとワーカーの次の処理と並行してDBを書き換えてしまうため）。
+    if (nextPromise) await nextPromise.catch(() => {});
   }
 
   return { completed: true, hadFailures };
+}
+
+async function pauseTask(taskId) {
+  await updateProgress(taskId);
+  await pool.query(`UPDATE tasks SET status = 'paused', updated_at = NOW() WHERE id = ?`, [taskId]);
 }
 
 module.exports = { runStagePipeline, prepareOnePage, waitForApproval, editOnePage, applyRedirectCategoryTemplateEdits };

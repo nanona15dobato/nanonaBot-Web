@@ -15,8 +15,33 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * 常に「queuedの先頭を1件claimして完了までしっかり処理」を繰り返す
  * （並行実行はしない。仕様書1章）。
  */
+/**
+ * ワーカーが処理中に再起動（デプロイ・ジョブ再起動・クラッシュ）すると、
+ * タスクが running のまま残り二度と取り出されなくなる。ワーカーは常に1つだけ動かす
+ * 前提（仕様書1章）なので、起動時点で running のものは前回の実行の取り残しとして
+ * キューに戻す（途中だったページはpipeline側で再処理できる状態に戻される）。
+ */
+async function requeueInterruptedTasks() {
+  const [rows] = await pool.query(`SELECT id FROM tasks WHERE status = 'running'`);
+  for (const { id } of rows) {
+    await pool.query(`UPDATE tasks SET status = 'queued', updated_at = NOW() WHERE id = ? AND status = 'running'`, [id]);
+    await writeTaskLogSafely({
+      taskId: id,
+      level: 'warning',
+      message: 'ワーカーの再起動により中断されていたため、キューに戻しました。',
+    });
+    console.warn(`[worker] 中断されていたタスク ${id} をキューに戻しました`);
+  }
+}
+
 async function mainLoop() {
   console.log(`NanonaBot Tool worker starting (poll interval ${POLL_INTERVAL_MS}ms)`);
+
+  try {
+    await requeueInterruptedTasks();
+  } catch (err) {
+    console.error('[worker] 中断タスクの復旧に失敗しました:', err);
+  }
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -43,7 +68,10 @@ async function mainLoop() {
           level: 'error',
           message: `予期しないエラーによりタスクを終了しました: ${String((err && err.message) || err)}`,
         });
-        await pool.query(`UPDATE tasks SET status = 'failed', updated_at = NOW() WHERE id = ?`, [task.id]);
+        // 処理中に中止された場合はcancelledのまま残す
+        await pool.query(`UPDATE tasks SET status = 'failed', updated_at = NOW() WHERE id = ? AND status = 'running'`, [
+          task.id,
+        ]);
       }
     } catch (outerErr) {
       // DB接続断など、タスク単位より外側のエラー。ループ自体は止めない。

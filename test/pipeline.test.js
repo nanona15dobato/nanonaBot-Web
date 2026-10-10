@@ -26,6 +26,7 @@ function createFakeDb() {
   let nextPageId = 1;
   const editLogRows = [];
   const calls = [];
+  const state = { emergencyStopped: false };
 
   function seedTask(task) {
     tasks.set(task.id, { ...task });
@@ -42,7 +43,7 @@ function createFakeDb() {
     const s = sql.replace(/\s+/g, ' ').trim();
 
     if (s.startsWith('SELECT emergency_stopped FROM system_status')) {
-      return [[{ emergency_stopped: false }]];
+      return [[{ emergency_stopped: state.emergencyStopped }]];
     }
 
     if (s.startsWith('SELECT * FROM task_pages WHERE task_id')) {
@@ -53,14 +54,31 @@ function createFakeDb() {
       return [rows];
     }
 
-    if (s.includes("SET status = 'pending'") && s.includes('WHERE task_id = ?')) {
-      for (const page of taskPages.values()) {
-        if (page.task_id === params[0] && page.stage === params[1] && ['preparing', 'prepared'].includes(page.status)) {
-          page.status = 'pending';
+    // 中断ページの復旧（resetInterruptedPages）: task_id/stage単位の一括更新
+    if (s.startsWith("UPDATE task_pages SET status = 'pending' WHERE task_id")) {
+      const [taskId, stage] = params;
+      let affectedRows = 0;
+      for (const p of taskPages.values()) {
+        if (p.task_id === taskId && p.stage === stage && ['preparing', 'prepared', 'awaiting_review', 'approved'].includes(p.status)) {
+          p.status = 'pending';
+          affectedRows++;
         }
       }
-      return [{ affectedRows: 1 }];
+      return [{ affectedRows }];
     }
+    if (s.startsWith("UPDATE task_pages SET status = 'failed', error_message = ? WHERE task_id")) {
+      const [message, taskId, stage] = params;
+      let affectedRows = 0;
+      for (const p of taskPages.values()) {
+        if (p.task_id === taskId && p.stage === stage && p.status === 'editing') {
+          p.status = 'failed';
+          p.error_message = message;
+          affectedRows++;
+        }
+      }
+      return [{ affectedRows }];
+    }
+
     if (s.startsWith('UPDATE task_pages SET status = ?') === false && s.startsWith('UPDATE task_pages SET status')) {
       // 各種 UPDATE task_pages SET status = '...' ... WHERE id = ?
       const idParam = params[params.length - 1];
@@ -80,6 +98,7 @@ function createFakeDb() {
         row.error_message = params[0];
       } else if (s.includes("status = 'awaiting_review'")) {
         row.status = 'awaiting_review';
+        row.prepared_at = new Date();
       } else if (s.includes("status = 'approved'")) {
         row.status = 'approved';
       } else if (s.includes("status = 'rejected'")) {
@@ -116,8 +135,11 @@ function createFakeDb() {
       return [{ affectedRows: 1 }];
     }
     if (s.startsWith('UPDATE tasks SET progress_current')) {
-      const t = tasks.get(params[0]);
-      t.progress_current = (t.progress_current || 0) + 1;
+      const [taskId] = params;
+      const t = tasks.get(taskId);
+      t.progress_current = [...taskPages.values()].filter(
+        (p) => p.task_id === taskId && ['edited', 'skipped', 'failed', 'rejected'].includes(p.status)
+      ).length;
       return [{ affectedRows: 1 }];
     }
 
@@ -140,7 +162,7 @@ function createFakeDb() {
     }),
   };
 
-  return { pool, seedTask, seedPages, taskPages, tasks, editLogRows, calls };
+  return { pool, seedTask, seedPages, taskPages, tasks, editLogRows, calls, state };
 }
 
 function withStubbedDb(fakePool, fn) {
@@ -416,4 +438,93 @@ test('prepareOnePage: categoryRenameで[[Category:X]]タグと{{リダイレク�
     assert.match(result.newWikitext, /\[\[Category:新カテゴリ\]\]/);
     assert.match(result.newWikitext, /\|1-1=新カテゴリ/);
   });
+});
+
+test('runStagePipeline: 前回中断時に準備済み・確認待ちだったページは再開時に処理し直す', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 4, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([
+    { task_id: 4, stage: 1, order_index: 0, page_title: '編集済み', namespace: 0, matched_rule_indices: '[0]', status: 'edited' },
+    { task_id: 4, stage: 1, order_index: 1, page_title: '確認待ちで中断', namespace: 0, matched_rule_indices: '[0]', status: 'awaiting_review' },
+    { task_id: 4, stage: 1, order_index: 2, page_title: '先読み済みで中断', namespace: 0, matched_rule_indices: '[0]', status: 'prepared' },
+    { task_id: 4, stage: 1, order_index: 3, page_title: '編集中に中断', namespace: 0, matched_rule_indices: '[0]', status: 'editing' },
+  ]);
+
+  const editedTitles = [];
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:00:01Z', wikitext: '旧' };
+    },
+    async edit({ title }) {
+      editedTitles.push(title);
+      return { revid: 2, newTimestamp: '2026-08-11T09:00:05Z' };
+    },
+  };
+
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    const result = await runStagePipeline({
+      taskId: 4,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'skipAndContinue',
+    });
+    assert.equal(result.completed, true);
+  });
+
+  // 編集中に中断したページは二重編集を避けて失敗扱いにし、再編集しない
+  assert.deepEqual(editedTitles, ['確認待ちで中断', '先読み済みで中断']);
+  assert.deepEqual(
+    [...db.taskPages.values()].map((p) => [p.page_title, p.status]),
+    [
+      ['編集済み', 'edited'],
+      ['確認待ちで中断', 'edited'],
+      ['先読み済みで中断', 'edited'],
+      ['編集中に中断', 'failed'],
+    ]
+  );
+  // 進捗は確定済みページ数から算出される
+  assert.equal(db.tasks.get(4).progress_current, 4);
+});
+
+test('runStagePipeline: 確認待ちの間に緊急停止されたページは却下扱いにしない', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 5, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'manual' });
+  db.seedPages([
+    { task_id: 5, stage: 1, order_index: 0, page_title: '確認中', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+  ]);
+
+  const mwClient = {
+    async getPage(title) {
+      // 準備が終わった直後に緊急停止されたことにする
+      setTimeout(() => {
+        db.state.emergencyStopped = true;
+      }, 0);
+      return { title, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:00:01Z', wikitext: '旧' };
+    },
+    async edit() {
+      throw new Error('緊急停止中は編集されません');
+    },
+  };
+
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    const result = await runStagePipeline({
+      taskId: 5,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'manual', manualTimeoutHours: 72 },
+      onFailure: 'pause',
+    });
+    assert.equal(result.emergencyStopped, true);
+  });
+
+  assert.notEqual([...db.taskPages.values()][0].status, 'rejected');
 });

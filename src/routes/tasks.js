@@ -21,15 +21,15 @@ router.get('/api/whoami', (req, res) => {
 // タスク作成はowner（Nanona15dobato）のみ（仕様書2章）
 router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
   try {
-    const config = req.body;
-    const { valid, errors } = validateTaskConfig(config);
+    const taskConfig = req.body;
+    const { valid, errors } = validateTaskConfig(taskConfig);
     if (!valid) {
       return res.status(400).json({ error: 'invalid_config', errors });
     }
     const [result] = await pool.query(
       `INSERT INTO tasks (created_by, account, mode, status, config_json)
        VALUES (?, ?, ?, 'queued', ?)`,
-      [req.session.username, config.account, config.reviewSettings.mode, toJsonColumn(config)]
+      [req.session.username, taskConfig.account, taskConfig.reviewSettings.mode, toJsonColumn(taskConfig)]
     );
     res.status(201).json({ id: result.insertId });
   } catch (err) {
@@ -80,7 +80,7 @@ router.get('/api/tasks/:id/pages', requireRole('owner'), async (req, res, next) 
 // タスク実行ログ。編集結果だけでなく、対象取得・ウェーブ遷移・停止理由をWeb上で確認できる。
 router.get('/api/tasks/:id/logs', requireRole('owner'), async (req, res, next) => {
   try {
-    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const limit = Math.min(Math.max(Math.floor(Number(req.query.limit)) || 100, 1), 500);
     const [rows] = await pool.query(
       `SELECT id, stage, page_title, level, message, created_at
        FROM task_logs WHERE task_id = ? ORDER BY id DESC LIMIT ?`,
@@ -226,16 +226,23 @@ router.post('/api/tasks/:id/cancel', requireRole('owner'), async (req, res, next
   }
 });
 
-// onFailure="pause" で止まったタスクの再開（9.3節）。
-// task_pagesは既に列挙済みなので、taskRunner側は残りのpendingだけを処理する。
+// onFailure="pause" で止まったタスク・緊急停止で中断したタスク・期限切れのタスクの再開（9.3節）。
+// task_pagesは既に列挙済みなので、taskRunner側は残りのpendingだけを処理する
+// （中断時に準備中・確認待ちだったページはpipeline側でpendingに戻してから再処理する）。
+// 期限切れからの再開ではタイムアウトを取り直すため review_timeout_at をクリアする。
 router.post('/api/tasks/:id/resume', requireRole('owner'), async (req, res, next) => {
   try {
-    const [result] = await pool.query(`UPDATE tasks SET status = 'queued' WHERE id = ? AND status = 'paused'`, [
+    const [result] = await pool.query(
+      `UPDATE tasks SET status = 'queued', review_timeout_at = NULL, updated_at = NOW()
+       WHERE id = ? AND status IN ('paused', 'emergency_stopped', 'expired')`,
+      [req.params.id]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ error: 'not_resumable', message: 'このタスクは再開できる状態ではありません' });
+    }
+    await pool.query(`INSERT INTO task_logs (task_id, level, message) VALUES (?, 'info', 'タスクの再開が要求されました。')`, [
       req.params.id,
     ]);
-    if (result.affectedRows === 0) {
-      return res.status(409).json({ error: 'not_paused' });
-    }
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -251,11 +258,14 @@ router.post('/api/tasks/:id/retry-failed', requireRole('owner'), async (req, res
     const originalTask = taskRows[0];
     if (!originalTask) return res.status(404).json({ error: 'not_found' });
 
+    // 編集段階の失敗はedit_logに、準備段階の失敗（本文取得エラー等）はtask_pagesにだけ残るため両方を見る
     const [failedRows] = await pool.query(
-      `SELECT DISTINCT page_title FROM edit_log WHERE task_id = ? AND status = 'failed'`,
-      [req.params.id]
+      `SELECT page_title FROM edit_log WHERE task_id = ? AND status = 'failed'
+       UNION
+       SELECT page_title FROM task_pages WHERE task_id = ? AND status = 'failed'`,
+      [req.params.id, req.params.id]
     );
-    const failedTitles = failedRows.map((r) => r.page_title);
+    const failedTitles = [...new Set(failedRows.map((r) => r.page_title))];
     if (failedTitles.length === 0) {
       return res.status(409).json({ error: 'no_failed_pages', message: 'このタスクに失敗ページはありません' });
     }
@@ -281,19 +291,24 @@ router.get('/api/edit-log', requireRole('owner'), async (req, res, next) => {
     const conditions = [];
     const params = [];
     if (req.query.task_id) {
+      const taskId = Number(req.query.task_id);
+      if (!Number.isInteger(taskId) || taskId <= 0) {
+        return res.status(400).json({ error: 'invalid_task_id', message: 'タスクIDは正の整数で指定してください' });
+      }
       conditions.push('task_id = ?');
-      params.push(Number(req.query.task_id));
+      params.push(taskId);
     }
     if (req.query.page_title) {
       conditions.push('page_title LIKE ?');
-      params.push(`%${req.query.page_title}%`);
+      // ページ名に含まれる % や _ をワイルドカードとして解釈させない
+      params.push(`%${String(req.query.page_title).replace(/[\\%_]/g, '\\$&')}%`);
     }
     if (req.query.status && ['edited', 'failed'].includes(req.query.status)) {
       conditions.push('status = ?');
       params.push(req.query.status);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const limit = Math.min(Math.max(Math.floor(Number(req.query.limit)) || 50, 1), 200);
 
     const [rows] = await pool.query(`SELECT * FROM edit_log ${where} ORDER BY id DESC LIMIT ?`, [...params, limit]);
 

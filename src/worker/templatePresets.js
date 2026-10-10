@@ -24,12 +24,14 @@ function escapeReplacementDollar(str) {
  * 大文字小文字を区別しない。2文字目以降は区別する）に合わせた正規表現パターンを作る。
  * 単純に正規表現全体へ 'i' フラグを付けると、無関係な別ページ（例: "MyTemplate" と
  * "mytemplate"）まで誤って一致してしまうため、先頭文字だけを文字クラス化する。
+ * また、タイトル中の半角スペースとアンダースコアはMediaWiki上で同一視される
+ * （[[Foo bar]] と [[Foo_bar]] は同じページへのリンク）ため、どちらの表記にも一致させる。
  */
 function firstLetterFlexiblePattern(name) {
   const str = String(name);
   if (str.length === 0) return '';
   const first = str[0];
-  const rest = escapeRegExp(str.slice(1));
+  const rest = escapeRegExp(str.slice(1)).replace(/[ _]+/g, '[ _]+');
   const upper = first.toUpperCase();
   const lower = first.toLowerCase();
   if (upper === lower) {

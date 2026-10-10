@@ -198,3 +198,17 @@ test('resolveRuleTargetsForStage: mwClientが無い場合はリダイレクト�
     global.fetch = originalFetch;
   }
 });
+
+test('materializeReplacements: Category:/Template:プレフィックス付きのfrom/toは除いてからstepsを作る', () => {
+  const [cat, tmpl] = materializeReplacements([
+    { templateType: 'categoryRename', from: 'Category:日本の橋', to: ' カテゴリ:日本の橋梁 ' },
+    { templateType: 'templateRename', from: 'Template:旧', to: 'Template:新' },
+  ]);
+  assert.equal(cat.from, '日本の橋');
+  assert.equal(cat.to, '日本の橋梁');
+  assert.equal(tmpl.from, '旧');
+  assert.equal(tmpl.to, '新');
+  const { applyReplacementSteps } = require('../src/worker/regexEngine');
+  assert.equal(applyReplacementSteps('[[Category:日本の橋]]', cat.steps), '[[Category:日本の橋梁]]');
+  assert.equal(applyReplacementSteps('{{旧|a}}', tmpl.steps), '{{新|a}}');
+});
