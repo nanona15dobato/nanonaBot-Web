@@ -6,15 +6,35 @@
  *
  * @param {object} params
  * @param {string} params.username - OAuthで取得したユーザー名
- * @param {string} params.ownerUsername - フル操作権限を持つユーザー名（通常 "Nanona15dobato"）
+ * @param {string} [params.ownerUsername] - 後方互換用のオーナー名
+ * @param {string[]} [params.ownerUsernames] - フル操作権限を持つユーザー名一覧
+ * @param {string[]} [params.emergencyStopUsernames] - 緊急停止だけ許可するユーザー名一覧
  * @param {string[]} params.groups - ユーザーの所属グループ一覧（MediaWiki API由来）
  * @returns {'owner'|'admin_emergency_only'|'denied'}
  */
-function determineRole({ username, ownerUsername, groups }) {
+function determineRole({ username, ownerUsername, ownerUsernames, emergencyStopUsernames, groups }) {
   if (!username) return 'denied';
-  if (username === ownerUsername) return 'owner';
-  if (Array.isArray(groups) && groups.includes('sysop')) return 'admin_emergency_only';
+  const normalizedUsername = normalizeUsername(username);
+  const owners = Array.isArray(ownerUsernames) ? ownerUsernames : [ownerUsername];
+  if (owners.some((owner) => normalizeUsername(owner) === normalizedUsername)) return 'owner';
+  if (
+    (Array.isArray(emergencyStopUsernames) &&
+      emergencyStopUsernames.some((user) => normalizeUsername(user) === normalizedUsername)) ||
+    (Array.isArray(groups) && (groups.includes('sysop') || groups.includes('extendedconfirmed')))
+  ) {
+    return 'admin_emergency_only';
+  }
   return 'denied';
+}
+
+/**
+ * MediaWikiのユーザー名正規化（先頭ASCII文字の大文字化）に合わせる。
+ * 日本語などASCII以外の文字は変更しない。
+ * @param {string} username
+ */
+function normalizeUsername(username) {
+  const value = String(username || '').trim();
+  return value && /^[a-z]/i.test(value) ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 /**
@@ -26,4 +46,4 @@ function roleAllowed(role, allowedRoles) {
   return typeof role === 'string' && allowedRoles.includes(role);
 }
 
-module.exports = { determineRole, roleAllowed };
+module.exports = { determineRole, roleAllowed, normalizeUsername };

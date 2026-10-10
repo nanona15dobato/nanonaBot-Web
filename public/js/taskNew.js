@@ -324,8 +324,23 @@
   const botreqBtn = new OO.ui.ButtonWidget({ label: 'Wikipedia:Bot作業依頼 から取得', icon: 'search' });
   const $botreqPanel = $('<div>');
 
-  function renderBotreqProposals(proposals) {
+  function renderBotreqProposals(proposals, topicProgress) {
     $botreqPanel.empty();
+    if (topicProgress && topicProgress.length > 0) {
+      const $progressPanel = $('<div>').addClass('nb-botreq-progress');
+      $progressPanel.append($('<strong>').text('topic listの依頼進捗'));
+      const $progressList = $('<div>').addClass('nb-botreq-progress__list');
+      topicProgress.forEach((entry) => {
+        $progressList.append(
+          $('<div>').addClass('nb-botreq-progress__row').append(
+            $('<span>').text(entry.title),
+            $('<span>').addClass('nb-botreq-progress__status').text(entry.progress)
+          )
+        );
+      });
+      $progressPanel.append($progressList);
+      $botreqPanel.append($progressPanel);
+    }
     if (!proposals || proposals.length === 0) {
       $botreqPanel.append($('<p>').text('{{リンク修正依頼/改名}}は見つかりませんでした。'));
       return;
@@ -376,7 +391,7 @@
     $botreqPanel.empty().append($('<p>').text('読み込み中…'));
     try {
       const data = await C.fetchJson('/api/botreq/proposals');
-      renderBotreqProposals(data.proposals);
+      renderBotreqProposals(data.proposals, data.topicProgress);
     } catch (e) {
       $botreqPanel.empty();
       C.showNotice($notice, 'error', 'BOTREQの取得に失敗しました: ' + e.message);
@@ -411,6 +426,41 @@
   });
   const autoWaitWidget = new OO.ui.NumberInputWidget({ min: 0, step: 1, value: 300 });
   const manualTimeoutWidget = new OO.ui.NumberInputWidget({ min: 1, step: 1, value: 72 });
+  const saveDefaultsBtn = new OO.ui.ButtonWidget({ label: 'このアカウントのデフォルトとして保存' });
+  let accountDefaults = {};
+
+  function applyAccountDefaults(account) {
+    const defaults = accountDefaults[account];
+    if (!defaults) return;
+    const edit = defaults.editSettings || {};
+    const review = defaults.reviewSettings || {};
+    botFlagWidget.setSelected(edit.botFlag !== false);
+    minorEditWidget.setSelected(edit.minorEdit !== false);
+    editSummaryWidget.setValue(edit.editSummary || '');
+    editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
+    modeWidget.setValue(review.mode || 'auto');
+    autoWaitWidget.setValue(Number(review.autoWaitSeconds) || 0);
+    manualTimeoutWidget.setValue(Number(review.manualTimeoutHours) || 72);
+    renderModeFields();
+  }
+
+  accountWidget.on('change', (account) => applyAccountDefaults(account));
+  saveDefaultsBtn.on('click', async () => {
+    saveDefaultsBtn.setDisabled(true);
+    try {
+      const config = buildConfig();
+      await C.putJson('/api/bot-accounts/' + encodeURIComponent(config.account) + '/defaults', {
+        editSettings: config.editSettings,
+        reviewSettings: config.reviewSettings,
+      });
+      accountDefaults[config.account] = { editSettings: config.editSettings, reviewSettings: config.reviewSettings };
+      C.showNotice($notice, 'success', 'アカウントのデフォルト設定を保存しました。');
+    } catch (e) {
+      C.showNotice($notice, 'error', 'デフォルト設定の保存に失敗しました: ' + e.message);
+    } finally {
+      saveDefaultsBtn.setDisabled(false);
+    }
+  });
   const $autoWaitField = new OO.ui.FieldLayout(autoWaitWidget, { label: '自動承認までの待機秒数', align: 'top' }).$element;
   const $manualTimeoutField = new OO.ui.FieldLayout(manualTimeoutWidget, {
     label: '無操作タイムアウト（時間）',
@@ -479,12 +529,14 @@
   const $accountSection = $('<div>').addClass('nb-section');
   $accountSection.append(
     $('<div>').addClass('nb-section__title').text('Botアカウント'),
+    $('<p>').addClass('nb-section__hint').text('編集に使用するBotアカウントを選択してください。'),
     new OO.ui.FieldLayout(accountWidget, { label: 'アカウント', align: 'top' }).$element
   );
 
   const $rulesSection = $('<div>').addClass('nb-section');
   $rulesSection.append(
     $('<div>').addClass('nb-section__title').text('置換ルール'),
+    $('<p>').addClass('nb-section__hint').text('上から順にルールを適用します。同じページに複数ルールが該当する場合はまとめて準備します。'),
     $('<div>').css('margin-bottom', '12px').append(botreqBtn.$element),
     $botreqPanel,
     $rulesContainer,
@@ -494,15 +546,18 @@
   const $editSection = $('<div>').addClass('nb-section');
   $editSection.append(
     $('<div>').addClass('nb-section__title').text('編集設定'),
+    $('<p>').addClass('nb-section__hint').text('Botフラグと編集間隔は、実際の編集処理にも適用されます。'),
     new OO.ui.FieldLayout(botFlagWidget, { label: 'Botフラグを付与', align: 'inline' }).$element,
     new OO.ui.FieldLayout(minorEditWidget, { label: '細部の編集にする', align: 'inline' }).$element,
     new OO.ui.FieldLayout(editSummaryWidget, { label: '要約欄', align: 'top' }).$element,
-    new OO.ui.FieldLayout(editIntervalWidget, { label: '編集間隔（秒・5以上）', align: 'top' }).$element
+    new OO.ui.FieldLayout(editIntervalWidget, { label: '編集間隔（秒・5以上）', align: 'top' }).$element,
+    saveDefaultsBtn.$element
   );
 
   const $reviewSection = $('<div>').addClass('nb-section');
   $reviewSection.append(
     $('<div>').addClass('nb-section__title').text('実行モード'),
+    $('<p>').addClass('nb-section__hint').text('自動更新は指定秒数後に承認、確認待機は画面から承認・却下します。実行中にも切り替えできます。'),
     new OO.ui.FieldLayout(modeWidget, { label: 'モード', align: 'top' }).$element,
     $autoWaitField,
     $manualTimeoutField
@@ -511,6 +566,7 @@
   const $failureSection = $('<div>').addClass('nb-section');
   $failureSection.append(
     $('<div>').addClass('nb-section__title').text('失敗時の挙動'),
+    $('<p>').addClass('nb-section__hint').text('一時停止すると原因確認後に再開できます。'),
     new OO.ui.FieldLayout(onFailureWidget, { label: '失敗ページが出た場合', align: 'top' }).$element
   );
 
@@ -518,4 +574,10 @@
 
   renderModeFields();
   addRuleCard();
+  C.fetchJson('/api/bot-accounts/defaults')
+    .then((defaults) => {
+      accountDefaults = Object.fromEntries(defaults.map((item) => [item.account, item]));
+      applyAccountDefaults(accountWidget.getValue());
+    })
+    .catch((e) => C.showNotice($notice, 'error', 'アカウントデフォルト設定の取得に失敗しました: ' + e.message));
 })();

@@ -7,7 +7,7 @@ const router = express.Router();
 const oauthService = require('../services/oauth');
 const mediawiki = require('../services/mediawiki');
 const config = require('../config');
-const { determineRole } = require('../permissions');
+const { determineRole, normalizeUsername } = require('../permissions');
 const { escapeHtml } = require('../views/shell');
 
 router.get('/oauth/login', (req, res) => {
@@ -20,9 +20,9 @@ router.get('/oauth/callback', async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.query;
 
   if (error) {
-    return res
-      .status(400)
-      .send(`OAuth認可が拒否・失敗しました: ${escapeHtml(error)} ${escapeHtml(errorDescription || '')}`);
+    return res.status(400).send(
+      `OAuth認可が拒否・失敗しました: ${escapeHtml(error)} ${escapeHtml(errorDescription || '')}`
+    );
   }
   if (!code || !state || state !== req.session.oauthState) {
     return res.status(400).send('OAuthの状態が不正です（stateの不一致、またはセッション切れ）。もう一度ログインしてください。');
@@ -38,9 +38,21 @@ router.get('/oauth/callback', async (req, res) => {
       throw new Error('OAuthプロフィールにusernameが含まれていませんでした。');
     }
 
-    const isOwner = username === config.permissions.ownerUsername;
-    const groups = isOwner ? [] : await mediawiki.getUserGroups(username);
-    const role = determineRole({ username, ownerUsername: config.permissions.ownerUsername, groups });
+    const normalizedUsername = normalizeUsername(username);
+    const isOwner = config.permissions.ownerUsernames.some(
+      (configuredUsername) => normalizeUsername(configuredUsername) === normalizedUsername
+    );
+    const isEmergencyStopUser = config.permissions.emergencyStopUsernames.some(
+      (configuredUsername) => normalizeUsername(configuredUsername) === normalizedUsername
+    );
+    const groups = isOwner || isEmergencyStopUser ? [] : await mediawiki.getUserGroups(username);
+    const role = determineRole({
+      username,
+      ownerUsername: config.permissions.ownerUsername,
+      ownerUsernames: config.permissions.ownerUsernames,
+      emergencyStopUsernames: config.permissions.emergencyStopUsernames,
+      groups,
+    });
 
     // ログイン前のセッションIDを使い回さない（セッション固定攻撃対策）。
     await new Promise((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));

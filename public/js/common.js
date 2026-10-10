@@ -26,6 +26,10 @@
     return fetchJson(url, { method: 'POST', body: JSON.stringify(body || {}) });
   }
 
+  function putJson(url, body) {
+    return fetchJson(url, { method: 'PUT', body: JSON.stringify(body || {}) });
+  }
+
   const TASK_STATUS_LABELS = {
     queued: '待機中',
     running: '実行中',
@@ -145,6 +149,7 @@
   window.NanonaCommon = {
     fetchJson,
     postJson,
+    putJson,
     TASK_STATUS_LABELS,
     PAGE_STATUS_LABELS,
     taskStatusBadge,

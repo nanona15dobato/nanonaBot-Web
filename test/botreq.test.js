@@ -8,6 +8,7 @@ const {
   classifyPair,
   parseBotreqTemplates,
   fetchBotreqWikitext,
+  parseBotreqTopicList,
 } = require('../src/worker/botreq');
 
 // ---- stripNamespacePrefix ----
@@ -154,6 +155,23 @@ test('parseBotreqTemplates: {{!}}を含むアンカー付きペアも例外を�
   const proposals = parseBotreqTemplates(wikitext);
   assert.equal(proposals[0].pairs[0].type, 'unsupported');
   assert.equal(proposals[0].pairs[0].reason, 'anchor_or_label');
+});
+
+test('parseBotreqTopicList: 依頼アンカーと進捗テンプレートを取得する', () => {
+  const entries = parseBotreqTopicList(`
+|-
+| 1
+| [[Wikipedia:Bot作業依頼#依頼A|依頼A]]
+| {{BOTREQ|済}}、確認待ち
+|-
+| 2
+| [[Wikipedia:Bot作業依頼#依頼B|依頼B]]
+| {{解決済み}}
+`);
+  assert.deepEqual(entries, [
+    { anchor: '依頼A', title: '依頼A', progress: 'BOTREQ|済' },
+    { anchor: '依頼B', title: '依頼B', progress: '解決済み' },
+  ]);
 });
 
 // ---- fetchBotreqWikitext ----

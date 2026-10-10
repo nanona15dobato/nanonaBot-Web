@@ -15,7 +15,7 @@
   }
 
   const $notice = $('<div>');
-  const $refreshStatus = $('<span>').css({ marginLeft: '8px', color: '#54595d', fontSize: '0.9em' });
+  const $refreshStatus = $('<span>').addClass('nb-refresh-status');
   const $summarySection = $('<div>').addClass('nb-section');
   const $warningSection = $('<div>');
   const $reviewContainer = $('<div>');
@@ -52,7 +52,33 @@
     return result.html;
   }
 
-  function renderSummary(task) {
+  function buildModeWidget(task, onChanged) {
+    const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
+    const mode = reviewSettings.mode || task.mode;
+    const modeWidget = new OO.ui.DropdownInputWidget({
+      // OOUIのDropdownInputWidgetは選択肢の値を data から読む（value では無視され空値になる）
+      options: [{ data: 'auto', label: '自動更新' }, { data: 'manual', label: '手動確認' }],
+      value: mode,
+    });
+    let revertingMode = false;
+    modeWidget.on('change', async (nextMode) => {
+      if (revertingMode || nextMode === mode) return; // 失敗時の値の巻き戻しで再送信しない
+      modeWidget.setDisabled(true);
+      try {
+        await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
+        await onChanged();
+      } catch (e) {
+        C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
+        revertingMode = true;
+        modeWidget.setValue(mode);
+        revertingMode = false;
+        modeWidget.setDisabled(false);
+      }
+    });
+    return { mode, reviewSettings, modeWidget };
+  }
+
+  function renderSummary(task, pages) {
     $summarySection.empty();
     $summarySection.append($('<div>').addClass('nb-section__title').text('タスク概要'));
 
@@ -66,6 +92,36 @@
       )
     );
     $summarySection.append($line);
+
+    const hasReviewingPage = (pages || []).some((page) => page.status === 'awaiting_review');
+    if (['queued', 'running'].includes(task.status) && !hasReviewingPage) {
+      const { modeWidget } = buildModeWidget(task, refreshAll);
+      $summarySection.append(
+        $('<p>').addClass('nb-review-panel__mode').append(
+          $('<span>').text('確認モード:'),
+          modeWidget.$element
+        )
+      );
+    }
+
+    const counts = (pages || []).reduce((result, page) => {
+      result[page.status] = (result[page.status] || 0) + 1;
+      return result;
+    }, {});
+    const $progress = $('<div>').addClass('nb-progress-summary');
+    [
+      ['確認待ち', counts.awaiting_review || 0],
+      ['編集済み', counts.edited || 0],
+      ['失敗・却下', (counts.failed || 0) + (counts.rejected || 0)],
+    ].forEach(([label, value]) => {
+      $progress.append(
+        $('<div>').addClass('nb-progress-summary__item').append(
+          $('<span>').addClass('nb-progress-summary__label').text(label),
+          $('<span>').addClass('nb-progress-summary__value').text(value)
+        )
+      );
+    });
+    $summarySection.append($progress);
 
     if (['queued', 'running', 'paused'].includes(task.status)) {
       const cancelBtn = new OO.ui.ButtonWidget({ label: 'タスクを中止', flags: ['destructive'] });
@@ -179,25 +235,7 @@
     const $panel = $('<div>').addClass('nb-review-panel');
     $panel.append($('<div>').addClass('nb-review-panel__title').text('確認中: ' + reviewing.page_title));
 
-    const modeWidget = new OO.ui.DropdownInputWidget({
-      options: [{ data: 'auto', label: '自動更新' }, { data: 'manual', label: '手動確認' }],
-      value: mode,
-    });
-    let revertingMode = false;
-    modeWidget.on('change', async (nextMode) => {
-      if (revertingMode || nextMode === mode) return; // 失敗時の値の巻き戻しで再送信しない
-      modeWidget.setDisabled(true);
-      try {
-        await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
-        await refreshAll();
-      } catch (e) {
-        C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
-        revertingMode = true;
-        modeWidget.setValue(mode);
-        revertingMode = false;
-        modeWidget.setDisabled(false);
-      }
-    });
+    const { modeWidget } = buildModeWidget(task, refreshAll);
 
     const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
     const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
@@ -216,8 +254,10 @@
     approveBtn.on('click', () => submitReview('approve', approveBtn));
     rejectBtn.on('click', () => submitReview('reject', rejectBtn));
     $panel.append(
-      $('<div>').css('margin-bottom', '8px').append(
-        $('<span>').text('確認モード: '), modeWidget.$element, ' ', approveBtn.$element, ' ', rejectBtn.$element
+      $('<div>').addClass('nb-review-panel__actions').append(
+        $('<span>').addClass('nb-review-panel__mode').append($('<span>').text('確認モード:'), modeWidget.$element),
+        approveBtn.$element,
+        rejectBtn.$element
       )
     );
 
@@ -325,7 +365,7 @@
     $refreshStatus.text('更新中…');
     try {
       const [task, pages, logs] = await Promise.all([loadTask(), loadPages(), loadLogs()]);
-      renderSummary(task);
+      renderSummary(task, pages);
       renderReviewPanel(task, pages);
       renderPageList(pages);
       renderLogs(logs);

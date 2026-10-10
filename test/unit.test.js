@@ -3,12 +3,21 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { determineRole, roleAllowed } = require('../src/permissions');
+const { determineRole, roleAllowed, normalizeUsername } = require('../src/permissions');
 const { parseReplicaCnf } = require('../src/db/replicaCnf');
 const { detectInvokedModule } = require('../scripts/check-redirect-category-template');
 
 test('determineRole: ownerUsernameと一致すればowner', () => {
   const role = determineRole({ username: 'Nanona15dobato', ownerUsername: 'Nanona15dobato', groups: [] });
+  assert.equal(role, 'owner');
+});
+
+test('determineRole: ownerUsernamesに含まれる追加オーナーはowner', () => {
+  const role = determineRole({
+    username: 'なのな',
+    ownerUsernames: ['Nanona15dobato', 'なのな'],
+    groups: [],
+  });
   assert.equal(role, 'owner');
 });
 
@@ -19,6 +28,40 @@ test('determineRole: owner以外でsysopグループを含めばadmin_emergency_
     groups: ['*', 'user', 'autoconfirmed', 'sysop'],
   });
   assert.equal(role, 'admin_emergency_only');
+});
+
+test('determineRole: extendedconfirmedグループは緊急停止専用', () => {
+  const role = determineRole({
+    username: 'ExtendedUser',
+    ownerUsername: 'Nanona15dobato',
+    groups: ['user', 'extendedconfirmed'],
+  });
+  assert.equal(role, 'admin_emergency_only');
+});
+
+test('determineRole: nanona15は緊急停止専用', () => {
+  const role = determineRole({
+    username: 'nanona15',
+    ownerUsernames: ['Nanona15dobato', 'なのな'],
+    emergencyStopUsernames: ['nanona15'],
+    groups: ['user'],
+  });
+  assert.equal(role, 'admin_emergency_only');
+});
+
+test('determineRole: 緊急停止ユーザー名は先頭ASCII文字の大小を正規化する', () => {
+  const role = determineRole({
+    username: 'Nanona15',
+    ownerUsernames: ['Nanona15dobato', 'なのな'],
+    emergencyStopUsernames: ['nanona15'],
+    groups: [],
+  });
+  assert.equal(role, 'admin_emergency_only');
+});
+
+test('normalizeUsername: ASCII先頭文字のみ大文字化する', () => {
+  assert.equal(normalizeUsername('nanona15'), 'Nanona15');
+  assert.equal(normalizeUsername('なのな'), 'なのな');
 });
 
 test('determineRole: owner以外・sysopでもなければdenied', () => {

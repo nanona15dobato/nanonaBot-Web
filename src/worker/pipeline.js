@@ -8,7 +8,7 @@ const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const MANUAL_POLL_MS = 3000;
+const MANUAL_POLL_MS = Number(process.env.REVIEW_POLL_INTERVAL_MS || 1000);
 
 /**
  * matchedRulesのうちcategoryRename/categoryRemoveについて、
@@ -103,11 +103,18 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
 
     if (await isEmergencyStopped()) return false;
 
-    const [taskRows] = await pool.query(`SELECT status, review_timeout_at, mode FROM tasks WHERE id = ?`, [taskId]);
+    const [taskRows] = await pool.query(
+      `SELECT status, review_timeout_at, mode, config_json FROM tasks WHERE id = ?`,
+      [taskId]
+    );
     const task = taskRows[0];
     if (!task || ['cancelled', 'emergency_stopped', 'paused'].includes(task.status)) return false;
 
-    const currentSettings = { ...reviewSettings, mode: task.mode || reviewSettings.mode };
+    const currentSettings = {
+      ...reviewSettings,
+      ...parseJsonColumn(task.config_json, {}).reviewSettings,
+      mode: task.mode || reviewSettings.mode,
+    };
     if (currentSettings.mode === 'auto') {
       const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
       if (Date.now() >= reviewStartedAt + autoWaitSeconds * 1000) {
@@ -299,7 +306,9 @@ async function runStagePipeline(ctx) {
               return { completed: false, paused: true, hadFailures };
             }
           }
-          await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
+          if (i < rows.length - 1) {
+            await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
+          }
         }
       }
       // status === 'skipped' の場合は何もせず次へ

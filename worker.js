@@ -7,7 +7,7 @@ const { runTask } = require('./src/worker/taskRunner');
 const { isEmergencyStopped } = require('./src/worker/emergencyStop');
 const { writeTaskLogSafely } = require('./src/worker/taskLog');
 
-const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS || 10000);
+const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS || 1000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
