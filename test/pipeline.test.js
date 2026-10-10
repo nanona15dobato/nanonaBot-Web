@@ -91,7 +91,12 @@ function createFakeDb() {
       const row = taskPages.get(idParam);
       if (!row) return [{ affectedRows: 0 }];
 
-      if (s.includes("status = 'preparing'")) {
+      if (s.includes("SET status = 'awaiting_review'")) {
+        // 前もって承認・却下されたページは確認待ちに戻さない（WHERE status = 'prepared'）
+        if (s.includes("AND status = 'prepared'") && row.status !== 'prepared') return [{ affectedRows: 0 }];
+        row.status = 'awaiting_review';
+        row.prepared_at = new Date();
+      } else if (s.includes("status = 'preparing'")) {
         row.status = 'preparing';
       } else if (s.includes("status = 'skipped'")) {
         row.status = 'skipped';
@@ -102,9 +107,7 @@ function createFakeDb() {
       } else if (s.includes("status = 'failed'")) {
         row.status = 'failed';
         row.error_message = params[0];
-      } else if (s.includes("status = 'awaiting_review'")) {
-        row.status = 'awaiting_review';
-        row.prepared_at = new Date();
+
       } else if (s.includes("status = 'approved'")) {
         row.status = 'approved';
       } else if (s.includes("status = 'rejected'")) {
@@ -575,4 +578,54 @@ test('applyRedirectCategoryTemplateEdits: unlinkPageルールがあればハッ�
     const result = applyRedirectCategoryTemplateEdits('{{See also|削除|残る}}\n本文', [{ templateType: 'unlinkPage', from: '削除' }]);
     assert.equal(result, '{{See also|残る}}\n本文');
   });
+});
+
+test('runStagePipeline: 先読み中に前もって承認されたページは確認待ちにせずすぐ編集し、前もって却下されたページは編集しない', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 7, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'manual' });
+  db.seedPages([
+    { task_id: 7, stage: 1, order_index: 0, page_title: '前もって承認', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+    { task_id: 7, stage: 1, order_index: 1, page_title: '前もって却下', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+  ]);
+  // 準備完了になった直後に、画面から前もって承認/却下されたことにする
+  const originalQuery = db.pool.query;
+  db.pool.query = async (sql, params) => {
+    const result = await originalQuery(sql, params);
+    if (/^UPDATE task_pages SET status = 'prepared'/.test(sql.replace(/\s+/g, ' ').trim())) {
+      const row = db.taskPages.get(params[params.length - 1]);
+      row.status = row.page_title === '前もって承認' ? 'approved' : 'rejected';
+    }
+    return result;
+  };
+  const edited = [];
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:00:01Z', wikitext: '旧' };
+    },
+    async edit({ title }) {
+      edited.push(title);
+      return { revid: 2, newTimestamp: '2026-08-11T09:00:05Z' };
+    },
+  };
+
+  const startedAt = Date.now();
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    // 手動確認モードなので、前もって承認されていなければ（タイムアウトまで）待ち続ける
+    const result = await runStagePipeline({
+      taskId: 7,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'manual', manualTimeoutHours: 72 },
+      onFailure: 'skipAndContinue',
+    });
+    assert.equal(result.completed, true);
+  });
+
+  assert.deepEqual(edited, ['前もって承認']);
+  assert.deepEqual([...db.taskPages.values()].map((p) => p.status), ['edited', 'rejected']);
+  assert.ok(Date.now() - startedAt < 3000, '承認待ちのポーリングで待たされない');
 });

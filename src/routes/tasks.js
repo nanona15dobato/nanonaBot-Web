@@ -92,6 +92,8 @@ router.get('/api/tasks/:id', requireRole('owner'), async (req, res, next) => {
     const task = rows[0];
     task.config_json = parseJsonColumn(task.config_json);
     task.target_titles_json = parseJsonColumn(task.target_titles_json);
+    // 画面が自動承認・次の編集の予定時刻に合わせて更新するとき、端末の時計のずれを補正するのに使う
+    task.server_time = new Date().toISOString();
     res.json(task);
   } catch (err) {
     next(err);
@@ -178,8 +180,10 @@ router.get('/api/tasks/:id/warnings', requireRole('owner'), async (req, res, nex
 router.post('/api/tasks/:id/pages/:pageId/approve', requireRole('owner'), async (req, res, next) => {
   try {
     const [result] = await pool.query(
+      // 先読み済み（prepared）のページも、前のページの編集中に前もって承認できる。
+      // 表示している差分がそのまま編集内容になる（編集時はbasetimestampで競合を検出する）。
       `UPDATE task_pages SET status = 'approved', reviewed_at = NOW()
-       WHERE id = ? AND task_id = ? AND status = 'awaiting_review'`,
+       WHERE id = ? AND task_id = ? AND status IN ('awaiting_review', 'prepared')`,
       [req.params.pageId, req.params.id]
     );
     if (result.affectedRows === 0) {
@@ -197,7 +201,7 @@ router.post('/api/tasks/:id/pages/:pageId/reject', requireRole('owner'), async (
   try {
     const [result] = await pool.query(
       `UPDATE task_pages SET status = 'rejected', reviewed_at = NOW()
-       WHERE id = ? AND task_id = ? AND status = 'awaiting_review'`,
+       WHERE id = ? AND task_id = ? AND status IN ('awaiting_review', 'prepared')`,
       [req.params.pageId, req.params.id]
     );
     if (result.affectedRows === 0) {

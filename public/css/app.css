@@ -1017,3 +1017,54 @@ table.diff th {
 .nb-review {
   scroll-margin-top: 120px;
 }
+
+/* ===== 確認・編集の進行パネルの種類 ===== */
+.nb-review--next {
+  border-color: var(--nb-color-progressive);
+  border-top-style: dashed;
+  box-shadow: none;
+}
+
+.nb-review--failed {
+  border-color: var(--nb-color-error);
+  border-top-color: var(--nb-color-error);
+  box-shadow: 0 2px 6px rgba(179, 36, 36, 0.15);
+}
+
+.nb-review--failed .nb-review__label {
+  color: var(--nb-color-error);
+}
+
+.nb-review--editing {
+  box-shadow: none;
+}
+
+.nb-review__flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: var(--nb-bg-muted);
+  border-radius: var(--nb-radius);
+  font-size: 0.92em;
+}
+
+.nb-review__flow-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nb-review__flow-item--done {
+  color: var(--nb-color-subtle);
+}
+
+.nb-review__flow-bar {
+  width: 3em;
+  margin-right: 4px;
+}
+
+.nb-review__error {
+  margin-top: 12px;
+}
