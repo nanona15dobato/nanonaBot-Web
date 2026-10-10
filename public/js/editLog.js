@@ -4,95 +4,120 @@
 
   const C = window.NanonaCommon;
   const user = window.NANONA_BOT || {};
-  const $app = $('#app');
 
-  $app.append(C.buildHeader({ title: '編集ログ', user }));
-
-  if (user.role !== 'owner') {
-    $app.append(C.buildEmergencyOnlyPanel(user));
+  const page = C.initPage({ title: '編集ログ', active: 'editLog' });
+  if (!page.isOwner) {
+    page.$main.append(C.buildEmergencyOnlyPanel(user));
     return;
   }
 
-  const $notice = $('<div>');
-  const $filterSection = $('<div>').addClass('nb-section');
-  const $resultSection = $('<div>').addClass('nb-section');
-  $app.append($notice, $filterSection, $resultSection);
+  // 検索条件はURLのクエリにも残す（タスク詳細からのリンク・再読み込み・共有用）
+  const params = new URLSearchParams(location.search);
 
-  const taskIdWidget = new OO.ui.TextInputWidget({ placeholder: '例: 12（空欄で全タスク対象）' });
-  const pageTitleWidget = new OO.ui.TextInputWidget({ placeholder: 'ページ名の一部一致（例: プタリン）' });
+  const taskIdWidget = new OO.ui.TextInputWidget({ placeholder: '例: 12', value: params.get('task_id') || '', validate: /^\d*$/ });
+  const pageTitleWidget = new OO.ui.SearchInputWidget({ placeholder: 'ページ名の一部', value: params.get('page_title') || '' });
   const statusWidget = new OO.ui.DropdownInputWidget({
     options: [
       { data: '', label: 'すべて' },
       { data: 'edited', label: '成功のみ' },
       { data: 'failed', label: '失敗のみ' },
     ],
-    value: '',
+    value: params.get('status') || '',
   });
-  const searchBtn = new OO.ui.ButtonWidget({ label: '検索', flags: ['primary', 'progressive'] });
+  const limitWidget = new OO.ui.DropdownInputWidget({
+    options: [
+      { data: '50', label: '50件' },
+      { data: '100', label: '100件' },
+      { data: '200', label: '200件' },
+    ],
+    value: ['50', '100', '200'].includes(params.get('limit')) ? params.get('limit') : '100',
+  });
+  const searchBtn = new OO.ui.ButtonWidget({ label: '検索', icon: 'search', flags: ['primary', 'progressive'] });
+  const resetBtn = new OO.ui.ButtonWidget({ label: '条件をクリア', framed: false });
 
-  $filterSection.append(
-    $('<div>').addClass('nb-section__title').text('編集ログ検索'),
-    new OO.ui.FieldLayout(taskIdWidget, { label: 'タスクID', align: 'top' }).$element,
-    new OO.ui.FieldLayout(pageTitleWidget, { label: 'ページ名', align: 'top' }).$element,
-    new OO.ui.FieldLayout(statusWidget, { label: '結果', align: 'top' }).$element,
-    $('<div>').css('margin-top', '8px').append(searchBtn.$element)
+  const filterSection = C.section({ title: '検索条件', hint: '編集ログはタスクのページ情報が削除された後も残る恒久ログです。' });
+  filterSection.$body.append(
+    $('<div>').addClass('nb-filter-grid').append(
+      new OO.ui.FieldLayout(taskIdWidget, { label: 'タスクID', align: 'top' }).$element,
+      new OO.ui.FieldLayout(pageTitleWidget, { label: 'ページ名', align: 'top' }).$element,
+      new OO.ui.FieldLayout(statusWidget, { label: '結果', align: 'top' }).$element,
+      new OO.ui.FieldLayout(limitWidget, { label: '表示件数', align: 'top' }).$element
+    ),
+    $('<div>').addClass('nb-form-actions').append(searchBtn.$element, resetBtn.$element)
   );
 
-  function buildQuery() {
-    const params = new URLSearchParams();
+  const resultSection = C.section({ title: '結果' });
+  page.$main.append(filterSection.$element, resultSection.$element);
+
+  function currentQuery() {
+    const q = new URLSearchParams();
     const taskId = taskIdWidget.getValue().trim();
     const pageTitle = pageTitleWidget.getValue().trim();
-    const status = statusWidget.getValue();
-    if (taskId) params.set('task_id', taskId);
-    if (pageTitle) params.set('page_title', pageTitle);
-    if (status) params.set('status', status);
-    params.set('limit', '100');
-    return params.toString();
+    if (taskId) q.set('task_id', taskId);
+    if (pageTitle) q.set('page_title', pageTitle);
+    if (statusWidget.getValue()) q.set('status', statusWidget.getValue());
+    q.set('limit', limitWidget.getValue());
+    return q;
   }
 
-  function renderRows(rows) {
-    $resultSection.empty();
-    $resultSection.append($('<div>').addClass('nb-section__title').text('結果（' + rows.length + '件、最大100件表示）'));
-
+  function renderRows(rows, limit) {
+    resultSection.setTitle('結果（' + rows.length + '件' + (rows.length >= limit ? '・上限まで表示' : '') + '）');
+    resultSection.$body.empty();
     if (rows.length === 0) {
-      $resultSection.append($('<p>').text('該当する編集ログがありません。'));
+      resultSection.$body.append(C.emptyState('該当する編集ログがありません。'));
       return;
     }
-
-    const $list = $('<div>').addClass('nb-page-list');
+    const $tbody = $('<tbody>');
     rows.forEach((r) => {
-      const $row = $('<div>').addClass('nb-page-row');
-      const $left = $('<span>');
-      $left.append(
-        $('<a>').attr('href', '/tasks/' + r.task_id).text('#' + r.task_id + ' '),
-        document.createTextNode(r.page_title + ' ')
-      );
-      $left.append(C.pageStatusBadge(r.status === 'edited' ? 'edited' : 'failed'));
-      const $right = $('<span>').css('color', '#54595d');
-      $right.append(document.createTextNode(C.formatDateTime(r.edited_at) + ' / ' + r.account + ' '));
+      const $result = $('<td>').append(C.pageStatusBadge(r.status === 'edited' ? 'edited' : 'failed'));
+      const $detail = $('<td>').addClass('nb-table__detail');
       if (r.diffUrl) {
-        $right.append($('<a>').attr('href', r.diffUrl).attr('target', '_blank').attr('rel', 'noopener').text('差分を見る'));
+        $detail.append($('<a>').attr({ href: r.diffUrl, target: '_blank', rel: 'noopener' }).text('差分を見る'));
       }
-      if (r.error_message) {
-        $right.append($('<div>').css({ color: '#b32424', fontSize: '0.85em' }).text(r.error_message));
-      }
-      $list.append($row.append($left, $right));
+      if (r.error_message) $detail.append($('<div>').addClass('nb-table__error').text(r.error_message));
+      $tbody.append(
+        $('<tr>').append(
+          $('<td>').addClass('nb-table__nowrap').append(C.timeElement(r.edited_at)),
+          $result,
+          $('<td>').append(C.wikiLink(r.page_title)),
+          $('<td>').append(r.task_id ? $('<a>').attr('href', '/tasks/' + r.task_id).text('#' + r.task_id) : '-'),
+          $('<td>').text(r.account),
+          $detail
+        )
+      );
     });
-    $resultSection.append($list);
+    const $table = $('<table>').addClass('nb-table').append(
+      $('<thead>').append(
+        $('<tr>').append(['日時', '結果', 'ページ', 'タスク', 'アカウント', '差分・エラー'].map((h) => $('<th>').attr('scope', 'col').text(h)))
+      ),
+      $tbody
+    );
+    resultSection.$body.append($('<div>').addClass('nb-table-wrap').append($table));
   }
 
   async function search() {
-    searchBtn.setDisabled(true);
-    try {
-      const rows = await C.fetchJson('/api/edit-log?' + buildQuery());
-      renderRows(rows);
-    } catch (e) {
-      C.showNotice($notice, 'error', '検索に失敗しました: ' + e.message);
-    } finally {
-      searchBtn.setDisabled(false);
-    }
+    const query = currentQuery();
+    history.replaceState(null, '', location.pathname + (query.toString() ? '?' + query.toString() : ''));
+    resultSection.$body.empty().append(C.loading('検索中…'));
+    await C.withBusy(searchBtn, '検索', async () => {
+      const rows = await C.fetchJson('/api/edit-log?' + query.toString());
+      renderRows(rows, Number(query.get('limit')));
+    });
   }
 
   searchBtn.on('click', search);
-  search(); // 初回は無条件（直近100件）で表示
+  taskIdWidget.on('enter', search);
+  pageTitleWidget.on('enter', search);
+  let resetting = false; // 条件クリア中は値の変更ごとに検索しない
+  statusWidget.on('change', () => !resetting && search());
+  limitWidget.on('change', () => !resetting && search());
+  resetBtn.on('click', () => {
+    resetting = true;
+    taskIdWidget.setValue('');
+    pageTitleWidget.setValue('');
+    statusWidget.setValue('');
+    resetting = false;
+    search();
+  });
+  search(); // 初回はURLの条件（無ければ直近の100件）で表示
 })();

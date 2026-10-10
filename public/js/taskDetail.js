@@ -4,401 +4,664 @@
 
   const C = window.NanonaCommon;
   const user = window.NANONA_BOT || {};
-  const taskId = window.NANONA_BOT && window.NANONA_BOT.taskId;
-  const $app = $('#app');
+  const taskId = user.taskId;
 
-  $app.append(C.buildHeader({ title: 'タスク #' + taskId, user }));
+  const $titleActions = $('<div>').addClass('nb-title-actions');
+  const page = C.initPage({ title: 'タスク #' + taskId, actions: [$titleActions] });
 
-  if (user.role !== 'owner') {
-    $app.append(C.buildEmergencyOnlyPanel(user));
+  if (!page.isOwner) {
+    page.$main.append(C.buildEmergencyOnlyPanel(user));
     return;
   }
 
-  const $notice = $('<div>');
-  const $refreshStatus = $('<span>').addClass('nb-refresh-status');
-  const $summarySection = $('<div>').addClass('nb-section');
-  const $warningSection = $('<div>');
-  const $reviewContainer = $('<div>');
-  const $pageListSection = $('<div>').addClass('nb-section');
-  const $logSection = $('<div>').addClass('nb-section');
-  $app.append($notice, $summarySection, $warningSection, $reviewContainer, $pageListSection, $logSection);
+  const PAGE_LIST_STEP = 200; // ページ一覧の一度に表示する件数（大量のページでも重くならないように）
+  const REVIEWABLE_DIFF_STATUSES = ['prepared', 'awaiting_review', 'approved', 'editing', 'edited', 'failed', 'rejected'];
 
+  // ===== 状態 =====
+  const state = {
+    task: null,
+    pages: [],
+    logs: [],
+    warnings: null,
+    pageFilter: { status: '', stage: '', query: '', limit: PAGE_LIST_STEP },
+    logLevel: '',
+    lastReviewKey: null,
+    reviewing: null,
+  };
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
-  let lastReviewPanelKey = null;
-  let warningsLoaded = false;
-  let refreshInProgress = false;
 
-  function updateCountdown($countdown) {
-    const remain = Math.max(0, Math.ceil((Number($countdown.data('deadline')) - Date.now()) / 1000));
-    $countdown.text('自動更新モード: あと約' + remain + '秒で自動承認されます（目安）。');
-  }
-
-  async function loadTask() {
-    return C.fetchJson('/api/tasks/' + taskId);
-  }
-  async function loadPages() {
-    return C.fetchJson('/api/tasks/' + taskId + '/pages');
-  }
-  async function loadWarnings() {
-    return C.fetchJson('/api/tasks/' + taskId + '/warnings');
-  }
-  async function loadLogs() {
-    return C.fetchJson('/api/tasks/' + taskId + '/logs?limit=200');
-  }
-  async function loadCompare(pageId) {
-    if (compareCache.has(pageId)) return compareCache.get(pageId);
-    const result = await C.fetchJson('/api/tasks/' + taskId + '/pages/' + pageId + '/compare');
-    compareCache.set(pageId, result.html);
-    return result.html;
+  function loadCompare(pageId) {
+    if (!compareCache.has(pageId)) {
+      const promise = C.fetchJson('/api/tasks/' + taskId + '/pages/' + pageId + '/compare').then((r) => r.html);
+      promise.catch(() => compareCache.delete(pageId)); // 失敗したら次回取り直す
+      compareCache.set(pageId, promise);
+    }
+    return compareCache.get(pageId);
   }
 
-  function buildModeWidget(task, onChanged) {
+  /** action=compareが返すHTMLはMediaWiki本体の差分テーブルそのもの（信頼できる自ウィキAPIの出力）。仕様書9章の設計どおり埋め込む。 */
+  function diffTable(html) {
+    if (!html) return C.emptyState('変更点がありません。');
+    return $('<table>')
+      .addClass('diff')
+      .append(
+        '<colgroup><col class="diff-marker"><col class="diff-content"><col class="diff-marker"><col class="diff-content"></colgroup>',
+        $('<tbody>').html(html)
+      );
+  }
+
+  // ===== 差分ダイアログ（ページ一覧から開く） =====
+  function DiffDialog(config) {
+    DiffDialog.super.call(this, config);
+  }
+  OO.inheritClass(DiffDialog, OO.ui.ProcessDialog);
+  DiffDialog.static.name = 'nbDiffDialog';
+  DiffDialog.static.title = '差分';
+  DiffDialog.static.size = 'larger';
+  DiffDialog.static.actions = [{ action: 'close', label: '閉じる', flags: ['safe', 'close'] }];
+  DiffDialog.prototype.initialize = function () {
+    DiffDialog.super.prototype.initialize.apply(this, arguments);
+    this.content = new OO.ui.PanelLayout({ padded: true, expanded: false });
+    this.$body.append(this.content.$element);
+  };
+  DiffDialog.prototype.getSetupProcess = function (data) {
+    return DiffDialog.super.prototype.getSetupProcess.call(this, data).next(() => {
+      this.title.setLabel(data.title);
+      const $content = this.content.$element.empty().append(C.loading('差分を読み込み中…'));
+      loadCompare(data.pageId)
+        .then((html) => {
+          $content.empty().append(
+            $('<p>').append(C.wikiLink(data.title), ' の準備時点の版との差分'),
+            $('<div>').addClass('nb-diff').append(diffTable(html))
+          );
+          this.updateSize();
+        })
+        .catch((e) => {
+          $content.empty().append(new OO.ui.MessageWidget({ type: 'error', label: '差分の取得に失敗しました: ' + e.message }).$element);
+        });
+    }, this);
+  };
+  DiffDialog.prototype.getActionProcess = function (action) {
+    if (action === 'close') return new OO.ui.Process(() => this.close());
+    return DiffDialog.super.prototype.getActionProcess.call(this, action);
+  };
+  DiffDialog.prototype.getBodyHeight = function () {
+    return Math.min(window.innerHeight * 0.7, this.content.$element.outerHeight(true) || 300);
+  };
+  const windowManager = new OO.ui.WindowManager();
+  $(document.body).append(windowManager.$element);
+  const diffDialog = new DiffDialog();
+  windowManager.addWindows([diffDialog]);
+  function openDiff(p) {
+    windowManager.openWindow(diffDialog, { pageId: p.id, title: p.page_title });
+  }
+
+  // ===== 画面の骨組み =====
+  const $summary = $('<div>');
+  const summarySection = C.section({ title: 'タスク概要' });
+  summarySection.$body.append($summary);
+  const $review = $('<div>');
+
+  const pagesPanel = new OO.ui.TabPanelLayout('pages', { label: 'ページ一覧', expanded: false });
+  const logsPanel = new OO.ui.TabPanelLayout('logs', { label: '実行ログ', expanded: false });
+  const warningsPanel = new OO.ui.TabPanelLayout('warnings', { label: '警告', expanded: false });
+  const configPanel = new OO.ui.TabPanelLayout('config', { label: '設定内容', expanded: false });
+  const tabs = new OO.ui.IndexLayout({ expanded: false, framed: true, autoFocus: false });
+  tabs.addTabPanels([pagesPanel, logsPanel, warningsPanel, configPanel]);
+  tabs.$element.addClass('nb-tabs');
+  function setTabLabel(panel, label) {
+    const item = panel.getTabItem();
+    if (item) item.setLabel(label);
+  }
+
+  const $lastUpdated = $('<span>').addClass('nb-refresh-status');
+  const refreshBtn = new OO.ui.ButtonWidget({ icon: 'reload', label: '更新', framed: false });
+  $titleActions.append($lastUpdated, refreshBtn.$element);
+
+  page.$main.append($review, summarySection.$element, tabs.$element);
+
+  // ===== 概要 =====
+  function buildModeWidget(task) {
     const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
     const mode = reviewSettings.mode || task.mode;
-    const modeWidget = new OO.ui.DropdownInputWidget({
+    const widget = new OO.ui.DropdownInputWidget({
       // OOUIのDropdownInputWidgetは選択肢の値を data から読む（value では無視され空値になる）
-      options: [{ data: 'auto', label: '自動更新' }, { data: 'manual', label: '手動確認' }],
+      options: [
+        { data: 'auto', label: '自動更新' },
+        { data: 'manual', label: '手動確認' },
+      ],
       value: mode,
     });
-    let revertingMode = false;
-    modeWidget.on('change', async (nextMode) => {
-      if (revertingMode || nextMode === mode) return; // 失敗時の値の巻き戻しで再送信しない
-      modeWidget.setDisabled(true);
+    let reverting = false;
+    widget.on('change', async (nextMode) => {
+      if (reverting || nextMode === mode) return; // 失敗時の値の巻き戻しで再送信しない
+      widget.setDisabled(true);
       try {
         await C.postJson('/api/tasks/' + taskId + '/review-mode', { mode: nextMode });
-        await onChanged();
+        C.toast('確認モードを「' + (nextMode === 'auto' ? '自動更新' : '手動確認') + '」に切り替えました。');
+        await poller.refresh();
       } catch (e) {
-        C.showNotice($notice, 'error', 'モード切替に失敗しました: ' + e.message);
-        revertingMode = true;
-        modeWidget.setValue(mode);
-        revertingMode = false;
-        modeWidget.setDisabled(false);
+        C.toast('モード切替に失敗しました: ' + e.message, 'error');
+        reverting = true;
+        widget.setValue(mode);
+        reverting = false;
+        widget.setDisabled(false);
       }
     });
-    return { mode, reviewSettings, modeWidget };
+    return widget;
+  }
+
+  function actionButton(label, flags, icon, handler) {
+    const btn = new OO.ui.ButtonWidget({ label, flags, icon });
+    btn.on('click', () => handler(btn));
+    return btn;
+  }
+
+  function renderTitleActions(task) {
+    $titleActions.children('.oo-ui-buttonWidget').not(refreshBtn.$element).remove();
+    const buttons = [];
+    if (['paused', 'emergency_stopped', 'expired'].includes(task.status)) {
+      buttons.push(
+        actionButton('再開する', ['primary', 'progressive'], 'play', (btn) =>
+          C.withBusy(btn, '再開', async () => {
+            await C.postJson('/api/tasks/' + taskId + '/resume', {});
+            C.toast('再開を要求しました。ワーカーが未処理のページから続行します。');
+            await poller.refresh();
+          })
+        )
+      );
+    }
+    if (task.status === 'completed_with_failures') {
+      buttons.push(
+        actionButton('失敗ページのみ再試行', ['progressive'], 'reload', async (btn) => {
+          const ok = await C.confirm(
+            '同じ置換ルール・編集設定を引き継ぎ、失敗したページだけを対象にした新しいタスクを作成します（仕様書9.3節）。',
+            { title: '再試行タスクを作成しますか？', okLabel: '作成する' }
+          );
+          if (!ok) return;
+          await C.withBusy(btn, '再試行タスクの作成', async () => {
+            const result = await C.postJson('/api/tasks/' + taskId + '/retry-failed', {});
+            C.toast(result.retriedPageCount + '件を対象に再試行タスク #' + result.id + ' を作成しました。');
+            location.href = '/tasks/' + result.id;
+          });
+        })
+      );
+    }
+    if (['queued', 'running', 'paused'].includes(task.status)) {
+      buttons.push(
+        actionButton('中止', ['destructive'], 'cancel', async (btn) => {
+          const ok = await C.confirm('このタスクを中止します。編集済みのページはそのまま残り、中止したタスクは再開できません。', {
+            title: 'タスクを中止しますか？',
+            okLabel: '中止する',
+            destructive: true,
+          });
+          if (!ok) return;
+          await C.withBusy(btn, 'タスクの中止', async () => {
+            await C.postJson('/api/tasks/' + taskId + '/cancel', {});
+            C.toast('タスクを中止しました。', 'warning');
+            await poller.refresh();
+          });
+        })
+      );
+    }
+    refreshBtn.$element.before(buttons.map((b) => b.$element));
+  }
+
+  const STATUS_MESSAGES = {
+    paused: { type: 'error', label: '失敗により一時停止しています。実行ログ・ページ一覧で原因を確認し、「再開する」で未処理のページから続行できます。' },
+    emergency_stopped: { type: 'error', label: '緊急停止により中断しました。緊急停止を解除してから「再開する」で未処理のページから続行できます。' },
+    expired: { type: 'warning', label: '無操作タイムアウトで期限切れになりました。「再開する」とタイムアウトを取り直して未処理のページから続行します。' },
+    completed_with_failures: { type: 'warning', label: '一部のページで失敗しました。「失敗ページのみ再試行」で失敗したページだけの新しいタスクを作れます。' },
+    failed: { type: 'error', label: 'タスクがエラーで終了しました。実行ログを確認してください。' },
+    cancelled: { type: 'notice', label: 'このタスクは中止されました。' },
+    completed: { type: 'success', label: 'タスクが完了しました。' },
+  };
+
+  function countByStatus(pages) {
+    return pages.reduce((acc, p) => {
+      acc[p.status] = (acc[p.status] || 0) + 1;
+      return acc;
+    }, {});
+  }
+
+  function waveSteps(task) {
+    const descriptions = C.WAVE_DESCRIPTIONS[task.stage_count];
+    if (!descriptions) return null;
+    const $steps = $('<ol>').addClass('nb-waves');
+    descriptions.forEach((text, i) => {
+      const stage = i + 1;
+      const done = stage < task.current_stage || ['completed', 'completed_with_failures'].includes(task.status);
+      const $step = $('<li>')
+        .addClass('nb-waves__step')
+        .toggleClass('nb-waves__step--current', stage === task.current_stage && !done)
+        .toggleClass('nb-waves__step--done', done)
+        .append($('<span>').addClass('nb-waves__number').text(stage), $('<span>').addClass('nb-waves__text').text('ウェーブ' + stage + ': ' + text));
+      $steps.append($step);
+    });
+    return $steps;
   }
 
   function renderSummary(task, pages) {
-    $summarySection.empty();
-    $summarySection.append($('<div>').addClass('nb-section__title').text('タスク概要'));
+    renderTitleActions(task);
+    $summary.empty();
 
-    const $line = $('<p>');
-    $line.append(C.taskStatusBadge(task.status), ' ');
-    $line.append(
-      document.createTextNode(
-        ' account=' + task.account + ' / mode=' + task.mode +
-          ' / 進捗 ' + task.progress_current + '/' + task.progress_total +
-          ' / onFailure=' + ((task.config_json && task.config_json.onFailure) || '-')
-      )
+    const message = STATUS_MESSAGES[task.status];
+    if (message) $summary.append(new OO.ui.MessageWidget(message).$element.addClass('nb-summary__message'));
+
+    const total = Number(task.progress_total) || 0;
+    const current = Number(task.progress_current) || 0;
+    const $progress = $('<div>').addClass('nb-summary__progress').append(
+      $('<div>').addClass('nb-summary__progress-head').append(
+        C.taskStatusBadge(task.status),
+        $('<span>').addClass('nb-summary__progress-text').text('進捗 ' + current + ' / ' + total + (total > 0 ? '（' + Math.round((current / total) * 100) + '%）' : ''))
+      ),
+      C.progressBar(current, total).$element
     );
-    $summarySection.append($line);
+    $summary.append($progress);
 
-    const hasReviewingPage = (pages || []).some((page) => page.status === 'awaiting_review');
-    if (['queued', 'running'].includes(task.status) && !hasReviewingPage) {
-      const { modeWidget } = buildModeWidget(task, refreshAll);
-      $summarySection.append(
-        $('<p>').addClass('nb-review-panel__mode').append(
-          $('<span>').text('確認モード:'),
-          modeWidget.$element
-        )
-      );
-    }
+    const $waves = waveSteps(task);
+    if ($waves) $summary.append($waves);
 
-    const counts = (pages || []).reduce((result, page) => {
-      result[page.status] = (result[page.status] || 0) + 1;
-      return result;
-    }, {});
-    const $progress = $('<div>').addClass('nb-progress-summary');
-    [
-      ['確認待ち', counts.awaiting_review || 0],
-      ['編集済み', counts.edited || 0],
-      ['失敗・却下', (counts.failed || 0) + (counts.rejected || 0)],
-    ].forEach(([label, value]) => {
-      $progress.append(
-        $('<div>').addClass('nb-progress-summary__item').append(
-          $('<span>').addClass('nb-progress-summary__label').text(label),
-          $('<span>').addClass('nb-progress-summary__value').text(value)
-        )
-      );
+    // ページ状態ごとの件数（クリックでページ一覧を絞り込む）
+    const counts = countByStatus(pages);
+    const $chips = $('<div>').addClass('nb-chips');
+    ['awaiting_review', 'pending', 'edited', 'skipped', 'rejected', 'failed'].forEach((status) => {
+      const n = counts[status] || 0;
+      if (n === 0 && !['awaiting_review', 'edited', 'failed'].includes(status)) return;
+      $('<button>')
+        .attr('type', 'button')
+        .addClass('nb-chip nb-chip--' + status)
+        .text(C.PAGE_STATUS_LABELS[status] + ' ' + n)
+        .attr('title', 'ページ一覧を「' + C.PAGE_STATUS_LABELS[status] + '」で絞り込む')
+        .on('click', () => {
+          statusFilter.setValue(status);
+          tabs.setTabPanel('pages');
+          tabs.$element[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        })
+        .appendTo($chips);
     });
-    $summarySection.append($progress);
+    $summary.append($chips);
 
-    if (['queued', 'running', 'paused'].includes(task.status)) {
-      const cancelBtn = new OO.ui.ButtonWidget({ label: 'タスクを中止', flags: ['destructive'] });
-      cancelBtn.on('click', async () => {
-        if (!window.confirm('このタスクを中止しますか？')) return;
-        cancelBtn.setDisabled(true);
-        try {
-          await C.postJson('/api/tasks/' + taskId + '/cancel', {});
-          await refreshAll();
-        } catch (e) {
-          C.showNotice($notice, 'error', 'タスクの中止に失敗しました: ' + e.message);
-          cancelBtn.setDisabled(false);
-        }
-      });
-      $summarySection.append($('<div>').css('margin-top', '8px').append(cancelBtn.$element));
+    // 設定の要点
+    const config = task.config_json || {};
+    const $facts = $('<dl>').addClass('nb-facts');
+    const fact = (label, value) => $facts.append($('<dt>').text(label), $('<dd>').append(value));
+    fact('アカウント', document.createTextNode(task.account));
+    if (['queued', 'running'].includes(task.status)) {
+      fact('確認モード', buildModeWidget(task).$element);
+    } else {
+      fact('確認モード', document.createTextNode(task.mode === 'manual' ? '手動確認' : '自動更新'));
     }
-
-    if (task.stage_count >= 2) {
-      const description =
-        task.stage_count === 3
-          ? 'Category系ルールを含むため3ウェーブ構成です（現在ウェーブ' + task.current_stage + '/3）。' +
-            'ウェーブ1=Template名前空間（編集後に使用ページをnull edit）、ウェーブ2=その他のカテゴリメンバー（取り直し）、' +
-            'ウェーブ3=標準名前空間のうちカテゴリ名の記述があるページ（Template:リダイレクトの所属カテゴリ等）。'
-          : 'リンク置換系ルールを含むため2ウェーブ構成です（現在ウェーブ' + task.current_stage + '/2）。' +
-            'ウェーブ1=Template名前空間、ウェーブ2=その他ページ（ウェーブ1完了後に再取得）。';
-      $summarySection.append($('<p>').css('color', '#54595d').text(description));
-    }
-
-    if (task.status === 'expired') {
-      const msg = new OO.ui.MessageWidget({
-        type: 'warning',
-        label: '無操作タイムアウトによりこのタスクは期限切れになりました。編集は行われていません。',
-      });
-      $summarySection.append(msg.$element);
-    }
-
-    const RESUMABLE_MESSAGES = {
-      paused: { type: 'error', label: 'エラーにより一時停止しています。' },
-      emergency_stopped: {
-        type: 'error',
-        label: '緊急停止により中断しました。緊急停止を解除してから再開すると、未処理のページから続行します。',
-      },
-      expired: { type: 'warning', label: '再開すると無操作タイムアウトを取り直し、未処理のページから続行します。' },
-    };
-    if (RESUMABLE_MESSAGES[task.status]) {
-      if (task.status !== 'expired') {
-        $summarySection.append(new OO.ui.MessageWidget(RESUMABLE_MESSAGES[task.status]).$element);
-      }
-      const resumeBtn = new OO.ui.ButtonWidget({ label: '再開する', flags: ['primary', 'progressive'] });
-      resumeBtn.on('click', async () => {
-        resumeBtn.setDisabled(true);
-        try {
-          await C.postJson('/api/tasks/' + taskId + '/resume', {});
-          await refreshAll();
-        } catch (e) {
-          C.showNotice($notice, 'error', '再開に失敗しました: ' + e.message);
-          resumeBtn.setDisabled(false);
-        }
-      });
-      $summarySection.append($('<div>').css('margin-top', '8px').append(resumeBtn.$element));
-      if (task.status === 'expired') {
-        $summarySection.append(
-          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(RESUMABLE_MESSAGES.expired.label)
-        );
-      }
-    }
-
-    if (task.status === 'completed_with_failures') {
-      const msg = new OO.ui.MessageWidget({ type: 'warning', label: '一部のページで編集が失敗しました。' });
-      $summarySection.append(msg.$element);
-      const retryBtn = new OO.ui.ButtonWidget({ label: '失敗ページのみを再試行', flags: ['progressive'] });
-      retryBtn.on('click', async () => {
-        retryBtn.setDisabled(true);
-        try {
-          const result = await C.postJson('/api/tasks/' + taskId + '/retry-failed', {});
-          C.showNotice($notice, 'success', result.retriedPageCount + '件を対象に再試行タスク #' + result.id + ' を作成しました。移動します…');
-          setTimeout(() => {
-            location.href = '/tasks/' + result.id;
-          }, 800);
-        } catch (e) {
-          C.showNotice($notice, 'error', '再試行タスクの作成に失敗しました: ' + e.message);
-          retryBtn.setDisabled(false);
-        }
-      });
-      $summarySection.append($('<div>').css('margin-top', '8px').append(retryBtn.$element));
-      $summarySection.append(
-        $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
-          '同じ置換ルール・編集設定を引き継ぎ、失敗したページのみを対象にした新規タスクを作成します（仕様書9.3節）。'
-        )
-      );
-    }
+    fact('失敗時', document.createTextNode(config.onFailure === 'skipAndContinue' ? 'スキップして続行' : '一時停止'));
+    fact('作成', $('<span>').append(document.createTextNode((task.created_by || '-') + '・'), C.timeElement(task.created_at)));
+    fact('最終更新', C.timeElement(task.updated_at));
+    if (task.retry_of_task_id) fact('再試行元', $('<a>').attr('href', '/tasks/' + task.retry_of_task_id).text('#' + task.retry_of_task_id));
+    fact('編集ログ', $('<a>').attr('href', '/edit-log?task_id=' + taskId).text('このタスクの編集ログを見る'));
+    $summary.append($facts);
   }
 
-  function renderReviewPanel(task, pages) {
-    const reviewing = pages.find((p) => p.status === 'awaiting_review');
+  // ===== 確認中のページ =====
+  function countdownText(deadline) {
+    const remain = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    return remain > 0 ? 'あと約' + remain + '秒で自動承認されます（目安）' : 'まもなく自動承認されます';
+  }
 
+  let countdown = null; // { deadline, total, $text, bar }
+
+  function renderReview(task, pages) {
+    const reviewing = pages.find((p) => p.status === 'awaiting_review');
+    state.reviewing = reviewing || null;
     if (!reviewing) {
-      $reviewContainer.empty();
-      lastReviewPanelKey = null;
+      $review.empty();
+      state.lastReviewKey = null;
+      countdown = null;
       return;
     }
 
     const reviewSettings = (task.config_json && task.config_json.reviewSettings) || {};
     const mode = reviewSettings.mode || task.mode;
-
-    // 3秒ごとの更新で毎回作り直すと、開いているドロップダウンが閉じたりDiffのスクロール位置が
+    // 自動更新で毎回作り直すと、開いているドロップダウンが閉じたりDiffのスクロール位置が
     // 戻ったりするため、確認対象・モードが変わったときだけ作り直す（カウントダウンは別タイマーで更新）。
-    const panelKey = [reviewing.id, mode, reviewing.prepared_at, reviewSettings.autoWaitSeconds].join('|');
-    if (panelKey === lastReviewPanelKey) return;
-    lastReviewPanelKey = panelKey;
-    $reviewContainer.empty();
+    const key = [reviewing.id, mode, reviewing.prepared_at, reviewSettings.autoWaitSeconds].join('|');
+    if (key === state.lastReviewKey) return;
+    state.lastReviewKey = key;
 
-    const $panel = $('<div>').addClass('nb-review-panel');
-    $panel.append($('<div>').addClass('nb-review-panel__title').text('確認中: ' + reviewing.page_title));
+    const reviewable = pages.filter((p) => ['awaiting_review', 'pending', 'prepared', 'preparing'].includes(p.status)).length;
+    const $panel = $('<section>').addClass('nb-review').attr('aria-label', '確認中のページ');
+    const $head = $('<div>').addClass('nb-review__head').append(
+      $('<div>').addClass('nb-review__heading').append(
+        $('<span>').addClass('nb-review__label').text('確認中（W' + reviewing.stage + '・残り' + reviewable + '件）'),
+        $('<h2>').addClass('nb-review__title').append(C.wikiLink(reviewing.page_title))
+      )
+    );
 
-    const { modeWidget } = buildModeWidget(task, refreshAll);
-
-    const approveBtn = new OO.ui.ButtonWidget({ label: '承認', flags: ['primary', 'progressive'] });
-    const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', flags: ['destructive'] });
-    const submitReview = async (action, button) => {
+    const approveBtn = new OO.ui.ButtonWidget({ label: '承認して編集', icon: 'check', flags: ['primary', 'progressive'], title: '承認（キー: A）' });
+    const rejectBtn = new OO.ui.ButtonWidget({ label: '却下', icon: 'close', flags: ['destructive'], title: '却下（キー: R）' });
+    const submit = async (action) => {
+      if (approveBtn.isDisabled()) return;
       approveBtn.setDisabled(true);
       rejectBtn.setDisabled(true);
       try {
         await C.postJson('/api/tasks/' + taskId + '/pages/' + reviewing.id + '/' + action, {});
-        await refreshAll();
+        C.toast((action === 'approve' ? '承認しました: ' : '却下しました: ') + reviewing.page_title, action === 'approve' ? 'success' : 'notice');
+        await poller.refresh();
       } catch (e) {
-        C.showNotice($notice, 'error', (action === 'approve' ? '承認' : '却下') + 'に失敗しました: ' + e.message);
-        button.setDisabled(false);
-        (button === approveBtn ? rejectBtn : approveBtn).setDisabled(false);
+        C.toast((action === 'approve' ? '承認' : '却下') + 'に失敗しました: ' + e.message, 'error');
+        approveBtn.setDisabled(false);
+        rejectBtn.setDisabled(false);
       }
     };
-    approveBtn.on('click', () => submitReview('approve', approveBtn));
-    rejectBtn.on('click', () => submitReview('reject', rejectBtn));
-    $panel.append(
-      $('<div>').addClass('nb-review-panel__actions').append(
-        $('<span>').addClass('nb-review-panel__mode').append($('<span>').text('確認モード:'), modeWidget.$element),
-        approveBtn.$element,
-        rejectBtn.$element
+    approveBtn.on('click', () => submit('approve'));
+    rejectBtn.on('click', () => submit('reject'));
+    state.submitReview = submit;
+
+    $head.append(
+      $('<div>').addClass('nb-review__actions').append(
+        $('<label>').addClass('nb-review__mode').append($('<span>').text('確認モード'), buildModeWidget(task).$element),
+        rejectBtn.$element,
+        approveBtn.$element
       )
     );
+    $panel.append($head);
 
+    countdown = null;
     if (mode === 'auto') {
       const autoWaitSeconds = Number(reviewSettings.autoWaitSeconds) || 0;
-      const preparedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
-      const $countdown = $('<span>').addClass('nb-countdown').data('deadline', preparedAt + autoWaitSeconds * 1000);
-      updateCountdown($countdown);
-      $panel.append($('<p>').append($countdown, $refreshStatus));
-    } else {
-      $panel.append($refreshStatus);
+      const startedAt = reviewing.prepared_at ? new Date(reviewing.prepared_at).getTime() : Date.now();
+      const bar = new OO.ui.ProgressBarWidget({ progress: 0 });
+      const $text = $('<span>');
+      countdown = { deadline: startedAt + autoWaitSeconds * 1000, total: autoWaitSeconds * 1000, $text, bar };
+      $panel.append($('<div>').addClass('nb-review__countdown').append($text, bar.$element));
+      updateCountdown();
     }
+    $panel.append($('<p>').addClass('nb-review__hint').text('キーボード: A＝承認して編集 / R＝却下'));
 
-    const $diffArea = $('<div>').text('Diffを読み込み中…');
-    $panel.append($diffArea);
-    $reviewContainer.append($panel);
+    const $diff = $('<div>').addClass('nb-diff').append(C.loading('差分を読み込み中…'));
+    $panel.append($diff);
+    $review.empty().append($panel);
 
     // 取得済みのDiffはcompareCacheから返るため、パネルを作り直してもaction=compareは再実行されない
     loadCompare(reviewing.id)
-      .then((html) => {
-        // action=compareが返すHTMLはMediaWiki本体の差分テーブルそのもの（信頼できる自ウィキAPIの出力）。
-        // 仕様書9章の設計どおり、そのまま埋め込む。
-        $diffArea.html(html || '<p>変更点がありません。</p>');
-      })
-      .catch((e) => {
-        $diffArea.text('Diffの取得に失敗しました: ' + e.message);
-      });
+      .then((html) => $diff.empty().append(diffTable(html)))
+      .catch((e) => $diff.empty().append(new OO.ui.MessageWidget({ type: 'error', label: '差分の取得に失敗しました: ' + e.message }).$element));
   }
 
-  function renderPageList(pages) {
-    $pageListSection.empty();
-    $pageListSection.append($('<div>').addClass('nb-section__title').text('ページ一覧（' + pages.length + '件）'));
+  function updateCountdown() {
+    if (!countdown) return;
+    countdown.$text.text(countdownText(countdown.deadline));
+    const elapsed = countdown.total > 0 ? 1 - Math.max(0, countdown.deadline - Date.now()) / countdown.total : 1;
+    countdown.bar.setProgress(Math.round(Math.min(1, Math.max(0, elapsed)) * 100));
+  }
+  setInterval(updateCountdown, 1000);
 
-    if (pages.length === 0) {
-      $pageListSection.append($('<p>').text('対象ページがありません。'));
+  C.onShortcut('a', () => state.reviewing && state.submitReview && state.submitReview('approve'));
+  C.onShortcut('r', () => state.reviewing && state.submitReview && state.submitReview('reject'));
+
+  // ===== ページ一覧 =====
+  const statusFilter = new OO.ui.DropdownInputWidget({ options: [{ data: '', label: 'すべての状態' }] });
+  const stageFilter = new OO.ui.DropdownInputWidget({ options: [{ data: '', label: 'すべてのウェーブ' }] });
+  const pageSearch = new OO.ui.SearchInputWidget({ placeholder: 'ページ名で絞り込み' });
+  const $pageList = $('<div>').addClass('nb-page-list');
+  const $pageMore = $('<div>').addClass('nb-more');
+  pagesPanel.$element.append(
+    $('<div>').addClass('nb-toolbar').append(statusFilter.$element, stageFilter.$element, pageSearch.$element.addClass('nb-toolbar__search')),
+    $pageList,
+    $pageMore
+  );
+  statusFilter.on('change', (v) => {
+    state.pageFilter.status = v;
+    state.pageFilter.limit = PAGE_LIST_STEP;
+    renderPageList();
+  });
+  stageFilter.on('change', (v) => {
+    state.pageFilter.stage = v;
+    state.pageFilter.limit = PAGE_LIST_STEP;
+    renderPageList();
+  });
+  pageSearch.on('change', (v) => {
+    state.pageFilter.query = v.trim();
+    state.pageFilter.limit = PAGE_LIST_STEP;
+    renderPageList();
+  });
+
+  let filterOptionsKey = null;
+  function updateFilterOptions(task, pages) {
+    const counts = countByStatus(pages);
+    const key = JSON.stringify([counts, task.stage_count]);
+    if (key === filterOptionsKey) return;
+    filterOptionsKey = key;
+    statusFilter.setOptions(
+      [{ data: '', label: 'すべての状態（' + pages.length + '）' }].concat(
+        Object.keys(C.PAGE_STATUS_LABELS)
+          .filter((s) => counts[s] || s === state.pageFilter.status)
+          .map((s) => ({ data: s, label: C.PAGE_STATUS_LABELS[s] + '（' + (counts[s] || 0) + '）' }))
+      )
+    );
+    statusFilter.setValue(state.pageFilter.status);
+    const stages = [];
+    for (let i = 1; i <= (task.stage_count || 1); i++) stages.push({ data: String(i), label: 'ウェーブ' + i });
+    stageFilter.setOptions([{ data: '', label: 'すべてのウェーブ' }].concat(stages));
+    stageFilter.setValue(state.pageFilter.stage);
+    stageFilter.toggle((task.stage_count || 1) > 1);
+    setTabLabel(pagesPanel, 'ページ一覧（' + pages.length + '）');
+  }
+
+  function renderPageList() {
+    const f = state.pageFilter;
+    const query = f.query.toLowerCase();
+    const filtered = state.pages.filter(
+      (p) =>
+        (!f.status || p.status === f.status) &&
+        (!f.stage || String(p.stage) === f.stage) &&
+        (!query || p.page_title.toLowerCase().includes(query))
+    );
+    $pageList.empty();
+    $pageMore.empty();
+    if (state.pages.length === 0) {
+      $pageList.append(C.emptyState('対象ページはまだありません。ワーカーが対象ページを取得するとここに表示されます。'));
       return;
     }
-
-    const $list = $('<div>').addClass('nb-page-list');
-    pages.forEach((p) => {
+    if (filtered.length === 0) {
+      $pageList.append(C.emptyState('条件に一致するページはありません。'));
+      return;
+    }
+    filtered.slice(0, f.limit).forEach((p) => {
       const $row = $('<div>').addClass('nb-page-row');
-      const $left = $('<span>').text('[W' + p.stage + '] ' + p.page_title + ' ');
-      $left.append(C.pageStatusBadge(p.status));
-      const $right = $('<span>').css('color', '#54595d').text(p.error_message || '');
-      $list.append($row.append($left, $right));
-    });
-    $pageListSection.append($list);
-  }
-
-  function renderWarnings(warnings) {
-    $warningSection.empty();
-    if (!warnings || warnings.length === 0) return;
-
-    const $panel = $('<div>').addClass('nb-warning-panel');
-    $panel.append(
-      $('<div>').css('font-weight', 'bold').text(
-        '要手動確認: Template:リダイレクトの所属カテゴリ 関連（' + warnings.length + '件）'
-      )
-    );
-    $panel.append(
-      $('<p>').text(
-        '以下のページには「リダイレクトの所属カテゴリ」と旧カテゴリ名の記載が見つかりましたが、' +
-          'テンプレートの引数として構造的に確認できなかったため自動編集していません' +
-          '（例: 想定外の記法、コメントアウト等）。必要に応じて手動で確認・修正してください。' +
-          '構造的に一致するものは既に自動編集済みで、ここには表示されません。'
-      )
-    );
-    warnings.forEach((w) => {
-      const $item = $('<div>').css('margin-bottom', '8px');
-      $item.append($('<strong>').text(w.page_title));
-      if (w.snippet) {
-        $item.append($('<div>').css({ fontFamily: 'monospace', fontSize: '0.85em', color: '#54595d' }).text(w.snippet));
+      const $left = $('<div>').addClass('nb-page-row__main').append(
+        $('<span>').addClass('nb-page-row__stage').text('W' + p.stage),
+        C.wikiLink(p.page_title),
+        C.pageStatusBadge(p.status)
+      );
+      $row.append($left);
+      const $right = $('<div>').addClass('nb-page-row__side');
+      if (p.error_message) $row.append($('<div>').addClass('nb-page-row__error').text(p.error_message));
+      if (p.base_revid && REVIEWABLE_DIFF_STATUSES.includes(p.status)) {
+        const diffBtn = new OO.ui.ButtonWidget({ label: '差分', icon: 'eye', framed: false, flags: ['progressive'] });
+        diffBtn.on('click', () => openDiff(p));
+        $right.append(diffBtn.$element);
       }
-      $panel.append($item);
+      $row.append($right);
+      $pageList.append($row);
     });
-    $warningSection.append($panel);
+    if (filtered.length > f.limit) {
+      const moreBtn = new OO.ui.ButtonWidget({ label: 'さらに表示（残り' + (filtered.length - f.limit) + '件）', icon: 'expand' });
+      moreBtn.on('click', () => {
+        f.limit += PAGE_LIST_STEP;
+        renderPageList();
+      });
+      $pageMore.append(moreBtn.$element);
+    }
   }
 
-  function renderLogs(logs) {
-    $logSection.empty();
-    $logSection.append($('<div>').addClass('nb-section__title').text('実行ログ（最新200件）'));
+  // ===== 実行ログ =====
+  const logLevelFilter = new OO.ui.ButtonSelectWidget({
+    items: [
+      new OO.ui.ButtonOptionWidget({ data: '', label: 'すべて' }),
+      new OO.ui.ButtonOptionWidget({ data: 'warning', label: '警告以上' }),
+      new OO.ui.ButtonOptionWidget({ data: 'error', label: 'エラーのみ' }),
+    ],
+  });
+  logLevelFilter.selectItemByData('');
+  logLevelFilter.on('choose', (item) => {
+    state.logLevel = item.getData();
+    renderLogs();
+  });
+  const $logList = $('<div>').addClass('nb-task-log');
+  logsPanel.$element.append(
+    $('<div>').addClass('nb-toolbar').append(logLevelFilter.$element, $('<span>').addClass('nb-toolbar__note').text('新しい順・最新200件')),
+    $logList
+  );
+  const LOG_LEVEL_LABELS = { info: '情報', warning: '警告', error: 'エラー' };
 
-    if (!logs || logs.length === 0) {
-      $logSection.append($('<p>').text('まだ実行ログはありません。ワーカーがタスクを開始すると、対象取得やウェーブ遷移がここに記録されます。'));
+  function renderLogs() {
+    const levels = state.logLevel === 'error' ? ['error'] : state.logLevel === 'warning' ? ['warning', 'error'] : null;
+    const logs = state.logs.filter((l) => !levels || levels.includes(l.level)).slice().reverse();
+    $logList.empty();
+    if (state.logs.length === 0) {
+      $logList.append(C.emptyState('まだ実行ログはありません。ワーカーがタスクを開始すると、対象取得やウェーブ遷移がここに記録されます。'));
       return;
     }
-
-    const $list = $('<div>').addClass('nb-task-log');
+    if (logs.length === 0) {
+      $logList.append(C.emptyState('該当するログはありません。'));
+      return;
+    }
     logs.forEach((log) => {
-      const timestamp = log.created_at ? new Date(log.created_at).toLocaleString('ja-JP') : '';
       const scope = [log.stage ? 'W' + log.stage : '', log.page_title || ''].filter(Boolean).join(' ');
-      const $row = $('<div>').addClass('nb-task-log__row nb-task-log__row--' + log.level);
-      $row.append($('<time>').addClass('nb-task-log__time').text(timestamp));
-      $row.append($('<span>').addClass('nb-task-log__level').text(log.level));
-      if (scope) $row.append($('<span>').addClass('nb-task-log__scope').text(scope));
-      $row.append($('<span>').addClass('nb-task-log__message').text(log.message));
-      $list.append($row);
+      $logList.append(
+        $('<div>').addClass('nb-task-log__row nb-task-log__row--' + log.level).append(
+          C.timeElement(log.created_at).addClass('nb-task-log__time'),
+          $('<span>').addClass('nb-task-log__level').text(LOG_LEVEL_LABELS[log.level] || log.level),
+          $('<span>').addClass('nb-task-log__scope').text(scope),
+          $('<span>').addClass('nb-task-log__message').text(log.message)
+        )
+      );
     });
-    $logSection.append($list);
+    const problemCount = state.logs.filter((l) => l.level !== 'info').length;
+    setTabLabel(logsPanel, '実行ログ' + (problemCount > 0 ? '（警告' + problemCount + '）' : ''));
   }
 
-  async function refreshAll() {
-    if (refreshInProgress) return;
-    refreshInProgress = true;
-    $refreshStatus.text('更新中…');
-    try {
-      const [task, pages, logs] = await Promise.all([loadTask(), loadPages(), loadLogs()]);
-      renderSummary(task, pages);
-      renderReviewPanel(task, pages);
-      renderPageList(pages);
-      renderLogs(logs);
+  // ===== 警告 =====
+  function renderWarnings() {
+    const warnings = state.warnings || [];
+    warningsPanel.$element.empty();
+    setTabLabel(warningsPanel, '警告（' + warnings.length + '）');
+    if (warnings.length === 0) {
+      warningsPanel.$element.append(C.emptyState('手動確認が必要な警告はありません。'));
+      return;
+    }
+    warningsPanel.$element.append(
+      new OO.ui.MessageWidget({
+        type: 'warning',
+        label:
+          '以下のページには「リダイレクトの所属カテゴリ」と旧カテゴリ名の記載が見つかりましたが、テンプレートの引数として構造的に確認できなかったため自動編集していません' +
+          '（例: 想定外の記法、コメントアウト等）。必要に応じて手動で確認・修正してください。構造的に一致するものは自動編集の対象になり、ここには表示されません。',
+      }).$element
+    );
+    const $list = $('<div>').addClass('nb-warning-list');
+    warnings.forEach((w) => {
+      $list.append(
+        $('<div>').addClass('nb-warning-item').append(
+          $('<div>').addClass('nb-warning-item__title').append(C.wikiLink(w.page_title)),
+          w.snippet ? $('<pre>').addClass('nb-warning-item__snippet').text(w.snippet) : null
+        )
+      );
+    });
+    warningsPanel.$element.append($list);
+  }
 
-      if (!warningsLoaded) {
-        warningsLoaded = true;
-        loadWarnings()
-          .then(renderWarnings)
-          .catch((e) => {
-            warningsLoaded = false; // 失敗時は次回リトライできるようにする
-            console.warn('警告一覧の取得に失敗しました:', e.message);
+  // ===== 設定内容 =====
+  function linkSpec(title, anchor, label) {
+    return (title || '') + (anchor ? '#' + anchor : '') + (label ? '|' + label : '');
+  }
+
+  function describeRule(rule) {
+    const $rule = $('<div>').addClass('nb-rule-summary');
+    $rule.append($('<div>').addClass('nb-rule-summary__type').text(C.RULE_TYPE_LABELS[rule.templateType] || rule.templateType));
+    const $dl = $('<dl>').addClass('nb-facts nb-facts--compact');
+    const fact = (label, value) => $dl.append($('<dt>').text(label), $('<dd>').text(value));
+    if (rule.templateType === 'custom') {
+      (rule.steps || []).forEach((step, i) => fact('ステップ' + (i + 1), '/' + step.pattern + '/' + (step.flags || 'g') + ' → ' + step.replacement));
+      const ts = rule.targetSource || {};
+      const sourceText =
+        ts.type === 'manualList'
+          ? '手入力 ' + (ts.titles || []).length + '件'
+          : ts.type + ': ' + (ts.category || ts.page || ts.query || '');
+      fact('対象', sourceText);
+    } else {
+      fact('改名元', rule.templateType === 'linkRenameExact' ? linkSpec(rule.from, rule.fromAnchor, rule.fromLabel) : rule.from);
+      if (rule.to) fact('改名先', rule.templateType === 'linkRenameExact' ? linkSpec(rule.to, rule.toAnchor, rule.toLabel) : rule.to);
+      if (rule.namespaces !== undefined) fact('名前空間', rule.namespaces === null ? '全名前空間' : rule.namespaces.join(', '));
+      if (rule.fixCategoryLinks) fact('追加', '「Category:旧」の記述も置換');
+      if (rule.forceTargets) fact('再試行対象', rule.forceTargets.length + '件');
+    }
+    return $rule.append($dl);
+  }
+
+  let configRendered = false;
+  function renderConfig(task) {
+    if (configRendered) return;
+    configRendered = true;
+    const config = task.config_json || {};
+    const edit = config.editSettings || {};
+    const review = config.reviewSettings || {};
+    const $rules = $('<div>').addClass('nb-rule-summaries');
+    (config.replacements || []).forEach((rule) => $rules.append(describeRule(rule)));
+    const $dl = $('<dl>').addClass('nb-facts');
+    const fact = (label, value) => $dl.append($('<dt>').text(label), $('<dd>').text(value));
+    fact('要約欄', edit.editSummary || '-');
+    fact('Botフラグ・細部の編集', (edit.botFlag ? 'Botフラグあり' : 'Botフラグなし') + '・' + (edit.minorEdit ? '細部の編集' : '通常の編集'));
+    fact('編集間隔', (edit.editIntervalSeconds || '-') + '秒');
+    if (edit.linkUpdateMethod) fact('使用ページの更新方法', edit.linkUpdateMethod === 'purge' ? 'purge＋forcelinkupdate' : 'null edit');
+    fact('確認モード（作成時）', review.mode === 'manual' ? '手動確認（タイムアウト ' + review.manualTimeoutHours + '時間）' : '自動更新（' + (review.autoWaitSeconds || 0) + '秒後に承認）');
+    configPanel.$element.empty().append(
+      $('<h3>').addClass('nb-subheading').text('置換ルール（' + (config.replacements || []).length + '件）'),
+      $rules,
+      $('<h3>').addClass('nb-subheading').text('編集設定'),
+      $dl
+    );
+  }
+
+  // ===== 更新 =====
+  let errorShown = false;
+  async function refresh() {
+    $lastUpdated.text('更新中…');
+    try {
+      const [task, pages, logs] = await Promise.all([
+        C.fetchJson('/api/tasks/' + taskId),
+        C.fetchJson('/api/tasks/' + taskId + '/pages'),
+        C.fetchJson('/api/tasks/' + taskId + '/logs?limit=200'),
+      ]);
+      state.task = task;
+      state.pages = pages;
+      state.logs = logs;
+      document.title = 'タスク #' + taskId + '（' + (C.TASK_STATUS_LABELS[task.status] || task.status) + '）- NanonaBot Tool';
+      renderReview(task, pages);
+      renderSummary(task, pages);
+      updateFilterOptions(task, pages);
+      renderPageList();
+      renderLogs();
+      renderConfig(task);
+      if (state.warnings === null) {
+        state.warnings = [];
+        C.fetchJson('/api/tasks/' + taskId + '/warnings')
+          .then((warnings) => {
+            state.warnings = warnings;
+            renderWarnings();
+          })
+          .catch(() => {
+            state.warnings = null; // 失敗時は次回リトライできるようにする
           });
+        renderWarnings();
       }
+      $lastUpdated.text('最終更新 ' + new Date().toLocaleTimeString('ja-JP'));
+      errorShown = false;
     } catch (e) {
-      if (e.status === 503) {
-        $refreshStatus.text('更新に失敗しました。再試行します…');
-      } else {
-        $refreshStatus.text('更新に失敗しました。');
-        C.showNotice($notice, 'error', '読み込みに失敗しました: ' + e.message);
-      }
-    } finally {
-      refreshInProgress = false;
-      if ($refreshStatus.text() === '更新中…') $refreshStatus.empty();
+      $lastUpdated.text('更新に失敗しました（自動で再試行します）');
+      if (!errorShown && e.status !== 503) C.toast('読み込みに失敗しました: ' + e.message, 'error');
+      errorShown = true;
     }
   }
 
-  refreshAll();
-  setInterval(refreshAll, 3000);
-  setInterval(() => {
-    $reviewContainer.find('.nb-countdown').each(function () {
-      updateCountdown($(this));
-    });
-  }, 1000);
+  const poller = C.poll(refresh, 3000);
+  refreshBtn.on('click', () => poller.refresh());
 })();

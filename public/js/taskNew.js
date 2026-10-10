@@ -4,12 +4,29 @@
 
   const C = window.NanonaCommon;
   const user = window.NANONA_BOT || {};
-  const $app = $('#app');
 
-  $app.append(C.buildHeader({ title: '新規タスク作成', user }));
+  const page = C.initPage({ title: '新規タスク作成', active: 'new' });
+  if (!page.isOwner) {
+    page.$main.append(C.buildEmergencyOnlyPanel(user));
+    return;
+  }
 
-  const $notice = $('<div>');
-  $app.append($notice);
+  // 入力エラーの一覧（送信前チェック・サーバー側の検証エラー）
+  const $notice = $('<div>').addClass('nb-form-errors');
+  page.$main.append($notice);
+
+  // 入力途中でページを離れる前に確認する（タスクを作成したら解除）
+  let dirty = false;
+  let submitted = false;
+  $(document).on('input change', '.nb-app', () => {
+    dirty = true;
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty && !submitted) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
 
   // フェーズ4〜6: 8種類すべてのtemplateTypeが実際に機能する（仕様書6章・10章、フェーズ6でunlinkPage/templateSubstを追加）。
   const RULE_TYPES = [
@@ -74,6 +91,7 @@
   const rules = []; // { id, typeWidget, $card, getConfig(): object|null, steps?: [...] }
 
   const $rulesContainer = $('<div>');
+  const ruleCountLabel = new OO.ui.LabelWidget({ label: '' });
 
   function addStepRow(rule) {
     const id = ++stepSeq;
@@ -165,14 +183,20 @@
     const id = ++ruleSeq;
     const initialType = (prefill && prefill.templateType) || 'custom';
     const typeWidget = new OO.ui.DropdownInputWidget({ options: RULE_TYPES, value: initialType });
-    const removeRuleBtn = new OO.ui.ButtonWidget({ label: 'このルールを削除', icon: 'trash', flags: ['destructive'], framed: false });
+    const removeRuleBtn = new OO.ui.ButtonWidget({ icon: 'trash', flags: ['destructive'], framed: false, title: 'このルールを削除', label: '削除' });
+    const moveUpBtn = new OO.ui.ButtonWidget({ icon: 'arrowUp', framed: false, invisibleLabel: true, label: '上へ移動', title: '上へ移動' });
+    const moveDownBtn = new OO.ui.ButtonWidget({ icon: 'arrowDown', framed: false, invisibleLabel: true, label: '下へ移動', title: '下へ移動' });
 
     const $body = $('<div>');
     const $card = $('<div>').addClass('nb-rule-card');
     const $cardHeader = $('<div>').addClass('nb-rule-card__header');
-    $cardHeader.append($('<strong>').text('ルール #' + id), removeRuleBtn.$element);
+    const $cardTitle = $('<strong>').addClass('nb-rule-card__title');
+    $cardHeader.append(
+      $cardTitle,
+      $('<span>').addClass('nb-rule-card__tools').append(moveUpBtn.$element, moveDownBtn.$element, removeRuleBtn.$element)
+    );
 
-    const rule = { id, typeWidget, $card, customSteps: [], $stepsContainer: null, getConfig: () => null };
+    const rule = { id, typeWidget, $card, $cardTitle, moveUpBtn, moveDownBtn, customSteps: [], $stepsContainer: null, getConfig: () => null };
 
     function renderBody() {
       // $body.empty()で子要素がDOMから除去されると、使い回しているウィジェットの
@@ -186,7 +210,7 @@
         const $stepsContainer = $('<div>');
         rule.$stepsContainer = $stepsContainer;
         const targetArea = buildCustomTargetArea(rule);
-        const addStepBtn = new OO.ui.ButtonWidget({ label: '＋ ステップ追加', framed: false });
+        const addStepBtn = new OO.ui.ButtonWidget({ label: 'ステップを追加', icon: 'add', framed: false });
         addStepBtn.on('click', () => addStepRow(rule));
 
         $body.append(
@@ -358,17 +382,44 @@
       const idx = rules.findIndex((r) => r.id === id);
       if (idx !== -1) rules.splice(idx, 1);
       $card.remove();
+      renumberRules();
+      C.toast('ルールを削除しました。', 'notice');
     });
+    const moveRule = (delta) => {
+      const idx = rules.findIndex((r) => r.id === id);
+      const target = idx + delta;
+      if (idx === -1 || target < 0 || target >= rules.length) return;
+      rules.splice(target, 0, rules.splice(idx, 1)[0]);
+      if (delta < 0) $card.insertBefore(rules[target + 1].$card);
+      else $card.insertAfter(rules[target - 1].$card);
+      renumberRules();
+    };
+    moveUpBtn.on('click', () => moveRule(-1));
+    moveDownBtn.on('click', () => moveRule(1));
 
     $card.append($cardHeader, new OO.ui.FieldLayout(typeWidget, { label: '種別', align: 'top' }).$element, $body);
 
     renderBody();
     rules.push(rule);
     $rulesContainer.append($card);
+    renumberRules();
   }
 
-  const addRuleBtn = new OO.ui.ButtonWidget({ label: '＋ ルール追加', flags: ['progressive'] });
-  addRuleBtn.on('click', addRuleCard);
+  /** ルールの並び順に合わせて番号と上下移動ボタンの有効/無効を更新する（上から順に適用される）。 */
+  function renumberRules() {
+    rules.forEach((rule, i) => {
+      rule.$cardTitle.text('ルール ' + (i + 1));
+      rule.moveUpBtn.setDisabled(i === 0);
+      rule.moveDownBtn.setDisabled(i === rules.length - 1);
+    });
+    ruleCountLabel.setLabel('ルール ' + rules.length + '件');
+  }
+
+  const addRuleBtn = new OO.ui.ButtonWidget({ label: 'ルールを追加', icon: 'add', flags: ['progressive'] });
+  addRuleBtn.on('click', () => {
+    addRuleCard();
+    rules[rules.length - 1].$card[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 
   // ---- BOTREQ連携（仕様書7章）----
   const UNSUPPORTED_REASON_LABELS = {
@@ -382,7 +433,7 @@
   };
   const RULE_TYPE_LABEL_MAP = Object.fromEntries(RULE_TYPES.map((t) => [t.data, t.label]));
 
-  const botreqBtn = new OO.ui.ButtonWidget({ label: 'Wikipedia:Bot作業依頼 から取得', icon: 'search' });
+  const botreqBtn = new OO.ui.ButtonWidget({ label: 'Bot作業依頼から取り込む', icon: 'download', title: 'Wikipedia:Bot作業依頼 の {{リンク修正依頼/改名}} を読み込みます' });
   const $botreqPanel = $('<div>');
 
   function renderBotreqProposals(proposals, topicProgress) {
@@ -456,8 +507,8 @@
               toLabel: pair.toLabel,
             })
           );
-        C.showNotice($notice, 'success', supportedCount + '件のルールを追加しました。内容を確認してから送信してください。');
-        window.scrollTo(0, document.body.scrollHeight);
+        C.toast(supportedCount + '件のルールを追加しました。内容を確認してから送信してください。');
+        rules[rules.length - 1].$card[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
 
       $card.append($pairList, $('<div>').css('margin-top', '8px').append(importBtn.$element));
@@ -467,13 +518,13 @@
 
   botreqBtn.on('click', async () => {
     botreqBtn.setDisabled(true);
-    $botreqPanel.empty().append($('<p>').text('読み込み中…'));
+    $botreqPanel.empty().append(C.loading('Wikipedia:Bot作業依頼を読み込み中…'));
     try {
       const data = await C.fetchJson('/api/botreq/proposals');
       renderBotreqProposals(data.proposals, data.topicProgress);
     } catch (e) {
       $botreqPanel.empty();
-      C.showNotice($notice, 'error', 'BOTREQの取得に失敗しました: ' + e.message);
+      C.toast('BOTREQの取得に失敗しました: ' + e.message, 'error');
     } finally {
       botreqBtn.setDisabled(false);
     }
@@ -541,9 +592,9 @@
         reviewSettings: config.reviewSettings,
       });
       accountDefaults[config.account] = { editSettings: config.editSettings, reviewSettings: config.reviewSettings };
-      C.showNotice($notice, 'success', 'アカウントのデフォルト設定を保存しました。');
+      C.toast('アカウント ' + config.account + ' のデフォルト設定を保存しました。');
     } catch (e) {
-      C.showNotice($notice, 'error', 'デフォルト設定の保存に失敗しました: ' + e.message);
+      C.toast('デフォルト設定の保存に失敗しました: ' + e.message, 'error');
     } finally {
       saveDefaultsBtn.setDisabled(false);
     }
@@ -573,7 +624,7 @@
   });
 
   // ---- 送信 ----
-  const submitBtn = new OO.ui.ButtonWidget({ label: 'タスクを作成してキューに投入', flags: ['primary', 'progressive'] });
+  const submitBtn = new OO.ui.ButtonWidget({ label: 'タスクを作成してキューに投入', icon: 'check', flags: ['primary', 'progressive'] });
 
   function buildConfig() {
     const replacements = rules.map((r) => r.getConfig()).filter(Boolean);
@@ -598,43 +649,105 @@
     };
   }
 
+  /** 送信前の入力チェック（サーバー側でも同じ内容を検証する）。問題のあるルールのカードに印を付ける。 */
+  const TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'linkRenameExact', 'categoryRename', 'templateRename'];
+  function validate(config) {
+    const errors = [];
+    rules.forEach((rule) => rule.$card.removeClass('nb-rule-card--error'));
+    if (config.replacements.length === 0) errors.push('置換ルールを1件以上追加してください。');
+    config.replacements.forEach((r, i) => {
+      const label = 'ルール ' + (i + 1) + '（' + (C.RULE_TYPE_LABELS[r.templateType] || r.templateType) + '）';
+      const before = errors.length;
+      if (r.templateType === 'custom') {
+        if (!r.steps.length) errors.push(label + ': 置換ステップを1件以上入力してください。');
+        r.steps.forEach((step, si) => {
+          if (!step.pattern) errors.push(label + ': ステップ' + (si + 1) + 'の正規表現が空です。');
+          else {
+            try {
+              // eslint-disable-next-line no-new
+              new RegExp(step.pattern, step.flags);
+            } catch (e) {
+              errors.push(label + ': ステップ' + (si + 1) + 'の正規表現が不正です（' + e.message + '）。');
+            }
+          }
+        });
+        const ts = r.targetSource;
+        const sourceValue = ts.type === 'manualList' ? ts.titles.length : ts.category || ts.page || ts.query;
+        if (!sourceValue || (typeof sourceValue === 'string' && !sourceValue.trim())) errors.push(label + ': 対象ページの指定が空です。');
+      } else {
+        if (!String(r.from || '').trim()) errors.push(label + ': 改名元（対象）を入力してください。');
+        if (TYPES_REQUIRING_TO.includes(r.templateType) && !String(r.to || '').trim()) errors.push(label + ': 改名先を入力してください。');
+      }
+      if (errors.length > before && rules[i]) rules[i].$card.addClass('nb-rule-card--error');
+    });
+    if (!config.editSettings.editSummary.trim()) errors.push('要約欄を入力してください。');
+    if (!(config.editSettings.editIntervalSeconds >= 5)) errors.push('編集間隔は5秒以上にしてください。');
+    return errors;
+  }
+
+  function showErrors(errors) {
+    $notice.empty();
+    if (errors.length === 0) return;
+    const $list = $('<ul>').append(errors.map((e) => $('<li>').text(e)));
+    $notice.append(
+      new OO.ui.MessageWidget({ type: 'error', label: $('<div>').append($('<strong>').text('入力内容を確認してください'), $list) }).$element
+    );
+    $notice[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function describeForConfirm(config) {
+    const $list = $('<ul>').addClass('nb-confirm-list');
+    config.replacements.forEach((r, i) => {
+      const type = C.RULE_TYPE_LABELS[r.templateType] || r.templateType;
+      const detail =
+        r.templateType === 'custom'
+          ? r.steps.length + 'ステップ'
+          : formatLinkSpec(r.from, r.fromAnchor, r.fromLabel) + (r.to ? ' → ' + formatLinkSpec(r.to, r.toAnchor, r.toLabel) : '');
+      $list.append($('<li>').text('ルール' + (i + 1) + ': [' + type + '] ' + detail));
+    });
+    const review = config.reviewSettings;
+    return $('<div>').append(
+      $('<p>').text(
+        'アカウント ' + config.account + ' で、次の内容のタスクをキューに投入します。' +
+          (review.mode === 'auto' ? '自動更新（' + review.autoWaitSeconds + '秒後に承認）' : '手動確認（タイムアウト ' + review.manualTimeoutHours + '時間）') +
+          '・編集間隔 ' + config.editSettings.editIntervalSeconds + '秒。'
+      ),
+      $list
+    );
+  }
+
   submitBtn.on('click', async () => {
+    const config = buildConfig();
+    const errors = validate(config);
+    showErrors(errors);
+    if (errors.length > 0) return;
+    const ok = await C.confirm(describeForConfirm(config), { title: 'タスクを作成しますか？', okLabel: '作成してキューに投入' });
+    if (!ok) return;
     submitBtn.setDisabled(true);
     try {
-      const config = buildConfig();
       const result = await C.postJson('/api/tasks', config);
-      C.showNotice($notice, 'success', 'タスク #' + result.id + ' を作成しました。移動します…');
-      setTimeout(() => {
-        location.href = '/tasks/' + result.id;
-      }, 800);
+      submitted = true;
+      C.toast('タスク #' + result.id + ' を作成しました。');
+      location.href = '/tasks/' + result.id;
     } catch (e) {
-      C.showNotice($notice, 'error', 'タスクの作成に失敗しました: ' + e.message);
+      showErrors(e.data && e.data.errors ? e.data.errors : ['タスクの作成に失敗しました: ' + e.message]);
       submitBtn.setDisabled(false);
     }
   });
 
   // ---- 組み立て ----
-  const $accountSection = $('<div>').addClass('nb-section');
-  $accountSection.append(
-    $('<div>').addClass('nb-section__title').text('Botアカウント'),
-    $('<p>').addClass('nb-section__hint').text('編集に使用するBotアカウントを選択してください。'),
-    new OO.ui.FieldLayout(accountWidget, { label: 'アカウント', align: 'top' }).$element
-  );
+  const accountSection = C.section({ title: 'Botアカウント', hint: '編集に使用するBotアカウントを選択してください。選ぶと、そのアカウントのデフォルト設定が読み込まれます。' });
+  accountSection.$body.append(new OO.ui.FieldLayout(accountWidget, { label: 'アカウント', align: 'top' }).$element);
 
-  const $rulesSection = $('<div>').addClass('nb-section');
-  $rulesSection.append(
-    $('<div>').addClass('nb-section__title').text('置換ルール'),
-    $('<p>').addClass('nb-section__hint').text('上から順にルールを適用します。同じページに複数ルールが該当する場合はまとめて準備します。'),
-    $('<div>').css('margin-bottom', '12px').append(botreqBtn.$element),
-    $botreqPanel,
-    $rulesContainer,
-    $('<div>').css('margin-top', '8px').append(addRuleBtn.$element)
-  );
+  const rulesSection = C.section({
+    title: '置換ルール',
+    hint: '上から順にルールを適用します。同じページに複数ルールが該当する場合はまとめて準備します。',
+    actions: [botreqBtn],
+  });
+  rulesSection.$body.append($botreqPanel, $rulesContainer, $('<div>').addClass('nb-form-actions').append(addRuleBtn.$element));
 
-  const $editSection = $('<div>').addClass('nb-section');
-  $editSection.append(
-    $('<div>').addClass('nb-section__title').text('編集設定'),
-    $('<p>').addClass('nb-section__hint').text('Botフラグと編集間隔は、実際の編集処理にも適用されます。'),
+  const editSection = C.section({ title: '編集設定', hint: 'Botフラグと編集間隔は、実際の編集処理にも適用されます。', actions: [saveDefaultsBtn] });
+  editSection.$body.append(
     new OO.ui.FieldLayout(botFlagWidget, { label: 'Botフラグを付与', align: 'inline' }).$element,
     new OO.ui.FieldLayout(minorEditWidget, { label: '細部の編集にする', align: 'inline' }).$element,
     new OO.ui.FieldLayout(editSummaryWidget, { label: '要約欄', align: 'top' }).$element,
@@ -646,27 +759,31 @@
         'ウェーブ1で編集したテンプレートの使用ページのカテゴリ所属を更新する方法です。' +
         '使用ページが多いテンプレートではpurge（50件ずつ一括）の方が速く終わります。',
       helpInline: true,
-    }).$element,
-    saveDefaultsBtn.$element
+    }).$element
   );
 
-  const $reviewSection = $('<div>').addClass('nb-section');
-  $reviewSection.append(
-    $('<div>').addClass('nb-section__title').text('実行モード'),
-    $('<p>').addClass('nb-section__hint').text('自動更新は指定秒数後に承認、確認待機は画面から承認・却下します。実行中にも切り替えできます。'),
-    new OO.ui.FieldLayout(modeWidget, { label: 'モード', align: 'top' }).$element,
-    $autoWaitField,
-    $manualTimeoutField
+  const reviewSection = C.section({
+    title: '実行モード',
+    hint: '自動更新は指定秒数後に承認、確認待機は画面から承認・却下します。実行中にも切り替えできます。',
+  });
+  reviewSection.$body.append(new OO.ui.FieldLayout(modeWidget, { label: 'モード', align: 'top' }).$element, $autoWaitField, $manualTimeoutField);
+
+  const failureSection = C.section({ title: '失敗時の挙動', hint: '一時停止すると原因確認後に再開できます。' });
+  failureSection.$body.append(new OO.ui.FieldLayout(onFailureWidget, { label: '失敗ページが出た場合', align: 'top' }).$element);
+
+  // 画面下部に固定する送信バー
+  const $submitBar = $('<div>').addClass('nb-submit-bar').append(
+    $('<div>').addClass('nb-submit-bar__inner').append(ruleCountLabel.$element, submitBtn.$element)
   );
 
-  const $failureSection = $('<div>').addClass('nb-section');
-  $failureSection.append(
-    $('<div>').addClass('nb-section__title').text('失敗時の挙動'),
-    $('<p>').addClass('nb-section__hint').text('一時停止すると原因確認後に再開できます。'),
-    new OO.ui.FieldLayout(onFailureWidget, { label: '失敗ページが出た場合', align: 'top' }).$element
+  page.$main.append(
+    accountSection.$element,
+    rulesSection.$element,
+    editSection.$element,
+    reviewSection.$element,
+    failureSection.$element,
+    $submitBar
   );
-
-  $app.append($accountSection, $rulesSection, $editSection, $reviewSection, $failureSection, submitBtn.$element);
 
   renderModeFields();
   addRuleCard();
@@ -675,5 +792,5 @@
       accountDefaults = Object.fromEntries(defaults.map((item) => [item.account, item]));
       applyAccountDefaults(accountWidget.getValue());
     })
-    .catch((e) => C.showNotice($notice, 'error', 'アカウントデフォルト設定の取得に失敗しました: ' + e.message));
+    .catch((e) => C.toast('アカウントデフォルト設定の取得に失敗しました: ' + e.message, 'error'));
 })();
