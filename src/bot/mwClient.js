@@ -187,15 +187,49 @@ class MediaWikiBotClient {
    * @returns {Promise<{revid:number, newTimestamp:string}>}
    */
   async edit(params) {
+    return this.withSessionRetry(() => this.editOnce(params));
+  }
+
+  /**
+   * 長時間稼働でBotPasswordのセッションが切れた場合（CSRFトークンが匿名用の "+\\" になる等）。
+   * assert=userにより匿名（IP）での編集は必ず拒否されるので、再ログインして1回だけやり直す。
+   */
+  async withSessionRetry(fn) {
     try {
-      return await this.editOnce(params);
+      return await fn();
     } catch (err) {
-      // 長時間稼働でBotPasswordのセッションが切れた場合（CSRFトークンが匿名用の "+\\" になる等）。
-      // assert=userにより匿名（IP）での編集は必ず拒否されるので、再ログインして1回だけやり直す。
       if (!SESSION_LOST_CODES.includes(err.mwCode)) throw err;
       await this.login();
-      return this.editOnce(params);
+      return fn();
     }
+  }
+
+  /**
+   * null edit（本文を変えない編集）を行い、ページのリンク表・カテゴリ所属を再計算させる。
+   * テンプレートを編集した直後、そのテンプレートを使っているページのカテゴリ所属を
+   * ジョブキューの処理を待たずに更新するために使う。版は作成されない。
+   * @param {string} title
+   */
+  async nullEdit(title) {
+    return this.withSessionRetry(async () => {
+      const token = await this.getCsrfToken();
+      const res = await this.request(
+        {
+          action: 'edit',
+          title,
+          appendtext: '', // 本文に何も足さない＝変更なしの保存（null edit）
+          token,
+          assert: 'user',
+          maxlag: String(EDIT_MAXLAG_SECONDS),
+          nocreate: '1',
+        },
+        'POST'
+      );
+      if (!res.edit || res.edit.result !== 'Success') {
+        throw new Error(`null editに失敗しました: ${JSON.stringify(res.edit)}`);
+      }
+      return res.edit;
+    });
   }
 
   async editOnce({ title, text, summary, bot, minor, baseTimestamp, startTimestamp }) {

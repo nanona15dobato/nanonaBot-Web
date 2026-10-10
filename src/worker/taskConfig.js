@@ -4,7 +4,6 @@ const { isKnownAccount } = require('../bot/accountNames');
 const { KNOWN_PRESET_TEMPLATE_TYPES, TEMPLATE_TYPES_REQUIRING_TO } = require('./templatePresets');
 
 const VALID_TARGET_SOURCE_TYPES = ['manualList', 'category', 'backlinks', 'embeddedin', 'regexSearch'];
-const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2']; // 真に逐次依存する2ウェーブになる種別（9章）
 
 function isValidNamespaces(namespaces) {
   if (namespaces === undefined || namespaces === null) return true;
@@ -105,6 +104,9 @@ function validateRule(rule, i, errors) {
   if (!isValidNamespaces(rule.namespaces)) {
     errors.push(`${prefix}.namespaces: 0以上の整数の配列、またはnull/省略である必要があります`);
   }
+  if (rule.fixCategoryLinks !== undefined && typeof rule.fixCategoryLinks !== 'boolean') {
+    errors.push(`${prefix}.fixCategoryLinks: 真偽値である必要があります`);
+  }
 }
 
 /**
@@ -167,5 +169,5 @@ function validateTaskConfig(config) {
   return { valid: errors.length === 0, errors };
 }
 
-module.exports = { validateTaskConfig, WAVE_TEMPLATE_TYPES, VALID_TARGET_SOURCE_TYPES };
+module.exports = { validateTaskConfig, VALID_TARGET_SOURCE_TYPES };
 

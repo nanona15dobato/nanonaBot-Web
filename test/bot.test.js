@@ -261,3 +261,32 @@ test('MediaWikiBotClient: セッション切れ（assertuserfailed）時は再�
     global.fetch = originalFetch;
   }
 });
+
+test('MediaWikiBotClient: nullEditは本文を変えない編集（appendtext空・nocreate・assert=user）を送る', async () => {
+  const originalFetch = global.fetch;
+  let editParams;
+  global.fetch = async (input, init = {}) => {
+    const params =
+      (init.method || 'GET') === 'GET'
+        ? Object.fromEntries(new URL(String(input)).searchParams.entries())
+        : Object.fromEntries(new URLSearchParams(init.body).entries());
+    const json = (body) => ({ ok: true, status: 200, headers: { getSetCookie: () => [] }, json: async () => body });
+    if (params.action === 'query') return json({ query: { tokens: { csrftoken: 'C' } } });
+    if (params.action === 'edit') {
+      editParams = params;
+      return json({ edit: { result: 'Success', nochange: true } });
+    }
+    throw new Error('unexpected');
+  };
+  try {
+    const client = new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', username: 'X@Y', password: 'z' });
+    await client.nullEdit('記事A');
+    assert.equal(editParams.title, '記事A');
+    assert.equal(editParams.appendtext, '');
+    assert.equal(editParams.text, undefined);
+    assert.equal(editParams.nocreate, '1');
+    assert.equal(editParams.assert, 'user');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
