@@ -151,6 +151,7 @@ class MediaWikiBotClient {
     if (page.missing) {
       return {
         title: page.title,
+        namespace: page.ns,
         pageid: null,
         exists: false,
         revid: null,
@@ -162,6 +163,7 @@ class MediaWikiBotClient {
     const rev = page.revisions && page.revisions[0];
     return {
       title: page.title,
+      namespace: page.ns,
       pageid: page.pageid,
       exists: true,
       revid: rev ? rev.revid : null,

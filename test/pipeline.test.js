@@ -79,6 +79,12 @@ function createFakeDb() {
       return [{ affectedRows }];
     }
 
+    if (s.startsWith('UPDATE task_pages SET namespace = ?')) {
+      const row = taskPages.get(params[1]);
+      if (row) row.namespace = params[0];
+      return [{ affectedRows: row ? 1 : 0 }];
+    }
+
     if (s.startsWith('UPDATE task_pages SET status = ?') === false && s.startsWith('UPDATE task_pages SET status')) {
       // 各種 UPDATE task_pages SET status = '...' ... WHERE id = ?
       const idParam = params[params.length - 1];
@@ -527,4 +533,38 @@ test('runStagePipeline: 確認待ちの間に緊急停止されたページは�
   });
 
   assert.notEqual([...db.taskPages.values()][0].status, 'rejected');
+});
+
+test('runStagePipeline: 手入力で名前空間0として登録したページは、取得した実際の名前空間に直してedit_logにも記録する', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 6, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([
+    { task_id: 6, stage: 1, order_index: 0, page_title: 'Template:手入力', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+  ]);
+  const mwClient = {
+    async getPage(title) {
+      return { title, namespace: 10, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:00:01Z', wikitext: '旧' };
+    },
+    async edit() {
+      return { revid: 2, newTimestamp: '2026-08-11T09:00:05Z' };
+    },
+  };
+
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    await runStagePipeline({
+      taskId: 6,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'skipAndContinue',
+    });
+  });
+
+  assert.equal([...db.taskPages.values()][0].namespace, 10);
+  // writeEditLogのパラメータ順: task_id, stage, page_title, namespace, ...
+  assert.equal(db.editLogRows[0][3], 10);
 });

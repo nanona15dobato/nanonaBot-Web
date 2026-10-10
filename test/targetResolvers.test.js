@@ -9,6 +9,7 @@ const {
   resolveBacklinks,
   resolveEmbeddedIn,
   resolveRegexSearch,
+  MAX_RESULTS,
 } = require('../src/worker/targetResolvers');
 
 test('namespaceParam: null/未指定はundefined（全名前空間）、配列はパイプ区切り', () => {
@@ -130,6 +131,34 @@ test('resolveRegexSearch: ネットワークエラーでも例外を投げない
     const { results, error } = await resolveRegexSearch({ query: 'insource:/x/', namespaces: null });
     assert.deepEqual(results, []);
     assert.match(error, /network down/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('fetchList: 件数上限に達したら打ち切り、truncatedの印を付ける', async () => {
+  const originalFetch = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls++;
+    const items = Array.from({ length: 500 }, (_, i) => ({ title: `P${calls}-${i}`, ns: 0 }));
+    return { ok: true, status: 200, json: async () => ({ query: { backlinks: items }, continue: { blcontinue: `c${calls}` } }) };
+  };
+  try {
+    const results = await resolveBacklinks({ page: 'X', namespaces: [0] });
+    assert.equal(results.length, MAX_RESULTS);
+    assert.equal(results.truncated, true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('fetchList: 上限未満で取り終えた場合は印を付けない', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ query: { backlinks: [{ title: 'A', ns: 0 }] } }) });
+  try {
+    const results = await resolveBacklinks({ page: 'X', namespaces: [0] });
+    assert.equal(results.truncated, undefined);
   } finally {
     global.fetch = originalFetch;
   }

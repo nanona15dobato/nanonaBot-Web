@@ -4,7 +4,13 @@ const express = require('express');
 const router = express.Router();
 
 const { requireRole } = require('../middleware/auth');
-const { fetchBotreqWikitext, parseBotreqTemplates, parseBotreqTopicList, BOTREQ_TOPIC_LIST_TITLE } = require('../worker/botreq');
+const {
+  fetchBotreqWikitext,
+  parseBotreqTemplates,
+  parseBotreqTopicList,
+  resolveRedirectTargets,
+  BOTREQ_TOPIC_LIST_TITLE,
+} = require('../worker/botreq');
 
 // Wikipedia:Bot作業依頼 から {{リンク修正依頼/改名}} を検出・パースして返す（owner専用）。
 // 検出結果はプレビューのみで、キューへの投入はタスク作成画面で操作者が明示的に行う（仕様書7章）。
@@ -14,7 +20,8 @@ router.get('/api/botreq/proposals', requireRole('owner'), async (req, res, next)
       fetchBotreqWikitext(),
       fetchBotreqWikitext(BOTREQ_TOPIC_LIST_TITLE),
     ]);
-    const proposals = parseBotreqTemplates(wikitext);
+    // REDIRECT_TARGET は取得時点の解決先を確定させて表示する（取り込むかは操作者が判断する）
+    const proposals = await resolveRedirectTargets(parseBotreqTemplates(wikitext));
     res.json({ revid, proposals, topicProgress: parseBotreqTopicList(topicListWikitext), topicListTimestamp });
   } catch (err) {
     next(err);

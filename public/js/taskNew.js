@@ -336,6 +336,7 @@
   const UNSUPPORTED_REASON_LABELS = {
     DELETE_PAGE: 'リンク解除指定（DELETE_PAGE）',
     REDIRECT_TARGET: 'リダイレクト解決指定（REDIRECT_TARGET）',
+    REDIRECT_TARGET_NOT_REDIRECT: 'REDIRECT_TARGET指定だが改名元がリダイレクトではない（または存在しない）',
     subst: 'テンプレートのsubst化指定',
     URL: '外部URLの付け替え',
     anchor_or_label: 'アンカー/パイプラベル付き指定',
@@ -383,6 +384,10 @@
           );
         } else if (pair.to === undefined) {
           $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + pair.from);
+        } else if (pair.redirectResolved) {
+          // 解決先は取得時点のもの。取り込むとこの値がルールの改名先に固定される
+          $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '（リダイレクト解決）] ' + pair.from + ' → ' + pair.to);
+          $row.append($('<span>').css({ color: '#54595d', marginLeft: '6px' }).text('※取得時点の解決先'));
         } else {
           $row.text('[' + RULE_TYPE_LABEL_MAP[pair.type] + '] ' + pair.from + ' → ' + pair.to);
         }

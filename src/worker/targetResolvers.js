@@ -50,6 +50,13 @@ async function fetchList(baseParams, listKey, continueKey) {
     }
     contValue = data.continue ? data.continue[continueKey] : null;
   } while (contValue && results.length < MAX_RESULTS);
+
+  // 上限で打ち切った場合は、呼び出し側（タスクログ）で警告できるよう印を付ける
+  if (results.length > MAX_RESULTS || (contValue && results.length >= MAX_RESULTS)) {
+    const truncated = results.slice(0, MAX_RESULTS);
+    truncated.truncated = true;
+    return truncated;
+  }
   return results;
 }
 
@@ -166,6 +173,8 @@ async function resolveTargetSource(targetSource) {
 }
 
 module.exports = {
+  MAX_RESULTS,
+  apiGet,
   namespaceParam,
   resolveCategoryMembers,
   resolveBacklinks,
