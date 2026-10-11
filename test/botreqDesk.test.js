@@ -219,7 +219,10 @@ test('prepare(start): 件数を増やし、議論場所の候補と依頼者・�
   const plan = await desk.prepare('start', THREAD, { client: fakeClient() });
   assert.equal(plan.title, LOG_TITLE);
   assert.match(plan.text, /^== <span class="anchor" id="botreq-n-3"><\/span>バイオハザード ==\n/);
-  assert.match(plan.text, new RegExp(`<!--sec ${L.encodeSecId(THREAD)}\\|161396-->`));
+  // 作業記録は NanonaBot（＝作業を数える Bot）で編集するため、着手の保存の1編集を除くよう +1 して記録する
+  assert.match(plan.text, new RegExp(`<!--sec ${L.encodeSecId(THREAD)}\\|161397-->`));
+  assert.equal(plan.saveAccount, 'NanonaBot');
+  assert.equal(plan.commentAccount, 'Nanona15dobato');
   assert.match(plan.text, /\* 議論場所 - \[\[プロジェクト:映画#節\]\]/);
   assert.match(plan.text, /\* 依頼者 - \[\[User:さえぼー\|さえぼー\]\] さん/);
   assert.match(plan.before, /\|件数=3\n/);
@@ -448,4 +451,24 @@ test('save: 権限エラーのときは、アカウントの確認結果をエ�
     desk.save({ title: LOG_TITLE, text: 't', summary: 's', baseTimestamp: 'b' }, { client }),
     (err) => err.mwCode === 'permissiondenied' && /ログイン: Nanona15dobato.*edit・createpage が無い/.test(err.diagnosis)
   );
+});
+
+test('logAccount / accountFor: 作業記録は利用者空間の持ち主（NanonaBot）、依頼ページは運用者で編集する', () => {
+  assert.equal(desk.logAccount(), 'NanonaBot'); // 利用者:nanonaBot/依頼/ → 先頭の大小を区別せず NanonaBot
+  assert.equal(desk.accountFor(LOG_TITLE), 'NanonaBot');
+  assert.equal(desk.accountFor(REQUEST_PAGE), 'Nanona15dobato');
+});
+
+test('describeAccountCheck: 権限はあるのに他人の利用者ページを編集できないときは、editalluserpages と BOTREQ_LOG_ACCOUNT を案内する', () => {
+  const check = {
+    account: 'Nanona15dobato',
+    loginName: 'Nanona15dobato@N15',
+    userName: 'Nanona15dobato',
+    groups: ['user'],
+    rights: { edit: true, createpage: true },
+    pages: [{ title: '利用者:NanonaBot/依頼/2026年', exists: true, action: 'edit', allowed: false, reasons: ['要求した操作を行うことは許可されていません。（permissiondenied）'] }],
+  };
+  const text = desk.describeAccountCheck(check, '利用者:NanonaBot/依頼/2026年');
+  assert.match(text, /editalluserpages/);
+  assert.match(text, /BOTREQ_LOG_ACCOUNT=NanonaBot/);
 });

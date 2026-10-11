@@ -79,7 +79,8 @@ Special:BotPasswords で発行したログイン名（`User@BotName` 形式）�
 
 | 名前 | 既定値 | 説明 |
 |---|---|---|
-| `BOTREQ_ACCOUNT` | `Nanona15dobato` | 作業記録の編集と依頼への返信に使うアカウント（`BOT_<名前>_USER` / `_PASS` で BotPassword を設定したもの）。BotPassword には「既存ページの編集」「ページの作成・編集・移動」の権限が必要。一覧などの読み取りはログインせずに行う |
+| `BOTREQ_ACCOUNT` | `Nanona15dobato` | 依頼ページの編集（解決）と依頼への返信に使うアカウント（`BOT_<名前>_USER` / `_PASS` で BotPassword を設定したもの）。BotPassword には「既存ページの編集」「ページの作成・編集・移動」の権限が必要。一覧などの読み取りはログインせずに行う |
+| `BOTREQ_LOG_ACCOUNT` | （作業記録の利用者空間の持ち主。既定では `NanonaBot`） | 作業記録の編集に使うアカウント。jawiki では他人の利用者ページの編集に `editalluserpages` が要り、この権限は BotPassword では付けられないため、作業記録のページがある利用者空間の持ち主で編集する |
 | `BOTREQ_BOT_USER` | `nanonaBot` | 作業の編集回数・投稿記録を数える Bot |
 | `BOTREQ_OPERATOR` | `nanona15dobato` | 作業記録のページを新しく作るときの `{{../head|運用者=}}` |
 | `BOTREQ_LOG_PREFIX` | `利用者:nanonaBot/依頼/` | 作業記録のページ名（後ろに「YYYY年」が付く） |

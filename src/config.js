@@ -75,6 +75,9 @@ const config = {
     botUser: process.env.BOTREQ_BOT_USER || 'nanonaBot', // 作業の編集回数・投稿記録を数える Bot
     operator: process.env.BOTREQ_OPERATOR || 'nanona15dobato', // 作業記録の {{../head|運用者=}}
     logPrefix: process.env.BOTREQ_LOG_PREFIX || '利用者:nanonaBot/依頼/', // 作業記録のページ名（後ろに「YYYY年」）
+    // 作業記録の編集に使うアカウント。未設定なら作業記録のページがある利用者空間の持ち主（利用者:nanonaBot/… なら NanonaBot）。
+    // jawiki では他人の利用者ページの編集に editalluserpages が要り、BotPassword ではこの権限を付けられないため、持ち主のアカウントで編集する
+    logAccount: process.env.BOTREQ_LOG_ACCOUNT || null,
   },
 
   taskPagesRetentionDays:Number(process.env.TASK_PAGES_RETENTION_DAYS || 14),
