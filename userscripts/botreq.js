@@ -255,11 +255,36 @@
 
 		/* ---------- 依頼の節から読み取る ---------- */
 
-		function detectStatus(text) {
-			if (text.includes('解決済み')) return 'resolved';
-			if (text.includes('完了')) return 'completed';
-			if (text.includes('着手します')) return 'started';
-			return 'open';
+		// {{BOTREQ|…}} が描く太字の文言と、その状態
+		const BOTREQ_BOLD = {
+			'着手します。': 'started',
+			'作業中...': 'started',
+			'準備中...': 'started',
+			'調査中...': 'started',
+			'作業再開...': 'started',
+			'完了': 'completed',
+			'済': 'completed',
+			'作業済み': 'completed'
+		};
+		const CLOSED_BOX = '.hmbox-outer.resolved, .hmbox-outer.stale';
+
+		/**
+		 * 節の状態。{{解決済み}}・{{済み}}・{{失効}}（Hmbox の resolved / stale）があれば閉じられた依頼、
+		 * 無ければ最後の {{BOTREQ|…}} の文言で判断する。
+		 * @return {{status: string, closedLabel: string|null}}
+		 */
+		function detectStatus($content) {
+			const $box = $content.find(CLOSED_BOX).addBack(CLOSED_BOX).first();
+			if ($box.length) {
+				const label = $box.hasClass('stale') ? '失効' : $box.text().includes('解決済み') ? '解決済み' : '済み';
+				return { status: 'resolved', closedLabel: label };
+			}
+			let status = 'open';
+			$content.find('b').each(function () {
+				const found = BOTREQ_BOLD[$(this).text().trim()];
+				if (found) status = found;
+			});
+			return { status: status, closedLabel: null };
 		}
 
 		/**
@@ -495,8 +520,9 @@
 			if (!/^=/.test(lines[0]) || plainHeading(lines[0]).indexOf(req.name) === -1) {
 				notes.push({ type: 'warning', text: '取得した節の見出しが「' + req.name + '」と一致しません。節の位置が変わった可能性があります。差分をよく確認してください。' });
 			}
-			if (/\{\{\s*解決済み/.test(page.content)) {
-				notes.push({ type: 'warning', text: 'この節には既に {{解決済み}} があります。' });
+			const closed = page.content.match(/\{\{\s*(?:(?:Template|テンプレート)\s*:\s*)?(解決済み|[Rr]esolved|済み|失効|[Ss]tale)\s*[|}]/);
+			if (closed) {
+				notes.push({ type: 'warning', text: 'この節は既に閉じられています（{{' + closed[1] + '}}）。' });
 			}
 			lines.splice(1, 0, '{{解決済み|' + SIG + '}}');
 			return {
@@ -827,7 +853,9 @@
 				sectionIndex: sectionMatch[1],
 				$content: sectionContent($wrap)
 			};
-			req.status = detectStatus(req.$content.text());
+			const detected = detectStatus(req.$content);
+			req.status = detected.status;
+			req.closedLabel = detected.closedLabel;
 
 			const $main = $('<a>').attr({ href: '#', role: 'button' }).addClass('botreq-main');
 			const menu = new OO.ui.ButtonMenuSelectWidget({
@@ -854,8 +882,8 @@
 				req.status = status;
 				const next = NEXT_ACTION[status];
 				$main
-					.text(next ? ACTION_LABELS[next] : '解決済み')
-					.attr('title', next ? ACTION_LABELS[next] + 'する（右クリックで他の操作）' : '解決済みです（右クリックで他の操作）')
+					.text(next ? ACTION_LABELS[next] : req.closedLabel || '解決済み')
+					.attr('title', next ? ACTION_LABELS[next] + 'する（右クリックで他の操作）' : '閉じられた依頼です（右クリックで他の操作）')
 					.toggleClass('botreq-main-done', !next);
 			};
 			req.setStatus(req.status);

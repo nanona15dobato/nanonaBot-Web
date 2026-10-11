@@ -26,6 +26,22 @@ async function defaultClient() {
   }
 }
 
+let anonymousReader = null;
+
+/**
+ * 読み取り用のクライアント。依頼ページ・作業記録・投稿記録などは公開情報なので、ログインせずに読む。
+ * 運用者の BotPassword のセッションでは、付与した権限（grant）によって一部の API（action=parse・
+ * discussiontoolspageinfo 等）が「You are not allowed to execute the action you have requested.」で拒否されることがあるため。
+ * 編集（save）だけを運用者のアカウントで行う。
+ */
+function defaultReader() {
+  if (!anonymousReader) {
+    const { MediaWikiBotClient } = require('../bot/mwClient');
+    anonymousReader = new MediaWikiBotClient({ apiUrl: config.wiki.apiUrl, userAgent: config.userAgent, anonymous: true });
+  }
+  return anonymousReader;
+}
+
 /** DB へのクエリ（テストでは差し替える）。DB を使わない環境でも一覧などは動くよう、遅延して読み込む。 */
 function defaultQuery(sql, params) {
   return require('../db').pool.query(sql, params);
@@ -95,16 +111,15 @@ function isLogTitle(title) {
 async function loadRequestPage(client) {
   const page = await client.getPage(BOTREQ_PAGE_TITLE);
   if (!page || !page.exists) throw new Error(`${BOTREQ_PAGE_TITLE} が見つかりません`);
-  const [parsed, dt] = await Promise.all([
-    client.request({ action: 'parse', oldid: String(page.revid), prop: 'sections' }),
-    client.request({
-      action: 'discussiontoolspageinfo',
-      page: BOTREQ_PAGE_TITLE,
-      oldid: String(page.revid),
-      prop: 'threaditemshtml',
-      excludesignatures: '1',
-    }),
-  ]);
+  // ログインしない読み取りは同時に送ると断られやすい（HTTP 429）ため、1つずつ送る
+  const parsed = await client.request({ action: 'parse', oldid: String(page.revid), prop: 'sections' });
+  const dt = await client.request({
+    action: 'discussiontoolspageinfo',
+    page: BOTREQ_PAGE_TITLE,
+    oldid: String(page.revid),
+    prop: 'threaditemshtml',
+    excludesignatures: '1',
+  });
   const sections = L.sliceSections(page.wikitext, parsed.parse.sections, BOTREQ_PAGE_TITLE);
   const items = dt.discussiontoolspageinfo.threaditemshtml;
   const requests = L.matchHeadingsToSections(L.collectRequestHeadings(items), sections).map(({ heading, name, section }) => {
@@ -151,11 +166,9 @@ async function getRecentContribs(client, user, n) {
 async function loadLogs(client, requests) {
   const years = [...new Set(requests.filter((r) => r.requestedAt).map((r) => L.jstYear(r.requestedAt)))];
   const logs = new Map();
-  await Promise.all(
-    years.map(async (year) => {
-      logs.set(year, await client.getPage(`${config.botreq.logPrefix}${year}年`));
-    })
-  );
+  for (const year of years) {
+    logs.set(year, await client.getPage(`${config.botreq.logPrefix}${year}年`)); // 1つずつ（HTTP 429 を避ける）
+  }
   return logs;
 }
 
@@ -170,7 +183,7 @@ function logSectionOf(logs, request) {
  * @returns {Promise<{revid: number, requests: object[]}>}
  */
 async function listRequests({ client, query } = {}) {
-  client = client || (await defaultClient());
+  client = client || defaultReader();
   const [{ page, requests }, tasks] = await Promise.all([loadRequestPage(client), linkedTasks(query || defaultQuery)]);
   const logs = await loadLogs(client, requests);
   return {
@@ -210,7 +223,8 @@ async function findRequest(client, threadId) {
 async function prepareStart(client, threadId) {
   const { request: req } = await findRequest(client, threadId);
   const logTitle = L.logTitleFor(config.botreq.logPrefix, req.requestedAt);
-  const [editCount, log] = await Promise.all([getEditCount(client, config.botreq.botUser), client.getPage(logTitle)]);
+  const editCount = await getEditCount(client, config.botreq.botUser);
+  const log = await client.getPage(logTitle);
   const notes = [];
   const current = log.exists ? log.wikitext : L.newLogPage(L.jstYear(req.requestedAt), config.botreq.operator);
   if (!log.exists) notes.push({ type: 'notice', text: `${logTitle} はまだありません。保存すると、このページを作成します。` });
@@ -255,7 +269,8 @@ async function prepareStart(client, threadId) {
 async function prepareComplete(client, threadId, query) {
   const { request: req } = await findRequest(client, threadId);
   const logTitle = L.logTitleFor(config.botreq.logPrefix, req.requestedAt);
-  const [editCount, log] = await Promise.all([getEditCount(client, config.botreq.botUser), client.getPage(logTitle)]);
+  const editCount = await getEditCount(client, config.botreq.botUser);
+  const log = await client.getPage(logTitle);
   if (!log.exists) throw new Error(`${logTitle} がありません。先に「着手」を保存してください。`);
   const section = L.findLogSection(log.wikitext, threadId);
   if (!section) throw new Error(`${logTitle} に、この依頼の作業記録が見つかりません。先に「着手」を保存してください。`);
@@ -323,7 +338,8 @@ async function prepareResolve(client, threadId) {
   const { page, request: req } = await findRequest(client, threadId);
   if (!req.sectionIndex) throw new Error('この依頼の節の番号を特定できません。');
   const notes = [];
-  if (/\{\{\s*解決済み/.test(req.ownText)) notes.push({ type: 'warning', text: 'この節には既に {{解決済み}} があります。' });
+  const closed = L.detectStatus(req.ownText);
+  if (closed.status === 'resolved') notes.push({ type: 'warning', text: `この節は既に閉じられています（{{${closed.label}}}）。` });
   const core = req.sectionText.replace(/\s+$/, '');
   return {
     kind: 'resolve',
@@ -350,7 +366,7 @@ async function prepare(kind, threadId, { client, query } = {}) {
   if (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId)) {
     throw Object.assign(new Error('依頼の節の ID が正しくありません'), { status: 400 });
   }
-  return PREPARE[kind](client || (await defaultClient()), threadId, query || defaultQuery);
+  return PREPARE[kind](client || defaultReader(), threadId, query || defaultQuery);
 }
 
 /** 保存の入力を確かめる。誤りがあれば理由の配列を返す。 */
@@ -422,7 +438,7 @@ async function save(body, { client } = {}) {
       });
       comment = { ok: true };
     } catch (err) {
-      comment = { ok: false, error: err.mwInfo || err.message };
+      comment = { ok: false, error: `${err.mwCode ? `[${err.mwCode}] ` : ''}${err.mwInfo || err.message}` };
     }
   }
   return { revid: edit.newrevid || null, nochange: Boolean(edit.nochange), comment };
@@ -430,7 +446,7 @@ async function save(body, { client } = {}) {
 
 /** プレビュー（保存前の本文を、そのページとして描画する）。 */
 async function renderPreview(title, text, { client } = {}) {
-  client = client || (await defaultClient());
+  client = client || defaultReader();
   const data = await client.request(
     {
       action: 'parse',
@@ -450,7 +466,7 @@ async function renderPreview(title, text, { client } = {}) {
 
 /** 差分（MediaWiki の差分の表の行）。 */
 async function renderDiff(title, oldText, newText, { client } = {}) {
-  client = client || (await defaultClient());
+  client = client || defaultReader();
   const data = await client.request(
     {
       action: 'compare',
@@ -480,7 +496,7 @@ async function requestSections({ client, threadId } = {}) {
   if (threadId !== undefined && threadId !== null && (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId))) {
     throw Object.assign(new Error('依頼の節の ID が正しくありません'), { status: 400 });
   }
-  client = client || (await defaultClient());
+  client = client || defaultReader();
   const { requests } = await loadRequestPage(client);
   const picked = threadId ? requests.filter((r) => r.threadId === threadId) : requests;
   if (threadId && !picked.length) {

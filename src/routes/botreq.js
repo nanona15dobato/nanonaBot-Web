@@ -61,6 +61,22 @@ router.get('/api/botreq/proposals', requireRole('owner'), async (req, res, next)
 
 // ---- 着手・完了・解決（フェーズ13）。作業記録・依頼への返信は config.botreq.account のアカウントで編集する ----
 
+// 権限が足りないことを示す API のエラーコード
+const PERMISSION_CODES = new Set(['permissiondenied', 'badaccess-groups', 'readapidenied', 'writeapidenied', 'mwoauth-invalidauthorizationrequest']);
+
+/** ウィキの API のエラーを、どの API で失敗したか・権限が原因ならその対処を添えた文にする。 */
+function describeWikiError(err) {
+  const where = err.apiAction ? `ウィキの API（action=${err.apiAction}）で失敗しました` : 'ウィキで失敗しました';
+  const code = err.mwCode ? ` [${err.mwCode}]` : '';
+  let message = `${where}${code}: ${err.mwInfo || err.message}`;
+  const permission = PERMISSION_CODES.has(err.mwCode) || /not allowed|permission/i.test(err.mwInfo || '');
+  if (permission && ['edit', 'discussiontoolsedit'].includes(err.apiAction)) {
+    message +=
+      ' — 運用者アカウントの BotPassword に「既存ページの編集」と「ページの作成・編集・移動」の権限（Special:BotPasswords）があるか確認してください。';
+  }
+  return message;
+}
+
 function sendDeskError(res, next, err) {
   if (err.status) return res.status(err.status).json({ message: err.message });
   if (err.mwCode === 'editconflict') {
@@ -69,9 +85,14 @@ function sendDeskError(res, next, err) {
   if (err.mwCode === 'articleexists') {
     return res.status(409).json({ code: 'articleexists', message: '作業記録のページが既に作成されていました。閉じて、もう一度操作してください。' });
   }
-  if (err.mwCode || err.editResult) return res.status(502).json({ code: err.mwCode || null, message: err.mwInfo || err.message });
+  if (err.mwCode || err.editResult) {
+    return res.status(502).json({ code: err.mwCode || null, message: describeWikiError(err) });
+  }
   if (err.httpStatus) {
-    const message = err.httpStatus === 429 ? 'ウィキへのリクエストが多すぎるため断られました。少し待ってから、もう一度操作してください。' : err.message;
+    const message =
+      err.httpStatus === 429
+        ? 'ウィキへのリクエストが多すぎるため断られました。少し待ってから、もう一度操作してください。'
+        : describeWikiError(err);
     return res.status(502).json({ code: `http_${err.httpStatus}`, message });
   }
   return next(err);
@@ -134,3 +155,4 @@ router.post('/api/botreq/save', requireRole('owner'), async (req, res, next) => 
 module.exports = router;
 module.exports.sendDeskError = sendDeskError;
 module.exports.proposalsByRequest = proposalsByRequest;
+module.exports.describeWikiError = describeWikiError;

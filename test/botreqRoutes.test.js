@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sendDeskError, proposalsByRequest } = require('../src/routes/botreq');
+const { sendDeskError, proposalsByRequest, describeWikiError } = require('../src/routes/botreq');
 
 function fakeRes() {
   return {
@@ -53,4 +53,12 @@ test('proposalsByRequest: 提案に、書かれた依頼と Bot の要約を付�
     [1, 'B', null, '旧2'],
     [2, 'B', null, '旧3'],
   ]);
+});
+
+test('describeWikiError: 失敗した API とコードを添え、編集の権限不足なら BotPassword の権限を案内する', () => {
+  const read = describeWikiError(Object.assign(new Error('x'), { apiAction: 'parse', mwCode: 'permissiondenied', mwInfo: 'You are not allowed to execute the action you have requested.' }));
+  assert.match(read, /action=parse.*\[permissiondenied\]/);
+  assert.doesNotMatch(read, /BotPassword/);
+  const edit = describeWikiError(Object.assign(new Error('x'), { apiAction: 'edit', mwCode: 'permissiondenied', mwInfo: 'You are not allowed to execute the action you have requested.' }));
+  assert.match(edit, /BotPassword/);
 });
