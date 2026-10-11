@@ -34,6 +34,13 @@
   });
   const searchBtn = new OO.ui.ButtonWidget({ label: '検索', icon: 'search', flags: ['primary', 'progressive'] });
   const resetBtn = new OO.ui.ButtonWidget({ label: '条件をクリア', framed: false });
+  // CSV書き出し（フェーズ12）: 今の検索条件で最大10000件。表示件数の指定は使わない
+  const csvBtn = new OO.ui.ButtonWidget({ label: 'CSVで書き出し', icon: 'download', title: '今の検索条件の編集ログ（最大10000件）をCSVで保存します' });
+  csvBtn.on('click', () => {
+    const q = currentQuery();
+    q.delete('limit');
+    location.href = '/api/edit-log.csv' + (q.toString() ? '?' + q.toString() : '');
+  });
 
   const filterSection = C.section({ title: '検索条件', hint: '編集ログはタスクのページ情報が削除された後も残る恒久ログです。' });
   filterSection.$body.append(
@@ -43,7 +50,7 @@
       new OO.ui.FieldLayout(statusWidget, { label: '結果', align: 'top' }).$element,
       new OO.ui.FieldLayout(limitWidget, { label: '表示件数', align: 'top' }).$element
     ),
-    $('<div>').addClass('nb-form-actions').append(searchBtn.$element, resetBtn.$element)
+    $('<div>').addClass('nb-form-actions').append(searchBtn.$element, csvBtn.$element, resetBtn.$element)
   );
 
   const resultSection = C.section({ title: '結果' });

@@ -5,7 +5,7 @@ const path = require('path');
 const config = require('../config');
 
 /** 画面で使うOOUIアイコンのパック（アイコン名→パックは node_modules/oojs-ui/dist の各CSSで確認済み） */
-const ICON_PACKS = ['alerts', 'content', 'editing-core', 'interactions', 'media', 'moderation', 'movement', 'user', 'accessibility'];
+const ICON_PACKS = ['alerts', 'content', 'editing-core', 'editing-advanced', 'interactions', 'media', 'moderation', 'movement', 'user', 'accessibility'];
 
 /** JSONを<script>内に安全に埋め込める文字列にする（</script> 等で閉じられないよう < をエスケープ）。 */
 function toScriptJson(value) {

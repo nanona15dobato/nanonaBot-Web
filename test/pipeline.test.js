@@ -108,6 +108,10 @@ function createFakeDb() {
         row.prepared_at = new Date();
       } else if (s.includes("status = 'preparing'")) {
         row.status = 'preparing';
+      } else if (s.includes("status = 'skipped', error_message = ?, original_wikitext = ?")) {
+        // 一括取り消しで取り消さなかったページ（理由つきのスキップ）
+        row.status = 'skipped';
+        [row.error_message, row.original_wikitext] = params;
       } else if (s.includes("status = 'skipped'")) {
         row.status = 'skipped';
         row.original_wikitext = params[0];
@@ -894,4 +898,101 @@ test('editOnePage: 手動確認モードの編集競合は自動で再試行せ�
   assert.ok(db.taskLogs.some((p) => /確認待ちに戻しました/.test(p[p.length - 1])));
   // 再試行待ち（自動での再試行）は行わない
   assert.ok(!db.taskLogs.some((p) => /再試行します/.test(p[p.length - 1])));
+});
+
+// ---- フェーズ12: 一括取り消し ----
+
+test('runStagePipeline: 一括取り消しは、そのタスクの編集が最新版のページだけを編集前の本文に戻し、後に他の編集があるページは取り消さない', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 10, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([
+    { task_id: 10, stage: 1, order_index: 0, page_title: '取り消せるページ', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+    { task_id: 10, stage: 1, order_index: 1, page_title: '後に編集されたページ', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+  ]);
+  const current = { 取り消せるページ: { revid: 200, text: 'Botの編集後' }, 後に編集されたページ: { revid: 305, text: '他の人の編集' } };
+  const old = { 100: 'Botの編集前', 300: '別ページの編集前' };
+  const edits = [];
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: current[title].revid, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: current[title].text };
+    },
+    async getRevisionContent(revid) {
+      return old[revid] ?? null;
+    },
+    async edit(params) {
+      edits.push(params);
+      return { revid: 201, newTimestamp: '2026-08-11T09:10:05Z' };
+    },
+  };
+
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    const result = await runStagePipeline({
+      taskId: 10,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [
+        {
+          templateType: 'revertEdits',
+          revertOfTaskId: 3,
+          steps: [],
+          targets: [
+            { title: '取り消せるページ', revid: 200, baseRevid: 100 },
+            { title: '後に編集されたページ', revid: 301, baseRevid: 300 },
+          ],
+        },
+      ],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'Bot: 取り消し', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'skipAndContinue',
+    });
+    assert.equal(result.completed, true);
+  });
+
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].title, '取り消せるページ');
+  assert.equal(edits[0].text, 'Botの編集前');
+  const [revertable, changedLater] = [...db.taskPages.values()];
+  assert.equal(revertable.status, 'edited');
+  assert.equal(changedLater.status, 'skipped');
+  assert.match(changedLater.error_message, /後に他の編集があるため取り消していません/);
+});
+
+test('editOnePage: 一括取り消しで編集競合が起きたら、他の人の編集まで巻き戻さないようスキップする', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 11, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([{ task_id: 11, stage: 1, order_index: 0, page_title: '競合するページ', namespace: 0, matched_rule_indices: '[0]', status: 'pending' }]);
+  let editCalls = 0;
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 200, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: '編集後' };
+    },
+    async getRevisionContent() {
+      return '編集前';
+    },
+    async edit() {
+      editCalls++;
+      const err = new Error('conflict');
+      err.mwCode = 'editconflict';
+      throw err;
+    },
+  };
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    await runStagePipeline({
+      taskId: 11,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ templateType: 'revertEdits', steps: [], targets: [{ title: '競合するページ', revid: 200, baseRevid: 100 }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'Bot: 取り消し', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'skipAndContinue',
+    });
+  });
+  assert.equal(editCalls, 1); // 自動での再試行はしない
+  const row = [...db.taskPages.values()][0];
+  assert.equal(row.status, 'skipped');
+  assert.match(row.error_message, /準備後に他の編集があった/);
 });

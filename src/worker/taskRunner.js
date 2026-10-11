@@ -91,6 +91,8 @@ function normalizeRuleName(templateType, name) {
 function materializeReplacements(replacements) {
   return (replacements || []).map((rule) => {
     if (rule.templateType === 'custom') return rule;
+    // 一括取り消し（フェーズ12）は正規表現の置換ではなく、編集前の版に戻す（pipeline.js の prepareRevert）
+    if (rule.templateType === 'revertEdits') return { ...rule, steps: [] };
     if (KNOWN_PRESET_TEMPLATE_TYPES.includes(rule.templateType)) {
       const from = normalizeRuleName(rule.templateType, rule.from);
       const to = normalizeRuleName(rule.templateType, rule.to);
@@ -146,6 +148,10 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient, options = {}) {
   }
 
   switch (rule.templateType) {
+    case 'revertEdits':
+      // 一括取り消し: 取り消す編集があったページだけ（作成時に編集ログから決めた一覧）
+      return { results: (rule.targets || []).map((t) => ({ title: t.title, namespace: t.namespace ?? 0 })), error: null };
+
     case 'custom':
       if (rule.targetSource.type === 'manualList') {
         const results = (rule.targetSource.titles || [])

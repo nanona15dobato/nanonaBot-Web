@@ -52,6 +52,57 @@ function buildNewWikitext(wikitext, row, ctx) {
   return applyRedirectCategoryTemplateEdits(applyReplacementSteps(wikitext, steps), matchedRules);
 }
 
+// ===== 一括取り消し（フェーズ12） =====
+
+/** このページが一括取り消しの対象なら、取り消す編集（{ revid, baseRevid }）を返す。 */
+function findRevertTarget(row, ctx) {
+  const ruleIndices = parseJsonColumn(row.matched_rule_indices, []);
+  for (const idx of ruleIndices) {
+    const rule = ctx.replacements[idx];
+    if (rule && rule.templateType === 'revertEdits') {
+      return (rule.targets || []).find((t) => t.title === row.page_title) || { missing: true };
+    }
+  }
+  return null;
+}
+
+/** 取り消しをしないページ（後に他の編集がある等）を、理由つきのスキップにする。 */
+async function skipRevert(row, page, reason) {
+  await pool.query(
+    `UPDATE task_pages SET status = 'skipped', error_message = ?, original_wikitext = ?, prepared_at = NOW() WHERE id = ?`,
+    [reason, page ? page.wikitext : null, row.id]
+  );
+  return { status: 'skipped', row, page };
+}
+
+/**
+ * 一括取り消しの準備。現在の版が取り消す編集（そのタスクの最後の編集）のままなら、
+ * 編集前の版の本文を新しい本文にする（差分は「現在 → 編集前」になる）。
+ * 後に他の利用者の編集がある場合は、その編集まで巻き戻さないよう取り消さない。
+ */
+async function prepareRevert(row, ctx, page, target) {
+  if (target.missing || !target.revid || !target.baseRevid) {
+    return skipRevert(row, page, '取り消す編集の情報が見つからないため、取り消していません。');
+  }
+  if (Number(page.revid) !== Number(target.revid)) {
+    return skipRevert(row, page, `後に他の編集があるため取り消していません（取り消す版 ${target.revid}、現在の版 ${page.revid}）。手動で確認してください。`);
+  }
+  const oldText = await ctx.mwClient.getRevisionContent(target.baseRevid);
+  if (oldText === null) {
+    return skipRevert(row, page, `編集前の版（${target.baseRevid}）の本文を取得できないため、取り消していません。`);
+  }
+  if (oldText === page.wikitext) return skipRevert(row, page, '既に編集前の内容に戻っています。');
+
+  await pool.query(
+    `UPDATE task_pages
+       SET status = 'prepared', base_revid = ?, base_timestamp = ?,
+           original_wikitext = ?, new_wikitext = ?, error_message = NULL, prepared_at = NOW()
+     WHERE id = ?`,
+    [page.revid, new Date(page.baseTimestamp), page.wikitext, oldText, row.id]
+  );
+  return { status: 'prepared', row, page, newWikitext: oldText };
+}
+
 /**
  * 1つのページを準備する（wikitext取得→置換適用→差分の有無判定→DB更新）。
  * 仕様書9.2節 手順1に対応。
@@ -76,6 +127,10 @@ async function prepareOnePage(row, ctx) {
       await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [msg, row.id]);
       return { status: 'failed', row, error: new Error(msg) };
     }
+
+    // 一括取り消し（フェーズ12）: そのタスクの編集がまだ最新版のときだけ、編集前の版の本文に戻す
+    const revertTarget = findRevertTarget(row, ctx);
+    if (revertTarget) return prepareRevert(row, ctx, page, revertTarget);
 
     const newWikitext = buildNewWikitext(page.wikitext, row, ctx);
 
@@ -340,6 +395,11 @@ async function editOnePage(prepared, ctx) {
       }
 
       // 手動確認モードの編集競合: 待たずに最新版で作り直し、確認待ちに戻す（確認モードは実行中に変わりうるので都度読む）
+      // 一括取り消しで編集競合: 準備後に他の人が編集したので、その編集まで巻き戻さないよう取り消さない
+      if (err.mwCode === 'editconflict' && findRevertTarget(row, ctx)) {
+        await skipRevert(row, null, '取り消しの準備後に他の編集があったため、取り消していません。手動で確認してください。');
+        return { ok: true, skipped: true };
+      }
       if (err.mwCode === 'editconflict' && (await currentReviewMode(ctx)) === 'manual') {
         return returnToReviewAfterConflict(row, ctx, page, msg);
       }

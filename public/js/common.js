@@ -73,6 +73,7 @@
     unlinkPage: 'リンク解除',
     templateSubst: 'テンプレートのsubst化',
     urlRename: '外部リンクの付け替え',
+    revertEdits: '編集の一括取り消し',
   };
 
   /** ウェーブ構成の説明（stage_count別） */

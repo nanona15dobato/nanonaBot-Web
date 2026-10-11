@@ -193,6 +193,18 @@
         })
       );
     }
+    const config = task.config_json || {};
+    const isRevertTask = (config.replacements || []).some((r) => r.templateType === 'revertEdits');
+    if (['completed', 'completed_with_failures', 'failed', 'cancelled', 'paused', 'emergency_stopped', 'expired'].includes(task.status)) {
+      buttons.push(actionButton('編集を一括で取り消す', ['destructive'], 'undo', (btn) => openRevertDialog(btn, task)));
+    }
+    if (!isRevertTask) {
+      buttons.push(
+        actionButton('複製', [], 'copy', () => {
+          location.href = '/tasks/new?from=' + taskId;
+        })
+      );
+    }
     if (['queued', 'running', 'paused'].includes(task.status)) {
       buttons.push(
         actionButton('中止', ['destructive'], 'cancel', async (btn) => {
@@ -211,6 +223,37 @@
       );
     }
     refreshBtn.$element.before(buttons.map((b) => b.$element));
+  }
+
+  /** 一括取り消しの確認ダイアログ（要約欄・確認モードを選んでから作る）。 */
+  async function openRevertDialog(btn, task) {
+    const summaryWidget = new OO.ui.TextInputWidget({ value: 'Bot: タスク #' + task.id + ' の編集を取り消し' });
+    const modeWidget = new OO.ui.RadioSelectInputWidget({
+      options: [
+        { data: 'manual', label: '手動確認（1件ずつ差分を見て承認する）' },
+        { data: 'auto', label: '自動更新（待機0秒ですぐ取り消す）' },
+      ],
+      value: 'manual',
+    });
+    const $content = $('<div>').addClass('nb-revert-dialog').append(
+      $('<p>').text(
+        'このタスクが編集したページを、編集前の版に戻す新しいタスクを作ります。' +
+          'このタスクの編集がまだ最新版のページだけを取り消し、後に他の人の編集があるページは取り消さずに理由つきで残します。'
+      ),
+      new OO.ui.FieldLayout(summaryWidget, { label: '要約欄', align: 'top' }).$element,
+      new OO.ui.FieldLayout(modeWidget, { label: '確認モード', align: 'top' }).$element
+    );
+    const ok = await C.confirm($content, { title: 'タスク #' + task.id + ' の編集を一括で取り消しますか？', okLabel: '取り消しタスクを作成', destructive: true });
+    if (!ok) return;
+    await C.withBusy(btn, '取り消しタスクの作成', async () => {
+      const result = await C.postJson('/api/tasks/' + taskId + '/revert', {
+        editSummary: summaryWidget.getValue(),
+        mode: modeWidget.getValue(),
+        autoWaitSeconds: 0,
+      });
+      C.toast(result.pageCount + 'ページを対象に取り消しタスク #' + result.id + ' を作成しました。');
+      location.href = '/tasks/' + result.id;
+    });
   }
 
   const STATUS_MESSAGES = {
@@ -302,6 +345,7 @@
     fact('作成', $('<span>').append(document.createTextNode((task.created_by || '-') + '・'), C.timeElement(task.created_at)));
     fact('最終更新', C.timeElement(task.updated_at));
     if (task.retry_of_task_id) fact('再試行元', $('<a>').attr('href', '/tasks/' + task.retry_of_task_id).text('#' + task.retry_of_task_id));
+    if (config.revertOfTaskId) fact('取り消し元', $('<a>').attr('href', '/tasks/' + config.revertOfTaskId).text('#' + config.revertOfTaskId + ' の編集を一括取り消し'));
     fact('編集ログ', $('<a>').attr('href', '/edit-log?task_id=' + taskId).text('このタスクの編集ログを見る'));
     $summary.append($facts);
   }
@@ -710,6 +754,11 @@
     $rule.append($('<div>').addClass('nb-rule-summary__type').text(C.RULE_TYPE_LABELS[rule.templateType] || rule.templateType));
     const $dl = $('<dl>').addClass('nb-facts nb-facts--compact');
     const fact = (label, value) => $dl.append($('<dt>').text(label), $('<dd>').text(value));
+    if (rule.templateType === 'revertEdits') {
+      fact('取り消すタスク', '#' + rule.revertOfTaskId);
+      fact('対象', (rule.targets || []).length + 'ページ（そのタスクの編集が最新版のページだけを編集前の版に戻す）');
+      return $rule.append($dl);
+    }
     if (rule.templateType === 'custom') {
       (rule.steps || []).forEach((step, i) => fact('ステップ' + (i + 1), '/' + step.pattern + '/' + (step.flags || 'g') + ' → ' + step.replacement));
       const ts = rule.targetSource || {};

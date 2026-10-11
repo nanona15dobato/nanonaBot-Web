@@ -327,40 +327,179 @@ router.post('/api/tasks/:id/retry-failed', requireRole('owner'), async (req, res
 });
 
 // 編集ログの検索・閲覧（仕様書9.4節・フェーズ6）。task_pagesが削除された後も参照できる恒久ログ。
+/** 編集ログの検索条件（画面の表示・CSV書き出しで共通）。不正な値なら { error } を返す。 */
+function editLogFilter(query) {
+  const conditions = [];
+  const params = [];
+  if (query.task_id) {
+    const taskId = Number(query.task_id);
+    if (!Number.isInteger(taskId) || taskId <= 0) return { error: 'タスクIDは正の整数で指定してください' };
+    conditions.push('task_id = ?');
+    params.push(taskId);
+  }
+  if (query.page_title) {
+    conditions.push('page_title LIKE ?');
+    // ページ名に含まれる % や _ をワイルドカードとして解釈させない
+    params.push(`%${String(query.page_title).replace(/[\\%_]/g, '\\$&')}%`);
+  }
+  if (query.status && ['edited', 'failed'].includes(query.status)) {
+    conditions.push('status = ?');
+    params.push(query.status);
+  }
+  return { where: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '', params };
+}
+
+function diffUrlOf(row) {
+  return row.revid ? `https://${config.wiki.host}/w/index.php?diff=${row.revid}&oldid=prev` : null;
+}
+
 router.get('/api/edit-log', requireRole('owner'), async (req, res, next) => {
   try {
-    const conditions = [];
-    const params = [];
-    if (req.query.task_id) {
-      const taskId = Number(req.query.task_id);
-      if (!Number.isInteger(taskId) || taskId <= 0) {
-        return res.status(400).json({ error: 'invalid_task_id', message: 'タスクIDは正の整数で指定してください' });
-      }
-      conditions.push('task_id = ?');
-      params.push(taskId);
-    }
-    if (req.query.page_title) {
-      conditions.push('page_title LIKE ?');
-      // ページ名に含まれる % や _ をワイルドカードとして解釈させない
-      params.push(`%${String(req.query.page_title).replace(/[\\%_]/g, '\\$&')}%`);
-    }
-    if (req.query.status && ['edited', 'failed'].includes(req.query.status)) {
-      conditions.push('status = ?');
-      params.push(req.query.status);
-    }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const filter = editLogFilter(req.query);
+    if (filter.error) return res.status(400).json({ error: 'invalid_task_id', message: filter.error });
     const limit = Math.min(Math.max(Math.floor(Number(req.query.limit)) || 50, 1), 200);
 
-    const [rows] = await pool.query(`SELECT * FROM edit_log ${where} ORDER BY id DESC LIMIT ?`, [...params, limit]);
+    const [rows] = await pool.query(`SELECT * FROM edit_log ${filter.where} ORDER BY id DESC LIMIT ?`, [...filter.params, limit]);
+    res.json(rows.map((r) => ({ ...r, diffUrl: diffUrlOf(r) })));
+  } catch (err) {
+    next(err);
+  }
+});
 
-    const withDiffUrl = rows.map((r) => ({
-      ...r,
-      diffUrl: r.revid ? `https://${config.wiki.host}/w/index.php?diff=${r.revid}&oldid=prev` : null,
-    }));
-    res.json(withDiffUrl);
+// ===== 編集ログのCSV書き出し（フェーズ12） =====
+
+const CSV_MAX_ROWS = 10000;
+const CSV_COLUMNS = [
+  ['edited_at', '日時'],
+  ['status', '結果'],
+  ['task_id', 'タスク'],
+  ['stage', 'ウェーブ'],
+  ['page_title', 'ページ'],
+  ['namespace', '名前空間'],
+  ['account', 'アカウント'],
+  ['revid', '版'],
+  ['base_revid', '編集前の版'],
+  ['edit_summary', '要約'],
+  ['error_message', 'エラー'],
+  ['diff_url', '差分URL'],
+];
+
+/** CSVの1項目（RFC 4180。表計算ソフトで数式として解釈されないよう、先頭が = + - @ の値は ' を付ける） */
+function csvCell(value) {
+  if (value === null || value === undefined) return '';
+  let text = value instanceof Date ? value.toISOString() : String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function toCsv(rows) {
+  const lines = [CSV_COLUMNS.map(([, label]) => csvCell(label)).join(',')];
+  for (const row of rows) {
+    const record = { ...row, status: row.status === 'edited' ? '成功' : '失敗', diff_url: diffUrlOf(row) };
+    lines.push(CSV_COLUMNS.map(([key]) => csvCell(record[key])).join(','));
+  }
+  // 先頭のBOMは、Excelで開いたときに文字化けさせないため
+  return `﻿${lines.join('\r\n')}\r\n`;
+}
+
+router.get('/api/edit-log.csv', requireRole('owner'), async (req, res, next) => {
+  try {
+    const filter = editLogFilter(req.query);
+    if (filter.error) return res.status(400).json({ error: 'invalid_task_id', message: filter.error });
+    const [rows] = await pool.query(`SELECT * FROM edit_log ${filter.where} ORDER BY id DESC LIMIT ?`, [
+      ...filter.params,
+      CSV_MAX_ROWS,
+    ]);
+    const name = `edit-log${req.query.task_id ? `-task${Number(req.query.task_id)}` : ''}-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(toCsv(rows));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ===== タスクの一括取り消し（フェーズ12） =====
+
+/** 一括取り消しを作れるタスクの状態（実行中・待機中は、編集が増え続けるため作らない） */
+const REVERTABLE_STATUSES = ['completed', 'completed_with_failures', 'failed', 'cancelled', 'paused', 'emergency_stopped', 'expired'];
+
+/**
+ * 編集ログ（成功した編集）から、ページごとの取り消し対象を作る（純粋関数）。
+ * 1つのタスクが同じページを複数回編集した場合（ウェーブをまたぐ等）は、
+ * 最初の編集の前の版（baseRevid）に戻し、取り消せるのは最後の編集が今も最新版のときだけにする（revid）。
+ * @param {Array<{page_title:string, namespace:number, revid:number, base_revid:number, id:number}>} rows - idの昇順
+ */
+function buildRevertTargets(rows) {
+  const byTitle = new Map();
+  for (const row of rows) {
+    if (!row.revid || !row.base_revid) continue;
+    const current = byTitle.get(row.page_title);
+    if (!current) {
+      byTitle.set(row.page_title, { title: row.page_title, namespace: row.namespace, revid: Number(row.revid), baseRevid: Number(row.base_revid) });
+    } else {
+      current.revid = Number(row.revid); // 後の編集で上書き（最後の編集の版）
+    }
+  }
+  return [...byTitle.values()];
+}
+
+router.post('/api/tasks/:id/revert', requireRole('owner'), async (req, res, next) => {
+  try {
+    const [taskRows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
+    const original = taskRows[0];
+    if (!original) return res.status(404).json({ error: 'not_found' });
+    if (!REVERTABLE_STATUSES.includes(original.status)) {
+      return res.status(409).json({ error: 'not_revertable', message: '実行中・待機中のタスクは取り消せません。中止するか、終わるのを待ってください。' });
+    }
+
+    const [editRows] = await pool.query(
+      `SELECT id, page_title, namespace, revid, base_revid FROM edit_log
+       WHERE task_id = ? AND status = 'edited' AND revid IS NOT NULL ORDER BY id ASC`,
+      [original.id]
+    );
+    const targets = buildRevertTargets(editRows);
+    if (targets.length === 0) {
+      return res.status(409).json({ error: 'nothing_to_revert', message: 'このタスクが編集したページはありません。' });
+    }
+
+    const body = req.body || {};
+    const originalConfig = parseJsonColumn(original.config_json, {});
+    const mode = body.mode === 'manual' ? 'manual' : 'auto';
+    const reviewSettings =
+      mode === 'manual'
+        ? { mode, manualTimeoutHours: Math.max(1, Number(body.manualTimeoutHours) || 72) }
+        : { mode, autoWaitSeconds: Math.max(0, Number(body.autoWaitSeconds ?? 0)) };
+    const editSummary = typeof body.editSummary === 'string' && body.editSummary.trim()
+      ? body.editSummary.trim()
+      : `Bot: タスク #${original.id} の編集を取り消し`;
+
+    const revertConfig = {
+      account: original.account,
+      replacements: [{ templateType: 'revertEdits', revertOfTaskId: original.id, targets }],
+      editSettings: { ...(originalConfig.editSettings || {}), editSummary, linkUpdateMethod: undefined },
+      reviewSettings,
+      // 1件取り消せなくても残りは取り消す（取り消せなかったページは理由つきで残る）
+      onFailure: 'skipAndContinue',
+      revertOfTaskId: original.id,
+    };
+    if (!(revertConfig.editSettings.editIntervalSeconds >= 5)) revertConfig.editSettings.editIntervalSeconds = 10;
+    const { valid, errors } = validateTaskConfig(revertConfig);
+    if (!valid) return res.status(400).json({ error: 'invalid_config', errors });
+
+    const [result] = await pool.query(
+      `INSERT INTO tasks (created_by, account, mode, status, config_json) VALUES (?, ?, ?, 'queued', ?)`,
+      [req.session.username, original.account, mode, toJsonColumn(revertConfig)]
+    );
+    await auditLog(req, original.id, `このタスクの編集（${targets.length}ページ）を取り消すタスク #${result.insertId} を作成しました`);
+    await auditLog(req, result.insertId, `タスク #${original.id} の編集（${targets.length}ページ）の一括取り消しとして作成しました`);
+    res.status(201).json({ id: result.insertId, pageCount: targets.length });
   } catch (err) {
     next(err);
   }
 });
 
 module.exports = router;
+module.exports.buildRevertTargets = buildRevertTargets;
+module.exports.csvCell = csvCell;
+module.exports.toCsv = toCsv;

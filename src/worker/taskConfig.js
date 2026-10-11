@@ -73,6 +73,19 @@ function validateRule(rule, i, errors) {
   }
   const type = rule.templateType;
 
+  if (type === 'revertEdits') {
+    // 一括取り消し（フェーズ12）。POST /api/tasks/:id/revert がサーバー側で作る
+    if (!Number.isInteger(rule.revertOfTaskId) || rule.revertOfTaskId <= 0) {
+      errors.push(`${prefix}.revertOfTaskId: 取り消すタスクのIDが必要です`);
+    }
+    const validTargets =
+      Array.isArray(rule.targets) &&
+      rule.targets.length > 0 &&
+      rule.targets.every((t) => t && typeof t.title === 'string' && Number.isInteger(t.revid) && Number.isInteger(t.baseRevid));
+    if (!validTargets) errors.push(`${prefix}.targets: 取り消す編集（title・revid・baseRevid）が1件以上必要です`);
+    return;
+  }
+
   if (type === 'custom') {
     if (!Array.isArray(rule.steps) || rule.steps.length === 0) {
       errors.push(`${prefix}: stepsは1件以上の配列である必要があります`);
