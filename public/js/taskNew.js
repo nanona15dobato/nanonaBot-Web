@@ -39,6 +39,7 @@
     { data: 'templateRename', label: 'テンプレート置換' },
     { data: 'unlinkPage', label: 'リンク解除' },
     { data: 'templateSubst', label: 'テンプレートのsubst化' },
+    { data: 'urlRename', label: '外部リンクの付け替え' },
   ];
 
   /** 「ページ名#節|表示名」形式で表示する（節・表示名は省略可）。 */
@@ -284,6 +285,27 @@
           toLabel: orNull(toLabelWidget),
           namespaces: namespacesOrNull(ns.widget),
         });
+      } else if (type === 'urlRename') {
+        fromWidget.$input.attr('placeholder', '例: http://old.example.org/path');
+        toWidget.$input.attr('placeholder', '例: https://new.example.org/path');
+        const ns = buildNamespaceField(
+          [0],
+          'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。'
+        );
+        $body.append(
+          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
+            '改名元のURLで始まる外部リンク・URLを改名先に置き換えます（[URL 表示]・素のURL・テンプレート引数のいずれも対象）。' +
+              '改名元が「/」で終わる場合はその配下のURLすべて、それ以外はそのURLと続きが / ? # のURLだけを対象にします。' +
+              '対象ページはSpecial:LinkSearchと同じ外部リンク検索で取得し、リンク置換と同じく2ウェーブ構成で処理されます。'
+          ),
+          ns.$element
+        );
+        rule.getConfig = () => ({
+          templateType: 'urlRename',
+          from: fromWidget.getValue().trim(),
+          to: toWidget.getValue().trim(),
+          namespaces: namespacesOrNull(ns.widget),
+        });
       } else if (type === 'linkRename' || type === 'linkRename2') {
         const ns = buildNamespaceField(
           [0],
@@ -427,7 +449,7 @@
     REDIRECT_TARGET: 'リダイレクト解決指定（REDIRECT_TARGET）',
     REDIRECT_TARGET_NOT_REDIRECT: 'REDIRECT_TARGET指定だが改名元がリダイレクトではない（または存在しない）',
     subst: 'テンプレートのsubst化指定',
-    URL: '外部URLの付け替え',
+    URL: '片方だけが外部URLの指定',
     anchor_or_label: 'Category/Template・同一ページ内の節を含むアンカー/パイプラベル付き指定',
     namespace_mismatch: '改名元・改名先の名前空間が噛み合っていない',
   };
@@ -650,7 +672,7 @@
   }
 
   /** 送信前の入力チェック（サーバー側でも同じ内容を検証する）。問題のあるルールのカードに印を付ける。 */
-  const TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'linkRenameExact', 'categoryRename', 'templateRename'];
+  const TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'linkRenameExact', 'categoryRename', 'templateRename', 'urlRename'];
   function validate(config) {
     const errors = [];
     rules.forEach((rule) => rule.$card.removeClass('nb-rule-card--error'));
@@ -677,6 +699,11 @@
       } else {
         if (!String(r.from || '').trim()) errors.push(label + ': 改名元（対象）を入力してください。');
         if (TYPES_REQUIRING_TO.includes(r.templateType) && !String(r.to || '').trim()) errors.push(label + ': 改名先を入力してください。');
+        if (r.templateType === 'urlRename') {
+          [r.from, r.to].forEach((url, k) => {
+            if (url && !/^https?:\/\/[^\s/?#]+/i.test(url)) errors.push(label + ': ' + (k === 0 ? '改名元' : '改名先') + 'は http:// または https:// で始まるURLにしてください。');
+          });
+        }
       }
       if (errors.length > before && rules[i]) rules[i].$card.addClass('nb-rule-card--error');
     });

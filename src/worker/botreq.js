@@ -105,6 +105,11 @@ function classifyPair(rawFrom, rawTo) {
     }
     return { type: 'unsupported', reason: 'subst', rawFrom: from, rawTo: to };
   }
+  // 外部URLの付け替え（フェーズ10）: 両方がURLのときだけ urlRename として扱う
+  const isUrl = (v) => /^https?:\/\/[^\s/?#]+/i.test(v) && !/\s/.test(v);
+  if (isUrl(from) && isUrl(to)) {
+    return { type: 'urlRename', from, to, rawFrom: from, rawTo: to };
+  }
   if (/^https?:\/\//i.test(from) || /^https?:\/\//i.test(to)) {
     return { type: 'unsupported', reason: 'URL', rawFrom: from, rawTo: to };
   }

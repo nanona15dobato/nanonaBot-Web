@@ -104,6 +104,13 @@ function validateRule(rule, i, errors) {
   if (!isValidNamespaces(rule.namespaces)) {
     errors.push(`${prefix}.namespaces: 0以上の整数の配列、またはnull/省略である必要があります`);
   }
+  if (type === 'urlRename') {
+    for (const key of ['from', 'to']) {
+      if (typeof rule[key] === 'string' && rule[key].trim() && !/^https?:\/\/[^\s/?#]+/i.test(rule[key].trim())) {
+        errors.push(`${prefix}.${key}: http:// または https:// で始まるURLである必要があります`);
+      }
+    }
+  }
   for (const key of ['fromAnchor', 'toAnchor', 'fromLabel', 'toLabel']) {
     if (rule[key] !== undefined && rule[key] !== null && typeof rule[key] !== 'string') {
       errors.push(`${prefix}.${key}: 文字列またはnullである必要があります`);

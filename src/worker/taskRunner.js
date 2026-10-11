@@ -11,6 +11,7 @@ const {
   resolveBacklinks,
   resolveEmbeddedIn,
   resolveRegexSearch,
+  resolveExtUrlUsage,
   MAX_RESULTS,
 } = require('./targetResolvers');
 const { collectCategoryWarnings } = require('./categoryWarnings');
@@ -21,7 +22,7 @@ const { isEmergencyStopped } = require('./emergencyStop');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** ウェーブ1=Template名前空間 → ウェーブ2=その他ページ の2ウェーブで処理する種別 */
-const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2', 'linkRenameExact'];
+const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2', 'linkRenameExact', 'urlRename'];
 /**
  * ウェーブ1=Template名前空間のカテゴリメンバー（編集後、そのテンプレートの使用ページをnull edit）
  * → ウェーブ2=カテゴリメンバーを取り直して残りを編集
@@ -164,6 +165,11 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient, options = {}) {
       // ウェーブ2: その他ページ（未指定時は既定ns=0、nullは全名前空間、複数選択可）。
       // ウェーブ1の編集完了後に再取得する。
       return { results: await resolveBacklinks({ page: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
+
+    case 'urlRename':
+      // 外部リンクの付け替え（フェーズ10）: リンク置換と同じく、テンプレートを先に直す2ウェーブ構成
+      if (stage === 1) return { results: await resolveExtUrlUsage({ url: rule.from, namespaces: [10] }), error: null };
+      return { results: await resolveExtUrlUsage({ url: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
 
     case 'categoryRename':
     case 'categoryRemove': {
@@ -370,9 +376,14 @@ async function collectWarningsIfNeeded(task, replacements, mwClient, scanCache) 
  * @returns {Promise<{stopped: null|'emergency'|'cancelled'}>}
  */
 async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient, method = 'nullEdit') {
-  const [taskRows] = await pool.query('SELECT target_titles_json FROM tasks WHERE id = ?', [task.id]);
-  const targetTitles = parseJsonColumn(taskRows[0] && taskRows[0].target_titles_json, {}) || {};
+  const targetTitles = await readTargetTitlesJson(task.id);
   if (targetTitles.nullEditDone) return { stopped: null };
+
+  // 前回の実行が途中で止まっていれば、保存しておいた対象一覧の続きから再開する（フェーズ10）
+  const saved = targetTitles.nullEdit;
+  if (saved && Array.isArray(saved.titles)) {
+    return runNullEdits(task, mwClient, method, saved.titles, Number(saved.done) || 0, saved.templateCount || 0);
+  }
 
   const categoryRuleIndices = new Set(
     replacements
@@ -399,25 +410,65 @@ async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClien
     }
   }
 
-  if (editedTemplates.length > 0) {
+  // 対象一覧を保存してから始める（途中で止まっても再開時に同じ一覧の続きから処理できるように）
+  await updateTargetTitlesJson(task.id, (json) => {
+    json.nullEdit = { titles, done: 0, templateCount: editedTemplates.length };
+  });
+  return runNullEdits(task, mwClient, method, titles, 0, editedTemplates.length);
+}
+
+async function readTargetTitlesJson(taskId) {
+  const [rows] = await pool.query('SELECT target_titles_json FROM tasks WHERE id = ?', [taskId]);
+  return parseJsonColumn(rows[0] && rows[0].target_titles_json, {}) || {};
+}
+
+/** target_titles_json を読み直してから書き換える（他の項目を上書きしないように）。 */
+async function updateTargetTitlesJson(taskId, mutate) {
+  const json = await readTargetTitlesJson(taskId);
+  mutate(json);
+  await pool.query('UPDATE tasks SET target_titles_json = ? WHERE id = ?', [toJsonColumn(json), taskId]);
+}
+
+/** null edit 1件ごとに進捗を保存すると書き込みが多すぎるため、この件数ごとに保存する */
+const NULL_EDIT_PROGRESS_SAVE_EVERY = 10;
+
+/**
+ * 保存済みの対象一覧 titles を startIndex 件目から null edit / purge する。
+ * 進捗（処理済み件数）を定期的に保存し、止まった場合も次回はその続きから再開する。
+ */
+async function runNullEdits(task, mwClient, method, titles, startIndex, templateCount) {
+  const usePurge = method === 'purge';
+  const methodLabel = usePurge ? 'purge（forcelinkupdate）' : 'null edit';
+  const batchSize = usePurge ? PURGE_BATCH_SIZE : 1;
+  const saveProgress = (done) =>
+    updateTargetTitlesJson(task.id, (json) => {
+      if (json.nullEdit) json.nullEdit.done = done;
+    });
+
+  if (titles.length > 0) {
     await writeTaskLogSafely({
       taskId: task.id,
       stage: 1,
       level: 'info',
-      message: `編集したテンプレート${editedTemplates.length}件の使用ページ${titles.length}件を${
-        method === 'purge' ? 'purge（forcelinkupdate）で' : 'null editで'
-      }更新します。`,
+      message:
+        startIndex > 0
+          ? `使用ページの${methodLabel}を前回の続き（${startIndex + 1}/${titles.length}件目）から再開します。`
+          : `編集したテンプレート${templateCount}件の使用ページ${titles.length}件を${methodLabel}で更新します。`,
     });
   }
 
-  const usePurge = method === 'purge';
-  const methodLabel = usePurge ? 'purge（forcelinkupdate）' : 'null edit';
-  const batchSize = usePurge ? PURGE_BATCH_SIZE : 1;
   let failures = 0;
-  for (let i = 0; i < titles.length; i += batchSize) {
-    if (await isEmergencyStopped()) return { stopped: 'emergency' };
+  let sinceSave = 0;
+  for (let i = startIndex; i < titles.length; i += batchSize) {
+    if (await isEmergencyStopped()) {
+      await saveProgress(i);
+      return { stopped: 'emergency' };
+    }
     const [statusRows] = await pool.query('SELECT status FROM tasks WHERE id = ?', [task.id]);
-    if (!statusRows[0] || statusRows[0].status === 'cancelled') return { stopped: 'cancelled' };
+    if (!statusRows[0] || statusRows[0].status === 'cancelled') {
+      await saveProgress(i);
+      return { stopped: 'cancelled' };
+    }
 
     const batch = titles.slice(i, i + batchSize);
     try {
@@ -442,25 +493,32 @@ async function nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClien
         message: `${methodLabel}に失敗しました（${batch.length}件）: ${String((err && (err.mwInfo || err.message)) || err)}`,
       });
     }
+    sinceSave += batch.length;
+    if (usePurge || sinceSave >= NULL_EDIT_PROGRESS_SAVE_EVERY) {
+      await saveProgress(i + batch.length);
+      sinceSave = 0;
+    }
     if (i + batchSize < titles.length) await sleep(NULL_EDIT_INTERVAL_MS);
   }
 
-  if (editedTemplates.length > 0) {
+  if (titles.length > 0) {
+    const processed = titles.length - startIndex;
     await writeTaskLogSafely({
       taskId: task.id,
       stage: 1,
       level: failures > 0 ? 'warning' : 'info',
       message:
         failures > 0
-          ? `${methodLabel}が完了しました（${titles.length}件中${failures}件失敗）。`
-          : `${methodLabel}が完了しました（${titles.length}件）。`,
+          ? `${methodLabel}が完了しました（${processed}件中${failures}件失敗）。`
+          : `${methodLabel}が完了しました（${processed}件）。`,
     });
   }
 
-  const [latestRows] = await pool.query('SELECT target_titles_json FROM tasks WHERE id = ?', [task.id]);
-  const latest = parseJsonColumn(latestRows[0] && latestRows[0].target_titles_json, {}) || {};
-  latest.nullEditDone = true;
-  await pool.query('UPDATE tasks SET target_titles_json = ? WHERE id = ?', [toJsonColumn(latest), task.id]);
+  // 完了したら対象一覧は消し、完了印だけを残す（再開時に繰り返さない）
+  await updateTargetTitlesJson(task.id, (json) => {
+    delete json.nullEdit;
+    json.nullEditDone = true;
+  });
   return { stopped: null };
 }
 

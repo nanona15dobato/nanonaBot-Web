@@ -212,6 +212,32 @@ function categoryTextSteps(from, to) {
 }
 
 /**
+ * 外部リンクの付け替え（フェーズ10。BOTREQの「http://旧 |https://新」形式）。
+ * 本文中の from で始まるURLを to に置き換える（[http://旧 表示] の外部リンク、素のURL、
+ * {{Cite web|url=http://旧}} 等のテンプレート引数のいずれも対象）。
+ * - from が "/" で終わるときは、その配下のURLすべてを付け替える（ドメイン・ディレクトリの移転）
+ * - それ以外は、from そのものか、続きが "/" "?" "#" のURLだけを付け替える
+ *   （"http://example.com/page" が "http://example.com/page2" を書き換えないように）
+ * スキーム（http/https）とホスト名の大文字小文字は区別しない。
+ */
+function urlRenameSteps(from, to) {
+  const src = String(from).trim();
+  const m = /^(https?:\/\/)([^/?#]+)(.*)$/i.exec(src);
+  const head = m ? `(?:${escapeRegExp(m[1])})`.replace(/http/i, '[Hh][Tt][Tt][Pp]') : '';
+  const host = m ? escapeRegExp(m[2]).replace(/[A-Za-z]/g, (c) => `[${c.toUpperCase()}${c.toLowerCase()}]`) : '';
+  const rest = m ? escapeRegExp(m[3]) : escapeRegExp(src);
+  const boundary = src.endsWith('/') ? '' : '(?=$|[/?#\\s\\]|<>"\'{}]|\\[)';
+  return [
+    {
+      // 直前がURLの一部（英数字・ドット等）のときは別のURLなので置換しない
+      pattern: `(?<![\\w.\\-/:])${head}${host}${rest}${boundary}`,
+      flags: 'g',
+      replacement: escapeReplacementDollar(String(to).trim()),
+    },
+  ];
+}
+
+/**
  * 6.4 Category除去（標準）。fromはCategory:プレフィックスを除いた素の名前。
  * Step2（Template:リダイレクトの所属カテゴリの更新）は8章の方針により自動編集しない。
  */
@@ -309,12 +335,14 @@ function buildStepsForTemplateType(templateType, params) {
       return unlinkPageSteps(from);
     case 'templateSubst':
       return templateSubstSteps(from);
+    case 'urlRename':
+      return urlRenameSteps(from, to);
     default:
       throw new Error(`buildStepsForTemplateType: 未知のtemplateType "${templateType}"`);
   }
 }
 
-const TEMPLATE_TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'linkRenameExact', 'categoryRename', 'templateRename'];
+const TEMPLATE_TYPES_REQUIRING_TO = ['linkRename', 'linkRename2', 'linkRenameExact', 'categoryRename', 'templateRename', 'urlRename'];
 const KNOWN_PRESET_TEMPLATE_TYPES = [
   'linkRename',
   'linkRename2',
@@ -324,6 +352,7 @@ const KNOWN_PRESET_TEMPLATE_TYPES = [
   'templateRename',
   'unlinkPage',
   'templateSubst',
+  'urlRename',
 ];
 
 module.exports = {
@@ -339,6 +368,7 @@ module.exports = {
   templateRenameSteps,
   unlinkPageSteps,
   templateSubstSteps,
+  urlRenameSteps,
   buildStepsForTemplateType,
   TEMPLATE_TYPES_REQUIRING_TO,
   KNOWN_PRESET_TEMPLATE_TYPES,

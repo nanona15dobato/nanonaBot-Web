@@ -423,3 +423,62 @@ test('nullEditTemplateTransclusionsIfNeeded: purge指定時は使用ページを
     fakeModule.exports.pool.query = originalQuery;
   }
 });
+
+test('nullEditTemplateTransclusionsIfNeeded: 途中で止まったら処理済み件数を保存し、再開時はその続きから処理する', async () => {
+  const originalFetch = global.fetch;
+  const originalQuery = fakeModule.exports.pool.query;
+  const task = { id: 3, target_titles_json: JSON.stringify({ 1: ['Template:カテゴリ付き'] }) };
+  const transclusions = Array.from({ length: 25 }, (_, i) => ({ title: `記事${i}`, ns: 0 }));
+  let embeddedinCalls = 0;
+  global.fetch = async () => {
+    embeddedinCalls++;
+    return { ok: true, status: 200, json: async () => ({ query: { embeddedin: transclusions } }) };
+  };
+  let taskStatus = 'running';
+  fakeModule.exports.pool.query = async (sql, params) => {
+    const s = sql.replace(/\s+/g, ' ').trim();
+    if (s.startsWith('SELECT target_titles_json FROM tasks')) return [[{ target_titles_json: task.target_titles_json }]];
+    if (s.startsWith('SELECT page_title, matched_rule_indices FROM task_pages')) {
+      return [[{ page_title: 'Template:カテゴリ付き', matched_rule_indices: '[0]' }]];
+    }
+    if (s.startsWith('SELECT emergency_stopped')) return [[{ emergency_stopped: 0 }]];
+    if (s.startsWith('SELECT status FROM tasks')) return [[{ status: taskStatus }]];
+    if (s.startsWith('INSERT INTO task_logs')) return [{}];
+    if (s.startsWith('UPDATE tasks SET target_titles_json')) {
+      task.target_titles_json = params[0];
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error('想定外のSQL: ' + s);
+  };
+  const nullEdited = [];
+  const mwClient = {
+    nullEdit: async (title) => {
+      nullEdited.push(title);
+      if (nullEdited.length === 12) taskStatus = 'cancelled'; // 12件目のあとで中止された
+    },
+  };
+  const replacements = [{ templateType: 'categoryRename', from: '旧', to: '新' }];
+
+  try {
+    const first = await nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient);
+    assert.deepEqual(first, { stopped: 'cancelled' });
+    assert.equal(nullEdited.length, 12);
+    const saved = JSON.parse(task.target_titles_json).nullEdit;
+    assert.equal(saved.titles.length, 25);
+    assert.equal(saved.done, 12);
+
+    // 再開: 対象一覧を取り直さず、13件目から処理する
+    taskStatus = 'running';
+    const second = await nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient);
+    assert.deepEqual(second, { stopped: null });
+    assert.equal(embeddedinCalls, 1);
+    assert.deepEqual(nullEdited.slice(12), transclusions.slice(12).map((t) => t.title));
+    const finalJson = JSON.parse(task.target_titles_json);
+    assert.equal(finalJson.nullEditDone, true);
+    assert.equal(finalJson.nullEdit, undefined);
+    assert.deepEqual(finalJson['1'], ['Template:カテゴリ付き']); // 他の項目は残す
+  } finally {
+    global.fetch = originalFetch;
+    fakeModule.exports.pool.query = originalQuery;
+  }
+});

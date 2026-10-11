@@ -15,6 +15,7 @@ const pagesRoutes = require('./routes/pages');
 const tasksRoutes = require('./routes/tasks');
 const botreqRoutes = require('./routes/botreq');
 const botAccountsRoutes = require('./routes/botAccounts');
+const settingsRoutes = require('./routes/settings');
 
 function createApp() {
   const app = express();
@@ -78,6 +79,7 @@ function createApp() {
   app.use(tasksRoutes);
   app.use(botreqRoutes);
   app.use(botAccountsRoutes);
+  app.use(settingsRoutes);
   app.use(pagesRoutes);
 
   app.use((req, res) => {

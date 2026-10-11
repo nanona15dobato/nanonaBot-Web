@@ -244,3 +244,22 @@ test('linkRenameExactSteps: 節なし→節ありの付け替えでは節なし�
   const text = '[[旧記事]] [[旧記事|別名]] [[旧記事#他]]';
   assert.equal(applyReplacementSteps(text, steps), '[[新記事#節|旧記事]] [[新記事#節|別名]] [[旧記事#他]]');
 });
+
+test('urlRenameSteps: 改名元URLそのものとその下のパスだけを付け替え、別のURLは変えない', () => {
+  const steps = presets.urlRenameSteps('http://move.from/path', 'https://move.to/path');
+  const cases = [
+    ['[http://move.from/path 旧サイト]', '[https://move.to/path 旧サイト]'],
+    ['<ref>http://move.from/path/sub?a=1</ref>', '<ref>https://move.to/path/sub?a=1</ref>'],
+    ['{{Cite web|url=HTTP://Move.From/path|title=x}}', '{{Cite web|url=https://move.to/path|title=x}}'],
+    ['http://move.from/path2', 'http://move.from/path2'],
+    ['http://www.move.from/path', 'http://www.move.from/path'],
+    ['http://move.from/pathology', 'http://move.from/pathology'],
+  ];
+  for (const [input, expected] of cases) assert.equal(applyReplacementSteps(input, steps), expected, input);
+});
+
+test('urlRenameSteps: 改名元が / で終わるときは配下のURLすべてを付け替える', () => {
+  const steps = presets.urlRenameSteps('http://old.example/', 'https://new.example/');
+  assert.equal(applyReplacementSteps('http://old.example/a/b と [http://old.example/ top]', steps), 'https://new.example/a/b と [https://new.example/ top]');
+  assert.equal(applyReplacementSteps('http://old.example.com/x', steps), 'http://old.example.com/x');
+});
