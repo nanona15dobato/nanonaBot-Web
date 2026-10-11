@@ -115,6 +115,16 @@ test('sliceSections / matchHeadingsToSections: バイト位置で節を切り、
   assert.deepEqual(matched.map((m) => m.section && m.section.index), ['1', '3']);
 });
 
+test('sliceSections: jawiki の byteoffset は文字単位。文字単位の位置でも正しく切る', () => {
+  const wikitext = '<!-- 日本語のコメント -->\n== 一 ==\nあ\n== 二 ==\nい';
+  const sections = [
+    { index: '1', level: '2', line: '一', byteoffset: wikitext.indexOf('== 一'), fromtitle: REQUEST_PAGE },
+    { index: '2', level: '2', line: '二', byteoffset: wikitext.indexOf('== 二'), fromtitle: REQUEST_PAGE },
+  ];
+  assert.deepEqual(L.sliceSections(wikitext, sections, REQUEST_PAGE).map((s) => s.text), ['== 一 ==\nあ\n', '== 二 ==\nい']);
+  assert.throws(() => L.sliceSections(wikitext, [{ ...sections[0], byteoffset: 3 }], REQUEST_PAGE), /一致しません/);
+});
+
 test('firstComment: 入れ子も含めて最も古いコメント（冒頭の {{解決済み}} の署名ではなく依頼）', () => {
   const heading = {
     replies: [

@@ -73,6 +73,17 @@ Special:BotPasswords で発行したログイン名（`User@BotName` 形式）�
 | `SMTP_HOST` | `mail.tools.wmcloud.org` | メール送信に使うSMTPサーバー |
 | `SMTP_PORT` | `25` | 同ポート |
 
+### Bot作業依頼
+
+[着手・完了・解決](botreq.md#着手完了解決フェーズ13) で使います。
+
+| 名前 | 既定値 | 説明 |
+|---|---|---|
+| `BOTREQ_ACCOUNT` | `Nanona15dobato` | 作業記録の編集と依頼への返信に使うアカウント（`BOT_<名前>_USER` / `_PASS` で BotPassword を設定したもの） |
+| `BOTREQ_BOT_USER` | `nanonaBot` | 作業の編集回数・投稿記録を数える Bot |
+| `BOTREQ_OPERATOR` | `nanona15dobato` | 作業記録のページを新しく作るときの `{{../head|運用者=}}` |
+| `BOTREQ_LOG_PREFIX` | `利用者:nanonaBot/依頼/` | 作業記録のページ名（後ろに「YYYY年」が付く） |
+
 ### データベース
 
 | 名前 | 既定値 | 説明 |

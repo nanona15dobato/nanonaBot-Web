@@ -257,25 +257,39 @@ function discussionLinks(sectionText, options = {}) {
 }
 
 /**
+ * byteoffset の位置でウィキテキストを切れるようにする。名前に反して jawiki の action=parse は
+ * 文字（コードポイント）単位の位置を返すため、まず文字単位で切り、各節が見出し（=）から始まらなければバイト単位で切る。
+ */
+function offsetSlicer(wikitext, offsets) {
+  const chars = Array.from(wikitext);
+  const byChars = { length: chars.length, slice: (a, b) => chars.slice(a, b).join('') };
+  if (offsets.every((o) => chars[o] === '=')) return byChars;
+  const buf = Buffer.from(wikitext, 'utf8');
+  const byBytes = { length: buf.length, slice: (a, b) => buf.slice(a, b).toString('utf8') };
+  if (offsets.every((o) => buf[o] === 0x3d)) return byBytes;
+  throw new Error('節の位置とウィキテキストが一致しません。読み込み直してください。');
+}
+
+/**
  * action=parse の節一覧（このページ自身の節だけ）とウィキテキストから、各節の本文を切り出す。
- * byteoffset はバイト単位なので Buffer で切る。見出しの階層が同じか上の次の節までを本文とする（小節を含む）。
+ * 見出しの階層が同じか上の次の節までを本文とする（小節を含む）。
  * @param {string} wikitext
  * @param {Array<{index: string, level: string|number, line: string, byteoffset: number|null, fromtitle: string|false}>} sections
  * @param {string} pageTitle
  */
 function sliceSections(wikitext, sections, pageTitle) {
-  const buf = Buffer.from(wikitext, 'utf8');
   const own = sections.filter((s) => s.fromtitle === pageTitle && /^\d+$/.test(String(s.index)) && Number.isInteger(s.byteoffset));
+  const text = offsetSlicer(wikitext, own.map((s) => s.byteoffset));
   return own.map((s, i) => {
     const level = Number(s.level);
-    let end = buf.length;
+    let end = text.length;
     for (let j = i + 1; j < own.length; j++) {
       if (Number(own[j].level) <= level) {
         end = own[j].byteoffset;
         break;
       }
     }
-    return { index: String(s.index), level, name: plainText(s.line), text: buf.slice(s.byteoffset, end).toString('utf8') };
+    return { index: String(s.index), level, name: plainText(s.line), text: text.slice(s.byteoffset, end) };
   });
 }
 

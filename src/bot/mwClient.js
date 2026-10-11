@@ -47,12 +47,14 @@ class MediaWikiBotClient {
    * @param {'GET'|'POST'} [method]
    */
   async request(params, method = 'GET') {
-    // サーバーのレプリケーション遅延（maxlag）で拒否された場合は、指示された秒数待ってから再試行する
+    // サーバーのレプリケーション遅延（maxlag）や、リクエストが多すぎる（HTTP 429）で拒否された場合は、
+    // 指示された秒数（Retry-After）待ってから再試行する
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.requestOnce(params, method);
       } catch (err) {
-        if (err.mwCode !== 'maxlag' || attempt >= MAX_LAG_RETRIES) throw err;
+        const retryable = err.mwCode === 'maxlag' || err.httpStatus === 429;
+        if (!retryable || attempt >= MAX_LAG_RETRIES) throw err;
         await sleep((err.retryAfterSeconds || EDIT_MAXLAG_SECONDS) * 1000);
       }
     }
@@ -84,6 +86,8 @@ class MediaWikiBotClient {
     if (!res.ok) {
       const err = new Error(`MediaWiki APIへのHTTPリクエストが失敗しました (${res.status})`);
       err.httpStatus = res.status;
+      const retryAfter = typeof res.headers.get === 'function' ? Number(res.headers.get('retry-after')) : NaN;
+      if (Number.isFinite(retryAfter) && retryAfter > 0) err.retryAfterSeconds = retryAfter;
       throw err;
     }
     const data = await res.json();
