@@ -206,6 +206,16 @@ function validateTaskConfig(config) {
     errors.push('onFailureは"pause"または"skipAndContinue"である必要があります');
   }
 
+  // Bot作業依頼への紐づけ（任意。フェーズ13）: Bot作業依頼の画面にこのタスクを表示し、完了時の内訳の確認に使う
+  if (config.botreq !== undefined && config.botreq !== null) {
+    const b = config.botreq;
+    if (typeof b !== 'object' || typeof b.threadId !== 'string' || !/^h-.+-\d{14}$/.test(b.threadId)) {
+      errors.push('botreq.threadId: 依頼の節のID（h-…-YYYYMMDDhhmmss）である必要があります');
+    } else if (b.name !== undefined && typeof b.name !== 'string') {
+      errors.push('botreq.name: 文字列である必要があります');
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 

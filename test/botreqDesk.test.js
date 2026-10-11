@@ -183,7 +183,10 @@ function fakeClient({ log = LOG, editCount = 161396, contribsTotal = 124 } = {})
       }
       if (params.list === 'users') return { query: { users: [{ editcount: editCount }] } };
       if (params.list === 'usercontribs') {
-        const list = Array.from({ length: contribsTotal }, (_, i) => ({ timestamp: new Date(Date.parse('2026-10-10T14:44:59Z') - i * 10000).toISOString().replace('.000', '') }));
+        const list = Array.from({ length: contribsTotal }, (_, i) => ({
+          revid: 9000 - i,
+          timestamp: new Date(Date.parse('2026-10-10T14:44:59Z') - i * 10000).toISOString().replace('.000', ''),
+        }));
         return { query: { usercontribs: list } };
       }
       if (params.action === 'edit') return { edit: { result: 'Success', newrevid: 700 } };
@@ -283,4 +286,68 @@ test('save: basetimestamp つきで編集し、指定があれば依頼のコメ
   const reply = client.calls.find((c) => c.params.action === 'discussiontoolsedit').params;
   assert.equal(reply.commentid, 'c-x');
   assert.equal(reply.paction, 'addcomment');
+});
+
+// ---- フェーズ13の改善: 小見出し・タスクとの紐づけ・内訳 ----
+
+/** tasks / edit_log を返す偽の DB。 */
+function fakeQuery({ tasks = [], editLog = [] } = {}) {
+  return async (sql, params) => {
+    if (/FROM tasks/.test(sql)) return [tasks];
+    if (/FROM edit_log/.test(sql)) return [editLog.filter((row) => params.includes(row.revid))];
+    throw new Error('unexpected sql ' + sql);
+  };
+}
+
+test('sliceSections: ownText は小節を含まない（状態の判定用）', () => {
+  const wikitext = '== 親 ==\n親の本文\n=== 子 ===\n{{BOTREQ|完了}}\n';
+  const sections = [
+    { index: '1', level: '2', line: '親', byteoffset: 0, fromtitle: REQUEST_PAGE },
+    { index: '2', level: '3', line: '子', byteoffset: wikitext.indexOf('=== 子'), fromtitle: REQUEST_PAGE },
+  ];
+  const [parent, child] = L.sliceSections(wikitext, sections, REQUEST_PAGE);
+  assert.equal(parent.ownText, '== 親 ==\n親の本文\n');
+  assert.ok(parent.text.includes('{{BOTREQ|完了}}'));
+  assert.equal(L.detectStatus(parent.ownText).status, 'open'); // 子の依頼の完了で、親を完了にしない
+  assert.equal(L.detectStatus(child.ownText).status, 'completed');
+});
+
+test('listRequests: 依頼に紐づけたタスクを返す（DB が読めなくても一覧は出す）', async () => {
+  const data = await desk.listRequests({
+    client: fakeClient(),
+    query: fakeQuery({ tasks: [{ id: 12, status: 'completed', account: 'NanonaBot', thread_id: THREAD }, { id: 13, status: 'queued', account: 'NanonaBot', thread_id: 'h-他-20260101000000' }] }),
+  });
+  assert.deepEqual(data.requests[0].tasks, [{ id: 12, status: 'completed', account: 'NanonaBot' }]);
+  const failing = await desk.listRequests({ client: fakeClient(), query: async () => { throw new Error('no db'); } });
+  assert.deepEqual(failing.requests[0].tasks, []);
+});
+
+test('prepare(complete): 編集の内訳をタスクごとに数え、紐づけていないタスクの編集が混ざれば注意する', async () => {
+  const editLog = [
+    ...Array.from({ length: 100 }, (_, i) => ({ task_id: 12, revid: 9000 - i })),
+    ...Array.from({ length: 20 }, (_, i) => ({ task_id: 15, revid: 8900 - i })),
+  ];
+  const plan = await desk.prepare('complete', THREAD, {
+    client: fakeClient(),
+    query: fakeQuery({ tasks: [{ id: 12, status: 'completed', account: 'NanonaBot', thread_id: THREAD }], editLog }),
+  });
+  assert.deepEqual(plan.workSummary.breakdown, [
+    { taskId: 12, count: 100 },
+    { taskId: 15, count: 20 },
+    { taskId: null, count: 4 },
+  ]);
+  assert.ok(plan.notes.some((n) => /紐づけていないタスクの編集.*#15: 20件/.test(n.text)));
+});
+
+test('prepare(complete): 依頼にタスクを紐づけていなければ、内訳だけ出して注意はしない', async () => {
+  const plan = await desk.prepare('complete', THREAD, { client: fakeClient(), query: fakeQuery({ editLog: [{ task_id: 15, revid: 9000 }] }) });
+  assert.deepEqual(plan.workSummary.breakdown, [{ taskId: 15, count: 1 }, { taskId: null, count: 123 }]);
+  assert.ok(!plan.notes.some((n) => /紐づけていない/.test(n.text)));
+});
+
+test('requestSection: その依頼の節の本文（小節を含まない）', async () => {
+  const r = await desk.requestSection(THREAD, { client: fakeClient() });
+  assert.equal(r.name, 'バイオハザード');
+  assert.ok(r.text.startsWith('== バイオハザード =='));
+  await assert.rejects(desk.requestSection('x', { client: fakeClient() }), (err) => err.status === 400);
 });

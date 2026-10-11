@@ -228,3 +228,18 @@ test('validateTaskConfig: customのtargetSource.typeが不正ならエラー', (
   assert.equal(valid, false);
   assert.ok(errors.some((e) => e.includes('targetSource.type')));
 });
+
+test('validateTaskConfig: Bot作業依頼への紐づけ（botreq）は任意で、依頼の節のIDを確かめる', () => {
+  const base = {
+    account: 'NanonaBot',
+    replacements: [{ templateType: 'custom', steps: [{ pattern: 'foo', flags: 'g', replacement: 'bar' }], targetSource: { type: 'manualList', titles: ['P'] } }],
+    editSettings: { botFlag: true, minorEdit: true, editSummary: 'test edit', editIntervalSeconds: 10 },
+    reviewSettings: { mode: 'auto', autoWaitSeconds: 30 },
+    onFailure: 'pause',
+  };
+  assert.equal(validateTaskConfig({ ...base, botreq: { threadId: 'h-バイオハザード-20261010124600', name: 'バイオハザード' } }).valid, true);
+  assert.equal(validateTaskConfig({ ...base, botreq: null }).valid, true);
+  const bad = validateTaskConfig({ ...base, botreq: { threadId: 'h-案内' } });
+  assert.equal(bad.valid, false);
+  assert.match(bad.errors.join(), /botreq\.threadId/);
+});

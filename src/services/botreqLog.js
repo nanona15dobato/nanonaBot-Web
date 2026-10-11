@@ -272,7 +272,7 @@ function offsetSlicer(wikitext, offsets) {
 
 /**
  * action=parse の節一覧（このページ自身の節だけ）とウィキテキストから、各節の本文を切り出す。
- * 見出しの階層が同じか上の次の節までを本文とする（小節を含む）。
+ * text は見出しの階層が同じか上の次の節まで（小節を含む。節の編集の範囲と同じ）、ownText は次の節まで。
  * @param {string} wikitext
  * @param {Array<{index: string, level: string|number, line: string, byteoffset: number|null, fromtitle: string|false}>} sections
  * @param {string} pageTitle
@@ -289,7 +289,15 @@ function sliceSections(wikitext, sections, pageTitle) {
         break;
       }
     }
-    return { index: String(s.index), level, name: plainText(s.line), text: text.slice(s.byteoffset, end) };
+    // ownText: 小節を含まない、その見出しだけの本文（状態の判定に使う。親の見出しの状態が小見出しの依頼に引きずられないように）
+    const ownEnd = i + 1 < own.length ? own[i + 1].byteoffset : text.length;
+    return {
+      index: String(s.index),
+      level,
+      name: plainText(s.line),
+      text: text.slice(s.byteoffset, end),
+      ownText: text.slice(s.byteoffset, ownEnd),
+    };
   });
 }
 
