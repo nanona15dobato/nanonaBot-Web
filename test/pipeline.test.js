@@ -95,6 +95,12 @@ function createFakeDb() {
       const row = taskPages.get(idParam);
       if (!row) return [{ affectedRows: 0 }];
 
+      if (s.includes("SET status = 'prepared', reviewed_at = NULL, error_message = ?")) {
+        // 手動確認モードの編集競合で、作り直して確認待ちの手前に戻す
+        row.status = 'prepared';
+        row.error_message = params[0];
+        return [{ affectedRows: 1 }];
+      }
       if (s.includes("SET status = 'awaiting_review'")) {
         // 前もって承認・却下されたページは確認待ちに戻さない（WHERE status = 'prepared'）
         if (s.includes("AND status = 'prepared'") && row.status !== 'prepared') return [{ affectedRows: 0 }];
@@ -133,6 +139,11 @@ function createFakeDb() {
     if (s.startsWith('SELECT status, review_timeout_at')) {
       const t = tasks.get(params[0]);
       return [t ? [{ status: t.status, mode: t.mode, config_json: t.config_json, review_timeout_at: t.review_timeout_at || null }] : []];
+    }
+
+    if (s.startsWith('SELECT mode FROM tasks WHERE id')) {
+      const t = tasks.get(params[0]);
+      return [t ? [{ mode: t.mode || 'auto' }] : []];
     }
 
     if (s.startsWith('SELECT status FROM tasks WHERE id')) {
@@ -806,3 +817,80 @@ test('isRetryableEditError / retryDelayMs: 再試行する失敗の判定と、�
       process.env.EDIT_RETRY_BASE_MS = saved;
     }
   }));
+
+test('editOnePage: 手動確認モードの編集競合は自動で再試行せず、最新版で作り直して確認待ちに戻す', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 9, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'manual' });
+  db.seedPages([{ task_id: 9, stage: 1, order_index: 0, page_title: '手動で確認するページ', namespace: 0, matched_rule_indices: '[0]', status: 'pending' }]);
+
+  // 画面からの承認を模す: 確認待ちになったら、その時点の差分（new_wikitext）を記録して承認する
+  const reviewedTexts = [];
+  const originalQuery = db.pool.query;
+  db.pool.query = async (sql, params) => {
+    const result = await originalQuery(sql, params);
+    const normalized = sql.replace(/\s+/g, ' ').trim();
+    if (normalized.startsWith("UPDATE task_pages SET status = 'awaiting_review'")) {
+      const row = db.taskPages.get(params[params.length - 1]);
+      if (row.status === 'awaiting_review') {
+        reviewedTexts.push({ text: row.new_wikitext, notice: row.error_message || null });
+        row.status = 'approved';
+      }
+    }
+    return result;
+  };
+
+  let revision = 1;
+  const edits = [];
+  const mwClient = {
+    async getPage(title) {
+      return {
+        title,
+        exists: true,
+        revid: revision,
+        baseTimestamp: `2026-08-11T09:00:0${revision}Z`,
+        startTimestamp: '2026-08-11T09:10:00Z',
+        wikitext: revision === 1 ? '旧' : '他の人の追記 旧',
+      };
+    },
+    async edit(params) {
+      edits.push(params.text);
+      if (edits.length === 1) {
+        revision = 2;
+        const err = new Error('conflict');
+        err.mwCode = 'editconflict';
+        err.mwInfo = 'Edit conflict.';
+        throw err;
+      }
+      return { revid: 3, newTimestamp: '2026-08-11T09:10:05Z' };
+    },
+  };
+
+  let result;
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    result = await runStagePipeline({
+      taskId: 9,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'manual', manualTimeoutHours: 72 },
+      onFailure: 'pause',
+    });
+  });
+
+  assert.equal(result.completed, true);
+  // 1回目の確認 → 競合 → 作り直した差分で2回目の確認 → 編集
+  assert.equal(reviewedTexts.length, 2);
+  assert.equal(reviewedTexts[0].text, '新');
+  assert.equal(reviewedTexts[1].text, '他の人の追記 新');
+  assert.match(reviewedTexts[1].notice, /編集競合.*最新版で作り直しました/);
+  assert.deepEqual(edits, ['新', '他の人の追記 新']);
+  const row = [...db.taskPages.values()][0];
+  assert.equal(row.status, 'edited');
+  assert.equal(row.error_message, null);
+  assert.ok(db.taskLogs.some((p) => /確認待ちに戻しました/.test(p[p.length - 1])));
+  // 再試行待ち（自動での再試行）は行わない
+  assert.ok(!db.taskLogs.some((p) => /再試行します/.test(p[p.length - 1])));
+});

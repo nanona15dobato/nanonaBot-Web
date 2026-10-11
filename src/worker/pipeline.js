@@ -221,6 +221,72 @@ async function rebuildAfterConflict(row, ctx) {
   return { changed: true, page, newWikitext };
 }
 
+/** 現在の確認モード（画面から実行中に切り替えられるため、DBのタスク行から読む）。 */
+async function currentReviewMode(ctx) {
+  const [rows] = await pool.query(`SELECT mode FROM tasks WHERE id = ?`, [ctx.taskId]);
+  return (rows[0] && rows[0].mode) || (ctx.reviewSettings && ctx.reviewSettings.mode) || 'auto';
+}
+
+/** 編集の最終的な失敗をtask_pagesとedit_logに記録する。 */
+async function recordEditFailure(row, ctx, page, message) {
+  await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [message, row.id]);
+  await writeEditLog({
+    taskId: row.task_id,
+    stage: row.stage,
+    pageTitle: row.page_title,
+    namespace: row.namespace,
+    account: ctx.account,
+    status: 'failed',
+    baseRevid: page.revid,
+    editSummary: ctx.editSettings.editSummary,
+    errorMessage: message,
+  });
+}
+
+/** 競合後の最新版で変更が不要になっていたときのスキップ処理。 */
+async function skipAfterConflict(row, latestPage) {
+  await pool.query(`UPDATE task_pages SET status = 'skipped', error_message = NULL, original_wikitext = ? WHERE id = ?`, [
+    latestPage.wikitext,
+    row.id,
+  ]);
+  await writeTaskLogSafely({
+    taskId: row.task_id,
+    stage: row.stage,
+    pageTitle: row.page_title,
+    level: 'info',
+    message: '編集競合後に最新版を確認したところ、変更の必要が無くなっていたためスキップしました。',
+  });
+  return { ok: true, skipped: true };
+}
+
+/**
+ * 手動確認モードで編集競合が起きたとき: 最新版で作り直し、確認待ち（の手前の準備完了）に戻す。
+ * 次の waitForApproval で確認待ちになり、画面には作り直した差分が表示される。
+ */
+async function returnToReviewAfterConflict(row, ctx, page, msg) {
+  let rebuilt;
+  try {
+    rebuilt = await rebuildAfterConflict(row, ctx);
+  } catch (rebuildErr) {
+    await recordEditFailure(row, ctx, page, String((rebuildErr && rebuildErr.message) || rebuildErr));
+    return { ok: false, error: rebuildErr };
+  }
+  if (!rebuilt.changed) return skipAfterConflict(row, rebuilt.page);
+
+  await pool.query(`UPDATE task_pages SET status = 'prepared', reviewed_at = NULL, error_message = ? WHERE id = ?`, [
+    `編集競合（${msg}）のため、最新版で作り直しました。差分を確認してください。`,
+    row.id,
+  ]);
+  await writeTaskLogSafely({
+    taskId: row.task_id,
+    stage: row.stage,
+    pageTitle: row.page_title,
+    level: 'warning',
+    message: '編集競合が起きたため、最新版で作り直して確認待ちに戻しました（手動確認モード）。',
+  });
+  return { ok: false, needsReview: true, prepared: { status: 'prepared', row, page: rebuilt.page, newWikitext: rebuilt.newWikitext } };
+}
+
 /**
  * 承認されたページを実際に編集する（仕様書9.2節 手順4）。
  * 必ずbasetimestamp/starttimestampを指定し、MediaWiki側の編集競合検出に委ねる。
@@ -228,7 +294,11 @@ async function rebuildAfterConflict(row, ctx) {
  * 編集競合のときは最新版を取り直して同じルールを適用し直してから再試行する。
  * 成功/最終的な失敗のいずれの場合もedit_logへ即座に記録する。
  *
- * @returns {Promise<{ok: boolean, skipped?: boolean, interrupted?: 'emergency'|'cancelled', error?: Error}>}
+ * 手動確認モードで編集競合が起きた場合は自動で再試行せず、最新版で作り直した差分を
+ * 改めて確認してもらうため、ページを確認待ちに戻して needsReview を返す。
+ *
+ * @returns {Promise<{ok: boolean, skipped?: boolean, needsReview?: boolean, prepared?: object,
+ *   interrupted?: 'emergency'|'cancelled', error?: Error}>}
  */
 async function editOnePage(prepared, ctx) {
   const { row } = prepared;
@@ -266,19 +336,13 @@ async function editOnePage(prepared, ctx) {
 
       if (attempt >= maxRetries || !isRetryableEditError(err)) {
         const finalMsg = attempt > 0 ? `${msg}（${attempt}回再試行しましたが失敗しました）` : msg;
-        await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [finalMsg, row.id]);
-        await writeEditLog({
-          taskId: row.task_id,
-          stage: row.stage,
-          pageTitle: row.page_title,
-          namespace: row.namespace,
-          account: ctx.account,
-          status: 'failed',
-          baseRevid: page.revid,
-          editSummary: ctx.editSettings.editSummary,
-          errorMessage: finalMsg,
-        });
+        await recordEditFailure(row, ctx, page, finalMsg);
         return { ok: false, error: err };
+      }
+
+      // 手動確認モードの編集競合: 待たずに最新版で作り直し、確認待ちに戻す（確認モードは実行中に変わりうるので都度読む）
+      if (err.mwCode === 'editconflict' && (await currentReviewMode(ctx)) === 'manual') {
+        return returnToReviewAfterConflict(row, ctx, page, msg);
       }
 
       const retryNo = attempt + 1;
@@ -309,36 +373,11 @@ async function editOnePage(prepared, ctx) {
         try {
           rebuilt = await rebuildAfterConflict(row, ctx);
         } catch (rebuildErr) {
-          const rebuildMsg = String((rebuildErr && rebuildErr.message) || rebuildErr);
-          await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [rebuildMsg, row.id]);
-          await writeEditLog({
-            taskId: row.task_id,
-            stage: row.stage,
-            pageTitle: row.page_title,
-            namespace: row.namespace,
-            account: ctx.account,
-            status: 'failed',
-            baseRevid: page.revid,
-            editSummary: ctx.editSettings.editSummary,
-            errorMessage: rebuildMsg,
-          });
+          await recordEditFailure(row, ctx, page, String((rebuildErr && rebuildErr.message) || rebuildErr));
           return { ok: false, error: rebuildErr };
         }
-        if (!rebuilt.changed) {
-          // 競合した編集で既に同じ修正が入っていた等、もう変更の必要が無い
-          await pool.query(
-            `UPDATE task_pages SET status = 'skipped', error_message = NULL, original_wikitext = ? WHERE id = ?`,
-            [rebuilt.page.wikitext, row.id]
-          );
-          await writeTaskLogSafely({
-            taskId: row.task_id,
-            stage: row.stage,
-            pageTitle: row.page_title,
-            level: 'info',
-            message: '編集競合後に最新版を確認したところ、変更の必要が無くなっていたためスキップしました。',
-          });
-          return { ok: true, skipped: true };
-        }
+        // 競合した編集で既に同じ修正が入っていた等、もう変更の必要が無い
+        if (!rebuilt.changed) return skipAfterConflict(row, rebuilt.page);
         page = rebuilt.page;
         newWikitext = rebuilt.newWikitext;
       }
@@ -427,37 +466,47 @@ async function runStagePipeline(ctx) {
         }
         // skipAndContinue: 何もせず次へ
       } else if (current.status === 'prepared') {
-        const approved = await waitForApproval({
-          taskId: ctx.taskId,
-          pageId: current.row.id,
-          reviewSettings: ctx.reviewSettings,
-        });
+        // 手動確認モードで編集競合が起きたときは、最新版で作り直した差分を改めて確認するため
+        // 確認待ちに戻る（editOnePage が needsReview を返す）。それ以外は1回で抜ける。
+        let target = current;
+        for (;;) {
+          const approved = await waitForApproval({
+            taskId: ctx.taskId,
+            pageId: target.row.id,
+            reviewSettings: ctx.reviewSettings,
+          });
 
-        // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
-        const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
-        const taskStatus = taskRows[0] && taskRows[0].status;
-        if (['expired', 'emergency_stopped', 'cancelled'].includes(taskStatus)) {
-          return {
-            completed: false,
-            expired: taskStatus === 'expired',
-            emergencyStopped: taskStatus === 'emergency_stopped',
-            cancelled: taskStatus === 'cancelled',
-            hadFailures,
-          };
-        }
-        // 確認待ちの間に緊急停止された場合、そのページは却下ではなく未処理のまま残す
-        // （再開時にpendingへ戻して改めて確認できるようにする）
-        if (await isEmergencyStopped()) {
-          return { completed: false, emergencyStopped: true, hadFailures };
-        }
+          // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
+          const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
+          const taskStatus = taskRows[0] && taskRows[0].status;
+          if (['expired', 'emergency_stopped', 'cancelled'].includes(taskStatus)) {
+            return {
+              completed: false,
+              expired: taskStatus === 'expired',
+              emergencyStopped: taskStatus === 'emergency_stopped',
+              cancelled: taskStatus === 'cancelled',
+              hadFailures,
+            };
+          }
+          // 確認待ちの間に緊急停止された場合、そのページは却下ではなく未処理のまま残す
+          // （再開時にpendingへ戻して改めて確認できるようにする）
+          if (await isEmergencyStopped()) {
+            return { completed: false, emergencyStopped: true, hadFailures };
+          }
 
-        if (!approved) {
-          await pool.query(
-            `UPDATE task_pages SET status = 'rejected', reviewed_at = NOW() WHERE id = ? AND status != 'rejected'`,
-            [current.row.id]
-          );
-        } else {
-          const editResult = await editOnePage(current, ctx);
+          if (!approved) {
+            await pool.query(
+              `UPDATE task_pages SET status = 'rejected', reviewed_at = NOW() WHERE id = ? AND status != 'rejected'`,
+              [target.row.id]
+            );
+            break;
+          }
+
+          const editResult = await editOnePage(target, ctx);
+          if (editResult.needsReview) {
+            target = editResult.prepared;
+            continue;
+          }
           if (editResult.interrupted) {
             // 再試行の待機中に緊急停止・中止された
             return {
@@ -478,6 +527,7 @@ async function runStagePipeline(ctx) {
           if (!editResult.skipped && i < rows.length - 1) {
             await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
           }
+          break;
         }
       }
       // status === 'skipped' の場合は何もせず次へ
