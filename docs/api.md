@@ -38,7 +38,7 @@
 | `POST /api/tasks/:id/cancel` | 中止（待機中・実行中・一時停止のみ） |
 | `POST /api/tasks/:id/resume` | 再開（一時停止・緊急停止・期限切れのみ） |
 | `POST /api/tasks/:id/retry-failed` | 失敗ページだけの再試行タスクを作る |
-| `POST /api/tasks/:id/revert` | 編集の一括取り消しタスクを作る（`{"editSummary", "mode": "auto"\|"manual", "autoWaitSeconds", "manualTimeoutHours"}`。実行中・待機中は `409 not_revertable`、編集が無ければ `409 nothing_to_revert`） |
+| `POST /api/tasks/:id/revert` | 編集の一括取り消しタスクを作る（`{"editSummary", "mode": "auto"\|"manual", "autoWaitSeconds", "manualTimeoutHours", "useUndo": true\|false}`。`useUndo` は後に他の編集があるページを取り消し（undo）と同じ方法で統合する。実行中・待機中は `409 not_revertable`、編集が無ければ `409 nothing_to_revert`） |
 
 権限はすべてオーナーです。
 

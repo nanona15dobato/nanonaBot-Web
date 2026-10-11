@@ -8,6 +8,7 @@ const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
 const { removePageFromHatnotes } = require('./hatnoteUnlink');
 const { writeTaskLogSafely } = require('./taskLog');
+const { undoEdits } = require('./undoMerge');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 承認待ちの確認間隔・再試行の回数と間隔は、設定画面（DB）→ 環境変数 → 既定値 の順で決まる（フェーズ11）。
@@ -54,7 +55,17 @@ function buildNewWikitext(wikitext, row, ctx) {
 
 // ===== 一括取り消し（フェーズ12） =====
 
-/** このページが一括取り消しの対象なら、取り消す編集（{ revid, baseRevid }）を返す。 */
+/** このページに当てはまる一括取り消しのルール（無ければ null）。 */
+function findRevertRule(row, ctx) {
+  const ruleIndices = parseJsonColumn(row.matched_rule_indices, []);
+  for (const idx of ruleIndices) {
+    const rule = ctx.replacements[idx];
+    if (rule && rule.templateType === 'revertEdits') return rule;
+  }
+  return null;
+}
+
+/** このページが一括取り消しの対象なら、取り消す編集（{ revid, baseRevid, edits }）を返す。 */
 function findRevertTarget(row, ctx) {
   const ruleIndices = parseJsonColumn(row.matched_rule_indices, []);
   for (const idx of ruleIndices) {
@@ -75,32 +86,91 @@ async function skipRevert(row, page, reason) {
   return { status: 'skipped', row, page };
 }
 
+/** 取り消す編集の一覧（古い順）。旧形式（edits なし）の対象は1回の編集として扱う。 */
+function revertEditsOf(target) {
+  if (Array.isArray(target.edits) && target.edits.length > 0) return target.edits;
+  return [{ revid: target.revid, baseRevid: target.baseRevid }];
+}
+
+/** そのタスクの編集どうしの間に、他の人の編集が挟まっていないか（各編集の元の版が1つ前の編集の版と一致する）。 */
+function isContiguous(edits) {
+  for (let i = 1; i < edits.length; i++) {
+    if (Number(edits[i].baseRevid) !== Number(edits[i - 1].revid)) return false;
+  }
+  return true;
+}
+
+async function savePreparedRevert(row, page, newText, note) {
+  await pool.query(
+    `UPDATE task_pages
+       SET status = 'prepared', base_revid = ?, base_timestamp = ?,
+           original_wikitext = ?, new_wikitext = ?, error_message = ?, prepared_at = NOW()
+     WHERE id = ?`,
+    [page.revid, new Date(page.baseTimestamp), page.wikitext, newText, note, row.id]
+  );
+  return { status: 'prepared', row, page, newWikitext: newText };
+}
+
 /**
- * 一括取り消しの準備。現在の版が取り消す編集（そのタスクの最後の編集）のままなら、
- * 編集前の版の本文を新しい本文にする（差分は「現在 → 編集前」になる）。
- * 後に他の利用者の編集がある場合は、その編集まで巻き戻さないよう取り消さない。
+ * 一括取り消しの準備。
+ * - そのタスクの最後の編集が今も最新版で、タスクの編集どうしの間に他の人の編集が無ければ、
+ *   最初の編集の前の版の本文にそのまま戻す（差分は「現在 → 編集前」）。
+ * - 後に（または間に）他の人の編集がある場合:
+ *   - useUndo 指定時は、MediaWikiの取り消し（undo）と同じ行単位の3者マージで、そのタスクの編集だけを
+ *     新しい順に取り除く。他の人の編集と同じ行が変わっていて統合できなければ取り消さない。
+ *   - 指定が無ければ、他の人の編集まで巻き戻さないよう取り消さない。
  */
 async function prepareRevert(row, ctx, page, target) {
   if (target.missing || !target.revid || !target.baseRevid) {
     return skipRevert(row, page, '取り消す編集の情報が見つからないため、取り消していません。');
   }
-  if (Number(page.revid) !== Number(target.revid)) {
-    return skipRevert(row, page, `後に他の編集があるため取り消していません（取り消す版 ${target.revid}、現在の版 ${page.revid}）。手動で確認してください。`);
-  }
-  const oldText = await ctx.mwClient.getRevisionContent(target.baseRevid);
-  if (oldText === null) {
-    return skipRevert(row, page, `編集前の版（${target.baseRevid}）の本文を取得できないため、取り消していません。`);
-  }
-  if (oldText === page.wikitext) return skipRevert(row, page, '既に編集前の内容に戻っています。');
+  const edits = revertEditsOf(target);
+  const useUndo = Boolean(findRevertRule(row, ctx) && findRevertRule(row, ctx).useUndo);
+  const isLatest = Number(page.revid) === Number(target.revid);
 
-  await pool.query(
-    `UPDATE task_pages
-       SET status = 'prepared', base_revid = ?, base_timestamp = ?,
-           original_wikitext = ?, new_wikitext = ?, error_message = NULL, prepared_at = NOW()
-     WHERE id = ?`,
-    [page.revid, new Date(page.baseTimestamp), page.wikitext, oldText, row.id]
+  if (isLatest && isContiguous(edits)) {
+    const oldText = await ctx.mwClient.getRevisionContent(target.baseRevid);
+    if (oldText === null) {
+      return skipRevert(row, page, `編集前の版（${target.baseRevid}）の本文を取得できないため、取り消していません。`);
+    }
+    if (oldText === page.wikitext) return skipRevert(row, page, '既に編集前の内容に戻っています。');
+    return savePreparedRevert(row, page, oldText, null);
+  }
+
+  const why = isLatest
+    ? 'このタスクの編集の間に他の編集がある'
+    : `後に他の編集がある（取り消す版 ${target.revid}、現在の版 ${page.revid}）`;
+  if (!useUndo) {
+    return skipRevert(row, page, `${why}ため取り消していません。手動で確認してください（「取り消し（undo）で統合する」を選ぶと統合を試みます）。`);
+  }
+
+  // MediaWikiの取り消しと同じ方法で、そのタスクの編集だけを新しい順に取り除く
+  const steps = [];
+  for (const edit of [...edits].reverse()) {
+    const [after, before] = await Promise.all([
+      ctx.mwClient.getRevisionContent(edit.revid),
+      ctx.mwClient.getRevisionContent(edit.baseRevid),
+    ]);
+    if (after === null || before === null) {
+      return skipRevert(row, page, `版（${edit.revid} または ${edit.baseRevid}）の本文を取得できないため、取り消していません。`);
+    }
+    steps.push({ after, before });
+  }
+  const merged = undoEdits(page.wikitext, steps);
+  if (!merged.ok) {
+    return skipRevert(
+      row,
+      page,
+      `${why}うえ、同じ箇所が他の編集でも変わっているため統合できず、取り消していません。手動で確認してください。`
+    );
+  }
+  if (merged.text === page.wikitext) return skipRevert(row, page, '既にこのタスクの変更は取り除かれています。');
+  return savePreparedRevert(
+    row,
+    page,
+    merged.text,
+    `${why}ため、MediaWikiの取り消し（undo）と同じ方法で他の編集を残して統合しました。差分を確認してください。`
   );
-  return { status: 'prepared', row, page, newWikitext: oldText };
 }
 
 /**

@@ -428,6 +428,8 @@ const REVERTABLE_STATUSES = ['completed', 'completed_with_failures', 'failed', '
  * 編集ログ（成功した編集）から、ページごとの取り消し対象を作る（純粋関数）。
  * 1つのタスクが同じページを複数回編集した場合（ウェーブをまたぐ等）は、
  * 最初の編集の前の版（baseRevid）に戻し、取り消せるのは最後の編集が今も最新版のときだけにする（revid）。
+ * 各編集（edits）も古い順に残す。編集どうしの間に他の人の編集が挟まっていないかの判定と、
+ * undo で統合するときに1つずつ取り除くのに使う。
  * @param {Array<{page_title:string, namespace:number, revid:number, base_revid:number, id:number}>} rows - idの昇順
  */
 function buildRevertTargets(rows) {
@@ -435,10 +437,12 @@ function buildRevertTargets(rows) {
   for (const row of rows) {
     if (!row.revid || !row.base_revid) continue;
     const current = byTitle.get(row.page_title);
+    const edit = { revid: Number(row.revid), baseRevid: Number(row.base_revid) };
     if (!current) {
-      byTitle.set(row.page_title, { title: row.page_title, namespace: row.namespace, revid: Number(row.revid), baseRevid: Number(row.base_revid) });
+      byTitle.set(row.page_title, { title: row.page_title, namespace: row.namespace, revid: edit.revid, baseRevid: edit.baseRevid, edits: [edit] });
     } else {
-      current.revid = Number(row.revid); // 後の編集で上書き（最後の編集の版）
+      current.revid = edit.revid; // 後の編集で上書き（最後の編集の版）
+      current.edits.push(edit);
     }
   }
   return [...byTitle.values()];
@@ -476,7 +480,8 @@ router.post('/api/tasks/:id/revert', requireRole('owner'), async (req, res, next
 
     const revertConfig = {
       account: original.account,
-      replacements: [{ templateType: 'revertEdits', revertOfTaskId: original.id, targets }],
+      // useUndo: 後に他の人の編集があるページも、MediaWikiの取り消し（undo）と同じ方法で統合して取り消す
+      replacements: [{ templateType: 'revertEdits', revertOfTaskId: original.id, targets, useUndo: body.useUndo === true }],
       editSettings: { ...(originalConfig.editSettings || {}), editSummary, linkUpdateMethod: undefined },
       reviewSettings,
       // 1件取り消せなくても残りは取り消す（取り消せなかったページは理由つきで残る）
