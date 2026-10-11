@@ -69,7 +69,15 @@ const config = {
     localDatabase: process.env.DB_NAME || null,
   },
 
-  taskPagesRetentionDays: Number(process.env.TASK_PAGES_RETENTION_DAYS || 14),
+  // Bot作業依頼の「着手・完了・解決」（フェーズ13）。作業記録・依頼への返信は運用者のアカウントで編集する
+  botreq: {
+    account: process.env.BOTREQ_ACCOUNT || 'Nanona15dobato', // 編集に使うアカウント（src/bot/accountNames.js の名前）
+    botUser: process.env.BOTREQ_BOT_USER || 'nanonaBot', // 作業の編集回数・投稿記録を数える Bot
+    operator: process.env.BOTREQ_OPERATOR || 'nanona15dobato', // 作業記録の {{../head|運用者=}}
+    logPrefix: process.env.BOTREQ_LOG_PREFIX || '利用者:nanonaBot/依頼/', // 作業記録のページ名（後ろに「YYYY年」）
+  },
+
+  taskPagesRetentionDays:Number(process.env.TASK_PAGES_RETENTION_DAYS || 14),
 
   userAgent:
     process.env.WIKI_USER_AGENT ||

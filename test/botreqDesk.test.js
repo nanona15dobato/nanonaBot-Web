@@ -1,0 +1,276 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const L = require('../src/services/botreqLog');
+const desk = require('../src/services/botreqDesk');
+
+const REQUEST_PAGE = 'Wikipedia:Bot作業依頼';
+const LOG_TITLE = '利用者:nanonaBot/依頼/2026年';
+const THREAD = 'h-バイオハザード-20261010124600';
+
+// ---- 純粋関数 ----
+
+test('formatJst / contribsOffset: 作業記録と同じ書式', () => {
+  assert.equal(L.formatJst('2026-01-03T06:27:00Z'), '2026年1月3日 (土) 15:27 (JST)');
+  assert.equal(L.formatJst('2026-01-03T15:05:00Z'), '2026年1月4日 (日) 00:05 (JST)'); // 0時は「24時」にしない
+  assert.equal(L.contribsOffset(Date.parse('2026-01-03T07:54:37Z') + 1000), '20260103075438');
+});
+
+test('encodeSecId: 節IDの「-」を U+FFFD にする（既存の記録と同じ）', () => {
+  assert.equal(L.secMarker('h-宮崎誠改名-20260103062700'), '<!--sec h�宮崎誠改名�20260103062700|');
+});
+
+test('incrementHeadCount: {{../head|件数=}} を1つ増やす', () => {
+  const r = L.incrementHeadCount('{{../head\n|y=2026\n|運用者=nanona15dobato\n|件数=69\n}}\n本文');
+  assert.equal(r.num, 70);
+  assert.match(r.content, /\|件数=70\n/);
+  assert.equal(L.incrementHeadCount('見出しなし'), null);
+});
+
+const LOG = [
+  '{{../head\n|y=2026\n|運用者=nanona15dobato\n|件数=2\n}}',
+  '',
+  '== <span class="anchor" id="botreq-n-1"></span>前の依頼 ==',
+  '<!--sec h�前の依頼�20260101000000|100-->',
+  '* 着手時刻 - x',
+  '',
+  '== 親の見出し ==',
+  '=== <span class="anchor" id="botreq-n-2"></span>バイオハザード ===',
+  `<!--sec ${L.encodeSecId(THREAD)}|161272-->`,
+  '* 要約欄 - …',
+  '* 着手(準備)時刻 - 2026年10月10日 (土) 22:00 (JST)',
+  '* 終了時刻 - ',
+  '* 作業 - ',
+  '',
+  '== 次の依頼 ==',
+  '本文',
+].join('\n');
+
+test('findLogSection: 小見出しの記録でも、見出しの行から次の見出しの手前までを取り出す', () => {
+  const s = L.findLogSection(LOG, THREAD);
+  assert.ok(s.core.startsWith('=== <span class="anchor" id="botreq-n-2"></span>バイオハザード ==='));
+  assert.ok(s.core.endsWith('* 作業 -'));
+  assert.equal(s.tail, ' \n\n');
+  assert.equal(s.startCount, 161272);
+  assert.equal(s.finished, false);
+  assert.equal(L.findLogSection(LOG, 'h-無い-20260101000000'), null);
+});
+
+test('contributionLinks: 5000件ずつのリンクにし、複数なら合計を付ける', () => {
+  const contribs = [{ timestamp: '2026-01-03T07:54:37Z' }, { timestamp: '2026-01-03T07:00:00Z' }, { timestamp: '2026-01-02T00:00:00Z' }];
+  assert.equal(L.contributionLinks('nanonaBot', contribs), '{{利用者の投稿記録リンク|nanonaBot|3|20260103075438|text=3編集}}');
+  assert.equal(
+    L.contributionLinks('nanonaBot', contribs, 2),
+    '{{利用者の投稿記録リンク|nanonaBot|2|20260103075438|text=2編集}},{{利用者の投稿記録リンク|nanonaBot|1|20260102000001|text=1編集}}の計3編集'
+  );
+});
+
+test('detectStatus: {{解決済み}} を優先し、無ければ最後の {{BOTREQ}} で判断する', () => {
+  assert.equal(L.detectStatus('== a ==\n本文').status, 'open');
+  assert.equal(L.detectStatus('{{BOTREQ|着手}}').status, 'started');
+  assert.equal(L.detectStatus('{{BOTREQ|着手}}\n{{BOTREQ|完了}}').status, 'completed');
+  assert.equal(L.detectStatus('{{BOTREQ|完了}}\n{{解決済み|~~~~}}').status, 'resolved');
+  assert.deepEqual(L.detectStatus('{{BOTREQ|保留}}'), { status: 'other', label: '保留' });
+});
+
+test('discussionLinks: 署名・テンプレート・この依頼ページを除き、ノートやプロジェクトを先にする。カテゴリは「:」付き', () => {
+  const text = [
+    '* 議論: [[ノート:NHK_ONE_(テレビ配信)]]',
+    '[[Category:旧カテゴリ]] → [[Category:新カテゴリ]]',
+    '[[プロジェクト:映画#他項目と同じタイトルの作品の場合|PJ映画]]',
+    '<!-- [[ノート:隠れ]] -->',
+    '[[Wikipedia:Bot作業依頼#前の節]] {{BOTREQ|着手}} --[[利用者:A|A]]（[[利用者‐会話:A|会話]]） [https://example.org 外部]',
+  ].join('\n');
+  assert.deepEqual(
+    L.discussionLinks(text, { requestPage: REQUEST_PAGE }).map((l) => l.wikitext),
+    [
+      '[[ノート:NHK ONE (テレビ配信)]]',
+      '[[プロジェクト:映画#他項目と同じタイトルの作品の場合|PJ映画]]',
+      '[[:Category:旧カテゴリ]]',
+      '[[:Category:新カテゴリ]]',
+      '[https://example.org 外部]',
+    ]
+  );
+});
+
+test('sliceSections / matchHeadingsToSections: バイト位置で節を切り、見出しの文字列で依頼と突き合わせる', () => {
+  const wikitext = '{{/ヘッダ}}\n== [[第一]]の改名 ==\nあ\n=== 小 ===\nい\n== バイオハザード ==\nう\n';
+  const offset = (s) => Buffer.byteLength(wikitext.slice(0, wikitext.indexOf(s)), 'utf8');
+  const sections = [
+    { index: 'T-1', level: '2', line: '案内', byteoffset: null, fromtitle: 'Wikipedia:Bot作業依頼/ヘッダ' },
+    { index: '1', level: '2', line: '<a>第一</a>の改名', byteoffset: offset('== [[第一]]'), fromtitle: REQUEST_PAGE },
+    { index: '2', level: '3', line: '小', byteoffset: offset('=== 小'), fromtitle: REQUEST_PAGE },
+    { index: '3', level: '2', line: 'バイオハザード', byteoffset: offset('== バイオ'), fromtitle: REQUEST_PAGE },
+  ];
+  const sliced = L.sliceSections(wikitext, sections, REQUEST_PAGE);
+  assert.equal(sliced.length, 3);
+  assert.equal(sliced[0].text, '== [[第一]]の改名 ==\nあ\n=== 小 ===\nい\n'); // 小節を含む
+  assert.equal(sliced[1].text, '=== 小 ===\nい\n');
+  const matched = L.matchHeadingsToSections(
+    [{ id: 'h-第一の改名-20261007095500', html: '<span id="x"></span><a href="./第一">第一</a>の改名' }, { id: THREAD, html: 'バイオハザード' }],
+    sliced
+  );
+  assert.deepEqual(matched.map((m) => m.section && m.section.index), ['1', '3']);
+});
+
+test('firstComment: 入れ子も含めて最も古いコメント（冒頭の {{解決済み}} の署名ではなく依頼）', () => {
+  const heading = {
+    replies: [
+      { type: 'comment', id: 'c-op-1', author: 'Op', timestamp: '2026-10-10T15:16:00Z', replies: [] },
+      { type: 'comment', id: 'c-req', author: '依頼者', timestamp: '2026-10-10T12:46:00Z', replies: [{ type: 'comment', id: 'c-op-2', author: 'Op', timestamp: '2026-10-10T14:00:00Z' }] },
+      { type: 'heading', id: 'h-小-20261009000000', replies: [{ type: 'comment', id: 'c-old', author: 'X', timestamp: '2026-10-09T00:00:00Z' }] },
+    ],
+  };
+  assert.equal(L.firstComment(heading).id, 'c-req');
+});
+
+// ---- サービス（ウィキはスタブ） ----
+
+function fakeClient({ log = LOG, editCount = 161396, contribsTotal = 124 } = {}) {
+  const requestWikitext = '{{/ヘッダ}}\n== バイオハザード ==\n依頼です。[[プロジェクト:映画#節]] --[[利用者:さえぼー|さえぼー]] 2026年10月10日 (土) 12:46 (UTC)\n:{{BOTREQ|着手}}--[[利用者:Op|Op]]\n';
+  const calls = [];
+  const client = {
+    calls,
+    async getPage(title) {
+      if (title === REQUEST_PAGE) {
+        return { exists: true, revid: 500, baseTimestamp: '2026-10-11T00:00:00Z', startTimestamp: '2026-10-11T01:00:00Z', wikitext: requestWikitext };
+      }
+      if (title === LOG_TITLE && log !== null) {
+        return { exists: true, revid: 600, baseTimestamp: '2026-10-10T23:00:00Z', startTimestamp: '2026-10-11T01:00:00Z', wikitext: log };
+      }
+      return { exists: false, revid: null, baseTimestamp: null, startTimestamp: '2026-10-11T01:00:00Z', wikitext: '' };
+    },
+    async request(params, method) {
+      calls.push({ params, method });
+      if (params.action === 'parse' && params.prop === 'sections') {
+        return {
+          parse: {
+            sections: [
+              { index: 'T-1', level: '2', line: '案内', byteoffset: null, fromtitle: 'Wikipedia:Bot作業依頼/ヘッダ' },
+              { index: '1', level: '2', line: 'バイオハザード', byteoffset: Buffer.byteLength('{{/ヘッダ}}\n'), fromtitle: REQUEST_PAGE },
+            ],
+          },
+        };
+      }
+      if (params.action === 'discussiontoolspageinfo') {
+        return {
+          discussiontoolspageinfo: {
+            threaditemshtml: [
+              { type: 'heading', id: 'h-案内', html: '案内', replies: [] },
+              {
+                type: 'heading',
+                id: THREAD,
+                html: 'バイオハザード',
+                headingLevel: 2,
+                commentCount: 2,
+                replies: [{ type: 'comment', id: 'c-さえぼー-20261010124600-バイオハザード', author: 'さえぼー', timestamp: '2026-10-10T12:46:00Z', replies: [] }],
+              },
+            ],
+          },
+        };
+      }
+      if (params.list === 'users') return { query: { users: [{ editcount: editCount }] } };
+      if (params.list === 'usercontribs') {
+        const list = Array.from({ length: contribsTotal }, (_, i) => ({ timestamp: new Date(Date.parse('2026-10-10T14:44:59Z') - i * 10000).toISOString().replace('.000', '') }));
+        return { query: { usercontribs: list } };
+      }
+      if (params.action === 'edit') return { edit: { result: 'Success', newrevid: 700 } };
+      if (params.action === 'discussiontoolsedit') return { discussiontoolsedit: { result: 'success' } };
+      throw new Error('unexpected ' + JSON.stringify(params));
+    },
+    async getCsrfToken() {
+      return 'token+\\';
+    },
+    async withSessionRetry(fn) {
+      return fn();
+    },
+  };
+  return client;
+}
+
+test('listRequests: 依頼の節だけを、状態・依頼者・作業記録の状態つきで返す', async () => {
+  const data = await desk.listRequests({ client: fakeClient() });
+  assert.equal(data.requests.length, 1);
+  const r = data.requests[0];
+  assert.equal(r.threadId, THREAD);
+  assert.equal(r.sectionIndex, '1');
+  assert.equal(r.status, 'started');
+  assert.equal(r.requester, 'さえぼー');
+  assert.equal(r.logTitle, LOG_TITLE);
+  assert.equal(r.logState, 'started');
+});
+
+test('prepare(start): 件数を増やし、議論場所の候補と依頼者・編集回数を入れた記録を作る', async () => {
+  const plan = await desk.prepare('start', THREAD, { client: fakeClient() });
+  assert.equal(plan.title, LOG_TITLE);
+  assert.match(plan.text, /^== <span class="anchor" id="botreq-n-3"><\/span>バイオハザード ==\n/);
+  assert.match(plan.text, new RegExp(`<!--sec ${L.encodeSecId(THREAD)}\\|161396-->`));
+  assert.match(plan.text, /\* 議論場所 - \[\[プロジェクト:映画#節\]\]/);
+  assert.match(plan.text, /\* 依頼者 - \[\[User:さえぼー\|さえぼー\]\] さん/);
+  assert.match(plan.before, /\|件数=3\n/);
+  assert.equal(plan.createOnly, false);
+  assert.equal(plan.comment.commentId, 'c-さえぼー-20261010124600-バイオハザード');
+  assert.ok(plan.notes.some((n) => /既にあります/.test(n.text)));
+});
+
+test('prepare(start): 作業記録のページが無ければ、作成する内容にする', async () => {
+  const plan = await desk.prepare('start', THREAD, { client: fakeClient({ log: null }) });
+  assert.equal(plan.createOnly, true);
+  assert.match(plan.before, /^\{\{\.\.\/head\n\|y=2026\n\|運用者=nanona15dobato\n\|件数=1\n\}\}\n\n$/);
+});
+
+test('prepare(complete): 着手からの編集数の投稿記録リンクと時刻を書き込み、前後は元のまま', async () => {
+  const plan = await desk.prepare('complete', THREAD, { client: fakeClient() });
+  assert.match(plan.text, /\* 作業 - \{\{利用者の投稿記録リンク\|nanonaBot\|124\|20261010144500\|text=124編集\}\}$/);
+  assert.match(plan.text, /\* 着手時刻 - 2026年10月10日 \(土\) 23:24 \(JST\)/);
+  assert.match(plan.text, /\* 終了時刻 - 2026年10月10日 \(土\) 23:44 \(JST\)/);
+  const full = plan.before + plan.text.trim() + plan.after;
+  assert.ok(full.startsWith(LOG.slice(0, LOG.indexOf('=== <span'))));
+  assert.ok(full.endsWith('\n\n== 次の依頼 ==\n本文'));
+  assert.match(plan.comment.text, /^\{\{at\|さえぼー\}\}:\{\{BOTREQ\|完了\}\} Botにて\{\{利用者の投稿記録リンク/);
+});
+
+test('prepare(complete): 着手していなければエラー', async () => {
+  await assert.rejects(desk.prepare('complete', THREAD, { client: fakeClient({ log: '{{../head|件数=0}}' }) }), /先に「着手」/);
+  await assert.rejects(desk.prepare('complete', THREAD, { client: fakeClient({ editCount: 161272 }) }), /増えていません/);
+});
+
+test('prepare(resolve): 依頼の節の見出しの直後に {{解決済み}} を入れ、節を指定して編集する', async () => {
+  const plan = await desk.prepare('resolve', THREAD, { client: fakeClient() });
+  assert.equal(plan.title, REQUEST_PAGE);
+  assert.equal(plan.section, '1');
+  assert.ok(plan.text.startsWith('== バイオハザード ==\n{{解決済み|~~~~}}\n依頼です。'));
+});
+
+test('prepare: 不明な操作・正しくない ID は 400', async () => {
+  await assert.rejects(desk.prepare('delete', THREAD, { client: fakeClient() }), (err) => err.status === 400);
+  await assert.rejects(desk.prepare('start', 'h-案内', { client: fakeClient() }), (err) => err.status === 400);
+});
+
+test('validateSave: 編集できるページ・節・基準時刻・返信先を確かめる', () => {
+  assert.deepEqual(desk.validateSave({ title: LOG_TITLE, text: 'x', summary: 's', baseTimestamp: 't' }), []);
+  assert.deepEqual(desk.validateSave({ title: LOG_TITLE, text: 'x', summary: 's', createOnly: true }), []);
+  assert.ok(desk.validateSave({ title: 'Wikipedia:他のページ', text: 'x', summary: 's', baseTimestamp: 't' }).length);
+  assert.ok(desk.validateSave({ title: REQUEST_PAGE, text: 'x', summary: 's', baseTimestamp: 't' }).length); // 節の指定が無い
+  assert.deepEqual(desk.validateSave({ title: REQUEST_PAGE, section: '1', text: 'x', summary: 's', baseTimestamp: 't' }), []);
+  assert.ok(desk.validateSave({ title: LOG_TITLE, text: 'x', summary: 's', baseTimestamp: 't', comment: { text: 'a', commentId: 'h-x' } }).length);
+});
+
+test('save: basetimestamp つきで編集し、指定があれば依頼のコメントへ返信する', async () => {
+  const client = fakeClient();
+  const result = await desk.save(
+    { title: REQUEST_PAGE, section: '1', text: 't', summary: 's', baseTimestamp: 'b', startTimestamp: 'st', comment: { text: 'c', commentId: 'c-x' } },
+    { client }
+  );
+  assert.deepEqual(result, { revid: 700, nochange: false, comment: { ok: true } });
+  const edit = client.calls.find((c) => c.params.action === 'edit').params;
+  assert.equal(edit.section, '1');
+  assert.equal(edit.basetimestamp, 'b');
+  assert.equal(edit.nocreate, '1');
+  assert.equal(edit.assert, 'user');
+  const reply = client.calls.find((c) => c.params.action === 'discussiontoolsedit').params;
+  assert.equal(reply.commentid, 'c-x');
+  assert.equal(reply.paction, 'addcomment');
+});
