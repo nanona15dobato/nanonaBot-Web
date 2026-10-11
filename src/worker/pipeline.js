@@ -7,6 +7,7 @@ const { writeEditLog } = require('./editLog');
 const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
 const { removePageFromHatnotes } = require('./hatnoteUnlink');
+const { writeTaskLogSafely } = require('./taskLog');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // 承認待ちの確認間隔。画面での承認から編集開始までの遅れがこの間隔以内になる。
@@ -37,6 +38,20 @@ function applyRedirectCategoryTemplateEdits(wikitext, matchedRules) {
 }
 
 /**
+ * ページ本文に、そのページに該当するルールを適用した結果を返す（準備・編集競合後の作り直しで共通）。
+ * @returns {string}
+ */
+function buildNewWikitext(wikitext, row, ctx) {
+  const ruleIndices = parseJsonColumn(row.matched_rule_indices, []);
+  const matchedRules = ruleIndices.map((idx) => ctx.replacements[idx]).filter(Boolean);
+  const steps = matchedRules.flatMap((r) => r.steps || []);
+  // Category置換/除去ルールが含まれる場合は{{リダイレクトの所属カテゴリ}}内の該当カテゴリ引数を、
+  // リンク解除ルールが含まれる場合はハットノート内の該当ページ引数を併せて書き換える
+  // （該当が無いページには影響しない）
+  return applyRedirectCategoryTemplateEdits(applyReplacementSteps(wikitext, steps), matchedRules);
+}
+
+/**
  * 1つのページを準備する（wikitext取得→置換適用→差分の有無判定→DB更新）。
  * 仕様書9.2節 手順1に対応。
  *
@@ -61,14 +76,7 @@ async function prepareOnePage(row, ctx) {
       return { status: 'failed', row, error: new Error(msg) };
     }
 
-    const ruleIndices = parseJsonColumn(row.matched_rule_indices, []);
-    const matchedRules = ruleIndices.map((idx) => ctx.replacements[idx]).filter(Boolean);
-    const steps = matchedRules.flatMap((r) => r.steps || []);
-    let newWikitext = applyReplacementSteps(page.wikitext, steps);
-    // Category置換/除去ルールが含まれる場合は{{リダイレクトの所属カテゴリ}}内の該当カテゴリ引数を、
-    // リンク解除ルールが含まれる場合はハットノート内の該当ページ引数を併せて書き換える
-    // （該当が無いページには影響しない）
-    newWikitext = applyRedirectCategoryTemplateEdits(newWikitext, matchedRules);
+    const newWikitext = buildNewWikitext(page.wikitext, row, ctx);
 
     if (newWikitext === page.wikitext) {
       await pool.query(
@@ -159,54 +167,182 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
   }
 }
 
+// ===== 編集失敗時の再試行 =====
+
+/** 一時的な失敗として再試行するMediaWiki APIのエラーコード */
+const RETRYABLE_MW_CODES = ['editconflict', 'ratelimited', 'readonly', 'maxlag', 'lockmanager-fail-conflict'];
+
+function editRetryCount() {
+  return Math.max(0, Number(process.env.EDIT_RETRY_COUNT ?? 3));
+}
+
+/** n回目（1始まり）の再試行までの待ち時間。既定は10秒・20秒・40秒と倍々に延ばす。 */
+function retryDelayMs(n) {
+  return Math.max(0, Number(process.env.EDIT_RETRY_BASE_MS ?? 10000)) * 2 ** (n - 1);
+}
+
+/**
+ * 時間を置けば成功しうる失敗か。保護・ブロック・AbuseFilter・スパムブラックリスト等
+ * （再試行しても結果が変わらないもの）は対象外。
+ */
+function isRetryableEditError(err) {
+  if (!err || err.editResult !== undefined) return false;
+  if (err.mwCode) return RETRYABLE_MW_CODES.includes(err.mwCode) || /^internal_api_error_/.test(err.mwCode);
+  if (err.httpStatus) return err.httpStatus >= 500 || err.httpStatus === 429;
+  return true; // 通信エラー・タイムアウト（fetch自体の失敗）
+}
+
+/** 再試行までの待機。緊急停止・中止されたらすぐ戻る。 */
+async function waitBeforeRetry(ms, taskId) {
+  const until = Date.now() + ms;
+  for (;;) {
+    if (await isEmergencyStopped()) return 'emergency';
+    const [rows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [taskId]);
+    if (!rows[0] || rows[0].status === 'cancelled') return 'cancelled';
+    const remain = until - Date.now();
+    if (remain <= 0) return null;
+    await sleep(Math.min(1000, remain));
+  }
+}
+
+/**
+ * 編集競合のあと、最新版を取り直して同じルールを適用し直す。
+ * @returns {Promise<{changed: boolean, page?: object, newWikitext?: string}>}
+ */
+async function rebuildAfterConflict(row, ctx) {
+  const page = await ctx.mwClient.getPage(row.page_title);
+  if (!page || !page.exists) throw new Error('ページが存在しません（準備後に削除された可能性があります）');
+  const newWikitext = buildNewWikitext(page.wikitext, row, ctx);
+  if (newWikitext === page.wikitext) return { changed: false, page };
+  await pool.query(
+    `UPDATE task_pages SET base_revid = ?, base_timestamp = ?, original_wikitext = ?, new_wikitext = ? WHERE id = ?`,
+    [page.revid, new Date(page.baseTimestamp), page.wikitext, newWikitext, row.id]
+  );
+  return { changed: true, page, newWikitext };
+}
+
 /**
  * 承認されたページを実際に編集する（仕様書9.2節 手順4）。
  * 必ずbasetimestamp/starttimestampを指定し、MediaWiki側の編集競合検出に委ねる。
- * 成功/失敗いずれの場合もedit_logへ即座に記録する。
+ * 一時的な失敗（編集競合・レート制限・サーバーエラー等）は間隔を延ばしながら再試行し、
+ * 編集競合のときは最新版を取り直して同じルールを適用し直してから再試行する。
+ * 成功/最終的な失敗のいずれの場合もedit_logへ即座に記録する。
+ *
+ * @returns {Promise<{ok: boolean, skipped?: boolean, interrupted?: 'emergency'|'cancelled', error?: Error}>}
  */
 async function editOnePage(prepared, ctx) {
-  const { row, page, newWikitext } = prepared;
+  const { row } = prepared;
+  let { page, newWikitext } = prepared;
+  const maxRetries = editRetryCount();
   await pool.query(`UPDATE task_pages SET status = 'editing' WHERE id = ?`, [row.id]);
 
-  try {
-    const result = await ctx.mwClient.edit({
-      title: row.page_title,
-      text: newWikitext,
-      summary: ctx.editSettings.editSummary,
-      bot: ctx.editSettings.botFlag,
-      minor: ctx.editSettings.minorEdit,
-      baseTimestamp: page.baseTimestamp,
-      startTimestamp: page.startTimestamp,
-    });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await ctx.mwClient.edit({
+        title: row.page_title,
+        text: newWikitext,
+        summary: ctx.editSettings.editSummary,
+        bot: ctx.editSettings.botFlag,
+        minor: ctx.editSettings.minorEdit,
+        baseTimestamp: page.baseTimestamp,
+        startTimestamp: page.startTimestamp,
+      });
 
-    await pool.query(`UPDATE task_pages SET status = 'edited', edited_at = NOW() WHERE id = ?`, [row.id]);
-    await writeEditLog({
-      taskId: row.task_id,
-      stage: row.stage,
-      pageTitle: row.page_title,
-      namespace: row.namespace,
-      account: ctx.account,
-      status: 'edited',
-      revid: result.revid,
-      baseRevid: page.revid,
-      editSummary: ctx.editSettings.editSummary,
-    });
-    return { ok: true };
-  } catch (err) {
-    const msg = String((err && err.mwInfo) || (err && err.message) || err);
-    await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [msg, row.id]);
-    await writeEditLog({
-      taskId: row.task_id,
-      stage: row.stage,
-      pageTitle: row.page_title,
-      namespace: row.namespace,
-      account: ctx.account,
-      status: 'failed',
-      baseRevid: page.revid,
-      editSummary: ctx.editSettings.editSummary,
-      errorMessage: msg,
-    });
-    return { ok: false, error: err };
+      await pool.query(`UPDATE task_pages SET status = 'edited', error_message = NULL, edited_at = NOW() WHERE id = ?`, [row.id]);
+      await writeEditLog({
+        taskId: row.task_id,
+        stage: row.stage,
+        pageTitle: row.page_title,
+        namespace: row.namespace,
+        account: ctx.account,
+        status: 'edited',
+        revid: result.revid,
+        baseRevid: page.revid,
+        editSummary: ctx.editSettings.editSummary,
+      });
+      return { ok: true };
+    } catch (err) {
+      const msg = String((err && err.mwInfo) || (err && err.message) || err);
+
+      if (attempt >= maxRetries || !isRetryableEditError(err)) {
+        const finalMsg = attempt > 0 ? `${msg}（${attempt}回再試行しましたが失敗しました）` : msg;
+        await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [finalMsg, row.id]);
+        await writeEditLog({
+          taskId: row.task_id,
+          stage: row.stage,
+          pageTitle: row.page_title,
+          namespace: row.namespace,
+          account: ctx.account,
+          status: 'failed',
+          baseRevid: page.revid,
+          editSummary: ctx.editSettings.editSummary,
+          errorMessage: finalMsg,
+        });
+        return { ok: false, error: err };
+      }
+
+      const retryNo = attempt + 1;
+      const delayMs = retryDelayMs(retryNo);
+      const waitText = `約${Math.round(delayMs / 1000)}秒後`;
+      await pool.query(`UPDATE task_pages SET error_message = ? WHERE id = ?`, [
+        `再試行待ち（${retryNo}/${maxRetries}、${waitText}）: ${msg}`,
+        row.id,
+      ]);
+      await writeTaskLogSafely({
+        taskId: row.task_id,
+        stage: row.stage,
+        pageTitle: row.page_title,
+        level: 'warning',
+        message: `編集に失敗したため${waitText}に再試行します（${retryNo}/${maxRetries}）: ${msg}`,
+      });
+
+      const stopped = await waitBeforeRetry(delayMs, ctx.taskId);
+      if (stopped) {
+        // 編集は行われていないので「承認済み」に戻す（再開時に準備からやり直す）
+        await pool.query(`UPDATE task_pages SET status = 'approved', error_message = NULL WHERE id = ?`, [row.id]);
+        return { ok: false, interrupted: stopped };
+      }
+
+      if (err.mwCode === 'editconflict') {
+        // 同じ本文のままでは必ず再び競合するため、最新版にルールを適用し直す
+        let rebuilt;
+        try {
+          rebuilt = await rebuildAfterConflict(row, ctx);
+        } catch (rebuildErr) {
+          const rebuildMsg = String((rebuildErr && rebuildErr.message) || rebuildErr);
+          await pool.query(`UPDATE task_pages SET status = 'failed', error_message = ? WHERE id = ?`, [rebuildMsg, row.id]);
+          await writeEditLog({
+            taskId: row.task_id,
+            stage: row.stage,
+            pageTitle: row.page_title,
+            namespace: row.namespace,
+            account: ctx.account,
+            status: 'failed',
+            baseRevid: page.revid,
+            editSummary: ctx.editSettings.editSummary,
+            errorMessage: rebuildMsg,
+          });
+          return { ok: false, error: rebuildErr };
+        }
+        if (!rebuilt.changed) {
+          // 競合した編集で既に同じ修正が入っていた等、もう変更の必要が無い
+          await pool.query(
+            `UPDATE task_pages SET status = 'skipped', error_message = NULL, original_wikitext = ? WHERE id = ?`,
+            [rebuilt.page.wikitext, row.id]
+          );
+          await writeTaskLogSafely({
+            taskId: row.task_id,
+            stage: row.stage,
+            pageTitle: row.page_title,
+            level: 'info',
+            message: '編集競合後に最新版を確認したところ、変更の必要が無くなっていたためスキップしました。',
+          });
+          return { ok: true, skipped: true };
+        }
+        page = rebuilt.page;
+        newWikitext = rebuilt.newWikitext;
+      }
+    }
   }
 }
 
@@ -322,6 +458,15 @@ async function runStagePipeline(ctx) {
           );
         } else {
           const editResult = await editOnePage(current, ctx);
+          if (editResult.interrupted) {
+            // 再試行の待機中に緊急停止・中止された
+            return {
+              completed: false,
+              emergencyStopped: editResult.interrupted === 'emergency',
+              cancelled: editResult.interrupted === 'cancelled',
+              hadFailures,
+            };
+          }
           if (!editResult.ok) {
             hadFailures = true;
             if (ctx.onFailure === 'pause') {
@@ -329,7 +474,8 @@ async function runStagePipeline(ctx) {
               return { completed: false, paused: true, hadFailures };
             }
           }
-          if (i < rows.length - 1) {
+          // 実際に編集しなかった（競合後に変更不要と分かった）ときは編集間隔をあけない
+          if (!editResult.skipped && i < rows.length - 1) {
             await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
           }
         }
@@ -358,4 +504,12 @@ async function pauseTask(taskId) {
   await pool.query(`UPDATE tasks SET status = 'paused', updated_at = NOW() WHERE id = ?`, [taskId]);
 }
 
-module.exports = { runStagePipeline, prepareOnePage, waitForApproval, editOnePage, applyRedirectCategoryTemplateEdits };
+module.exports = {
+  runStagePipeline,
+  prepareOnePage,
+  waitForApproval,
+  editOnePage,
+  applyRedirectCategoryTemplateEdits,
+  isRetryableEditError,
+  retryDelayMs,
+};

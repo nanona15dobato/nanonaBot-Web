@@ -356,7 +356,10 @@
     const p = focus.page;
     // 自動更新で毎回作り直すと、開いているドロップダウンが閉じたりDiffのスクロール位置が
     // 戻ったりするため、表示内容が変わったときだけ作り直す（カウントダウンは別タイマーで更新）。
-    const key = [focus.kind, p.id, p.status, mode, p.prepared_at, reviewSettings.autoWaitSeconds, focus.inFlight && focus.inFlight.id, focus.lastEdited && focus.lastEdited.id].join('|');
+    const key = [
+      focus.kind, p.id, p.status, p.error_message, mode, p.prepared_at, reviewSettings.autoWaitSeconds,
+      focus.inFlight && focus.inFlight.id, focus.inFlight && focus.inFlight.error_message, focus.lastEdited && focus.lastEdited.id,
+    ].join('|');
     if (key === state.lastReviewKey) return;
     state.lastReviewKey = key;
 
@@ -387,6 +390,10 @@
           viewBtn.$element
         )
       );
+      // 一時的な失敗で再試行を待っている（例: 「再試行待ち（1/3、約10秒後）: Edit conflict.」）
+      if (focus.inFlight.error_message) {
+        $flow.append($('<span>').addClass('nb-review__flow-item nb-review__flow-item--retry').text(focus.inFlight.error_message));
+      }
     }
     if (focus.lastEdited && (!focus.inFlight || focus.lastEdited.id !== focus.inFlight.id)) {
       $flow.append($('<span>').addClass('nb-review__flow-item nb-review__flow-item--done').append('直前に編集: ', C.wikiLink(focus.lastEdited.page_title), ' （', C.timeElement(focus.lastEdited.edited_at), '）'));
@@ -446,6 +453,9 @@
     if (focus.kind === 'failed' && p.error_message) {
       $panel.append(new OO.ui.MessageWidget({ type: 'error', label: p.error_message }).$element.addClass('nb-review__error'));
     }
+    if (focus.kind === 'editing' && p.error_message) {
+      $panel.append(new OO.ui.MessageWidget({ type: 'warning', label: p.error_message }).$element.addClass('nb-review__error'));
+    }
 
     // カウントダウン（自動承認／編集間隔が明けるまで）
     countdown = null;
@@ -453,7 +463,8 @@
       const autoWaitSeconds = Number(reviewSettings.autoWaitSeconds) || 0;
       const startedAt = toClientTime(p.prepared_at) || Date.now();
       countdown = { deadline: startedAt + autoWaitSeconds * 1000, total: autoWaitSeconds * 1000, format: (s) => (s > 0 ? 'あと約' + s + '秒で自動承認されます' : 'まもなく自動承認されます') };
-    } else if (focus.kind === 'next') {
+    } else if (focus.kind === 'next' && !focus.inFlight) {
+      // 前のページを編集中（再試行待ちを含む）の間は、番が来る時刻が決まらないので出さない
       const at = nextEditAt(task, pages);
       const interval = Number((task.config_json && task.config_json.editSettings && task.config_json.editSettings.editIntervalSeconds) || 0) * 1000;
       if (at) {

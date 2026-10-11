@@ -1068,3 +1068,9 @@ table.diff th {
 .nb-review__error {
   margin-top: 12px;
 }
+
+.nb-review__flow-item--retry {
+  flex-basis: 100%;
+  color: var(--nb-color-warning);
+  font-weight: bold;
+}
