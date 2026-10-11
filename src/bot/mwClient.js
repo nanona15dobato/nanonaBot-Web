@@ -82,7 +82,9 @@ class MediaWikiBotClient {
     this.cookieJar.updateFromResponse(res);
 
     if (!res.ok) {
-      throw new Error(`MediaWiki APIへのHTTPリクエストが失敗しました (${res.status})`);
+      const err = new Error(`MediaWiki APIへのHTTPリクエストが失敗しました (${res.status})`);
+      err.httpStatus = res.status;
+      throw err;
     }
     const data = await res.json();
     if (data.error) {
@@ -284,7 +286,10 @@ class MediaWikiBotClient {
     );
 
     if (!res.edit || res.edit.result !== 'Success') {
-      throw new Error(`編集に失敗しました: ${JSON.stringify(res.edit)}`);
+      // AbuseFilter・CAPTCHA等で保存されなかった場合（再試行しても結果は変わらない）
+      const err = new Error(`編集に失敗しました: ${JSON.stringify(res.edit)}`);
+      err.editResult = res.edit || null;
+      throw err;
     }
     return { revid: res.edit.newrevid, newTimestamp: res.edit.newtimestamp };
   }

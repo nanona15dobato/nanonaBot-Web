@@ -19,12 +19,16 @@ const Module = require('module');
 
 const DB_PATH = require.resolve('../src/db');
 
+// 編集失敗時の再試行の待ち時間（既定10秒〜）はテストでは0にする
+process.env.EDIT_RETRY_BASE_MS = '0';
+
 /** SQL文字列から大まかな操作を判定するための軽量インメモリDB */
 function createFakeDb() {
   const tasks = new Map();
   const taskPages = new Map();
   let nextPageId = 1;
   const editLogRows = [];
+  const taskLogs = [];
   const calls = [];
   const state = { emergencyStopped: false };
 
@@ -117,6 +121,7 @@ function createFakeDb() {
       } else if (s.includes("status = 'edited'")) {
         row.status = 'edited';
       }
+      if (s.includes('error_message = NULL')) row.error_message = null;
       return [{ affectedRows: 1 }];
     }
 
@@ -152,6 +157,21 @@ function createFakeDb() {
       return [{ affectedRows: 1 }];
     }
 
+    if (s.startsWith('UPDATE task_pages SET error_message = ? WHERE id = ?')) {
+      const row = taskPages.get(params[1]);
+      if (row) row.error_message = params[0];
+      return [{ affectedRows: row ? 1 : 0 }];
+    }
+    if (s.startsWith('UPDATE task_pages SET base_revid = ?')) {
+      const row = taskPages.get(params[4]);
+      [row.base_revid, row.base_timestamp, row.original_wikitext, row.new_wikitext] = params;
+      return [{ affectedRows: 1 }];
+    }
+    if (s.startsWith('INSERT INTO task_logs')) {
+      taskLogs.push(params);
+      return [{ insertId: taskLogs.length }];
+    }
+
     if (s.startsWith('INSERT INTO edit_log')) {
       editLogRows.push(params);
       return [{ insertId: editLogRows.length }];
@@ -171,7 +191,7 @@ function createFakeDb() {
     }),
   };
 
-  return { pool, seedTask, seedPages, taskPages, tasks, editLogRows, calls, state };
+  return { pool, seedTask, seedPages, taskPages, tasks, editLogRows, taskLogs, calls, state };
 }
 
 function withStubbedDb(fakePool, fn) {
@@ -190,6 +210,7 @@ function withStubbedDb(fakePool, fn) {
     delete require.cache[require.resolve('../src/worker/pipeline')];
     delete require.cache[require.resolve('../src/worker/emergencyStop')];
     delete require.cache[require.resolve('../src/worker/editLog')];
+    delete require.cache[require.resolve('../src/worker/taskLog')];
   }
 }
 
@@ -225,8 +246,9 @@ test('runStagePipeline: 1ページ先読みで進行し、skipAndContinueで1件
     async edit({ title }) {
       editCallOrder.push(title);
       if (title === 'ページB(失敗)') {
-        const err = new Error('編集競合');
-        err.mwInfo = 'editconflict';
+        const err = new Error('保護されたページ');
+        err.mwCode = 'protectedpage';
+        err.mwInfo = 'This page has been protected';
         throw err;
       }
       return { revid: 999, newTimestamp: '2026-08-11T09:00:05Z' };
@@ -335,7 +357,9 @@ test('runStagePipeline: onFailure="pause"は失敗直後にタスクを止め、
     },
     async edit({ title }) {
       editCallOrder.push(title);
-      throw new Error('保護されています');
+      const err = new Error('保護されています');
+      err.mwCode = 'protectedpage';
+      throw err;
     },
   };
 
@@ -629,3 +653,156 @@ test('runStagePipeline: 先読み中に前もって承認されたページは�
   assert.deepEqual([...db.taskPages.values()].map((p) => p.status), ['edited', 'rejected']);
   assert.ok(Date.now() - startedAt < 3000, '承認待ちのポーリングで待たされない');
 });
+
+// ---- 編集失敗時の再試行 ----
+
+function retryTestSetup(pageTitle) {
+  const db = createFakeDb();
+  db.seedTask({ id: 8, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([{ task_id: 8, stage: 1, order_index: 0, page_title: pageTitle, namespace: 0, matched_rule_indices: '[0]', status: 'pending' }]);
+  return db;
+}
+
+async function runRetryPipeline(db, mwClient) {
+  let result;
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    result = await runStagePipeline({
+      taskId: 8,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'pause',
+    });
+  });
+  return result;
+}
+
+test('editOnePage: 編集競合は最新版を取り直して同じルールを適用し直してから再試行する', async () => {
+  const db = retryTestSetup('競合するページ');
+  let revision = 1;
+  const edits = [];
+  const mwClient = {
+    async getPage(title) {
+      // 2回目の取得（競合後）では他の利用者の編集が入った最新版になっている
+      return {
+        title,
+        exists: true,
+        revid: revision,
+        baseTimestamp: `2026-08-11T09:00:0${revision}Z`,
+        startTimestamp: '2026-08-11T09:10:00Z',
+        wikitext: revision === 1 ? '旧' : '他の人の追記 旧',
+      };
+    },
+    async edit(params) {
+      edits.push({ text: params.text, baseTimestamp: params.baseTimestamp });
+      if (edits.length === 1) {
+        revision = 2;
+        const err = new Error('MediaWiki APIエラー [editconflict]: Edit conflict.');
+        err.mwCode = 'editconflict';
+        err.mwInfo = 'Edit conflict.';
+        throw err;
+      }
+      return { revid: 3, newTimestamp: '2026-08-11T09:10:05Z' };
+    },
+  };
+
+  const result = await runRetryPipeline(db, mwClient);
+  assert.equal(result.completed, true);
+  assert.equal(result.hadFailures, false);
+  assert.deepEqual(edits, [
+    { text: '新', baseTimestamp: '2026-08-11T09:00:01Z' },
+    { text: '他の人の追記 新', baseTimestamp: '2026-08-11T09:00:02Z' },
+  ]);
+  const row = [...db.taskPages.values()][0];
+  assert.equal(row.status, 'edited');
+  assert.equal(row.error_message, null);
+  assert.equal(db.editLogRows.length, 1); // 最終結果だけをedit_logに記録する
+  assert.ok(db.taskLogs.some((params) => /再試行します（1\/3）/.test(params[params.length - 1])));
+});
+
+test('editOnePage: 競合後の最新版でもう変更が不要ならスキップにする', async () => {
+  const db = retryTestSetup('既に直されたページ');
+  let fixedByOthers = false;
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: fixedByOthers ? '新' : '旧' };
+    },
+    async edit() {
+      fixedByOthers = true;
+      const err = new Error('conflict');
+      err.mwCode = 'editconflict';
+      throw err;
+    },
+  };
+  const result = await runRetryPipeline(db, mwClient);
+  assert.equal(result.completed, true);
+  assert.equal([...db.taskPages.values()][0].status, 'skipped');
+  assert.equal(db.editLogRows.length, 0);
+});
+
+test('editOnePage: 一時的な失敗は規定回数まで再試行し、それでも失敗したら失敗にする', async () => {
+  const db = retryTestSetup('サーバーエラーが続くページ');
+  let attempts = 0;
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: '旧' };
+    },
+    async edit() {
+      attempts++;
+      const err = new Error('MediaWiki APIへのHTTPリクエストが失敗しました (503)');
+      err.httpStatus = 503;
+      throw err;
+    },
+  };
+  const result = await runRetryPipeline(db, mwClient);
+  assert.equal(result.paused, true);
+  assert.equal(attempts, 4); // 最初の1回 + 再試行3回
+  const row = [...db.taskPages.values()][0];
+  assert.equal(row.status, 'failed');
+  assert.match(row.error_message, /3回再試行しましたが失敗しました/);
+});
+
+test('editOnePage: 保護・AbuseFilter等の再試行しても変わらない失敗はすぐ失敗にする', async () => {
+  const db = retryTestSetup('保護されたページ');
+  let attempts = 0;
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 1, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: '旧' };
+    },
+    async edit() {
+      attempts++;
+      const err = new Error('編集に失敗しました: {"result":"Failure"}');
+      err.editResult = { result: 'Failure' };
+      throw err;
+    },
+  };
+  await runRetryPipeline(db, mwClient);
+  assert.equal(attempts, 1);
+  assert.equal([...db.taskPages.values()][0].status, 'failed');
+});
+
+test('isRetryableEditError / retryDelayMs: 再試行する失敗の判定と、間隔を倍々に延ばす待ち時間', () =>
+  withStubbedDb(createFakeDb().pool, () => {
+    const { isRetryableEditError, retryDelayMs } = require('../src/worker/pipeline');
+    const mw = (code) => Object.assign(new Error(code), { mwCode: code });
+    assert.equal(isRetryableEditError(mw('editconflict')), true);
+    assert.equal(isRetryableEditError(mw('ratelimited')), true);
+    assert.equal(isRetryableEditError(mw('internal_api_error_DBQueryError')), true);
+    assert.equal(isRetryableEditError(mw('protectedpage')), false);
+    assert.equal(isRetryableEditError(mw('blocked')), false);
+    assert.equal(isRetryableEditError(Object.assign(new Error('x'), { httpStatus: 502 })), true);
+    assert.equal(isRetryableEditError(Object.assign(new Error('x'), { httpStatus: 404 })), false);
+    assert.equal(isRetryableEditError(new TypeError('fetch failed')), true);
+
+    const saved = process.env.EDIT_RETRY_BASE_MS;
+    process.env.EDIT_RETRY_BASE_MS = '10000';
+    try {
+      assert.deepEqual([1, 2, 3].map(retryDelayMs), [10000, 20000, 40000]);
+    } finally {
+      process.env.EDIT_RETRY_BASE_MS = saved;
+    }
+  }));
