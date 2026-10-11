@@ -62,3 +62,9 @@ test('describeWikiError: 失敗した API とコードを添え、編集の権�
   const edit = describeWikiError(Object.assign(new Error('x'), { apiAction: 'edit', mwCode: 'permissiondenied', mwInfo: 'You are not allowed to execute the action you have requested.' }));
   assert.match(edit, /BotPassword/);
 });
+
+test('describeWikiError: アカウントの確認結果（diagnosis）があれば添える', () => {
+  const text = describeWikiError(Object.assign(new Error('x'), { apiAction: 'edit', mwCode: 'permissiondenied', mwInfo: 'You are not allowed…', diagnosis: 'ログイン: A。このセッションの権限: edit が無い' }));
+  assert.match(text, /ログイン: A。このセッションの権限: edit が無い/);
+  assert.match(text, /運用者アカウントを確認/);
+});

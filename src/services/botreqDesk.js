@@ -391,8 +391,75 @@ function validateSave(body) {
  * 保存し、必要なら依頼のコメントへ返信する。
  * @returns {Promise<{revid: number|null, nochange: boolean, comment: null|{ok: boolean, error?: string}}>}
  */
+const CHECK_RIGHTS = ['edit', 'createpage'];
+
+/**
+ * 運用者アカウントの確認。ログインした名前・グループ・このセッションの権限（BotPassword の grant で絞られたもの）と、
+ * 編集するページで MediaWiki が編集を許すか（intestactions）を返す。保存が権限エラーになったときの原因の切り分けに使う。
+ * @param {object} [options]
+ * @param {string[]} [options.titles] - 確かめるページ（既定: Bot作業依頼と今年の作業記録）
+ */
+async function checkAccount({ client, titles } = {}) {
+  client = client || (await defaultClient());
+  const pages = titles && titles.length ? titles : [BOTREQ_PAGE_TITLE, `${config.botreq.logPrefix}${L.jstYear(Date.now())}年`];
+  const { ACCOUNT_ENV_MAP } = require('../bot/accountNames');
+  const env = ACCOUNT_ENV_MAP[config.botreq.account];
+  const info = await client.request({ action: 'query', meta: 'userinfo', uiprop: 'groups|rights' });
+  const user = info.query.userinfo;
+  const tested = await client.request({
+    action: 'query',
+    prop: 'info',
+    titles: pages.join('|'),
+    intestactions: 'edit|create',
+    intestactionsdetail: 'full',
+    errorformat: 'plaintext',
+  });
+  const reasons = (list) => (Array.isArray(list) ? list.map((m) => `${m.text || m.html || ''}${m.code ? `（${m.code}）` : ''}`.trim()) : []);
+  return {
+    account: config.botreq.account,
+    loginName: env ? process.env[env.user] || null : null, // BotPassword のログイン名（例: 利用者名@Bot名）。パスワードは返さない
+    userName: user.anon !== undefined ? null : user.name,
+    groups: user.groups || [],
+    rights: Object.fromEntries(CHECK_RIGHTS.map((r) => [r, (user.rights || []).includes(r)])),
+    pages: tested.query.pages.map((p) => {
+      const action = p.missing ? 'create' : 'edit';
+      const result = p.actions ? p.actions[action] : undefined;
+      // intestactionsdetail=full では、許される操作は空の配列、拒否される操作は理由の配列になる
+      return { title: p.title, exists: !p.missing, action, allowed: Array.isArray(result) ? result.length === 0 : Boolean(result), reasons: reasons(result) };
+    }),
+  };
+}
+
+/** checkAccount の結果を、エラーに添える1行の説明にする。 */
+function describeAccountCheck(check, title) {
+  const page = check.pages.find((p) => p.title === title) || check.pages[0];
+  const missing = CHECK_RIGHTS.filter((r) => !check.rights[r]);
+  const parts = [
+    `ログイン: ${check.userName || '（ログインしていない）'}${check.loginName ? `（BotPassword: ${check.loginName}）` : ''}`,
+    `このセッションの権限: ${missing.length ? `${missing.join('・')} が無い` : 'edit・createpage あり'}`,
+  ];
+  if (page) parts.push(`「${page.title}」の${page.action === 'create' ? '作成' : '編集'}: ${page.allowed ? '可' : `不可（${page.reasons.join(' / ') || '理由不明'}）`}`);
+  return parts.join('。');
+}
+
 async function save(body, { client } = {}) {
   client = client || (await defaultClient());
+  try {
+    return await saveWith(client, body);
+  } catch (err) {
+    // 権限エラーなら、ログインしたアカウント・権限・そのページでの判定を添える（原因の切り分け用）
+    if (err.mwCode === 'permissiondenied' && err.apiAction === 'edit') {
+      try {
+        err.diagnosis = describeAccountCheck(await checkAccount({ client, titles: [body.title] }), body.title);
+      } catch (diagErr) {
+        err.diagnosis = `アカウントの確認にも失敗しました: ${diagErr.message}`;
+      }
+    }
+    throw err;
+  }
+}
+
+async function saveWith(client, body) {
   const edit = await client.withSessionRetry(async () => {
     const token = await client.getCsrfToken();
     const res = await client.request(
@@ -515,4 +582,4 @@ async function requestSections({ client, threadId } = {}) {
   });
 }
 
-module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections };
+module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections, checkAccount, describeAccountCheck };
