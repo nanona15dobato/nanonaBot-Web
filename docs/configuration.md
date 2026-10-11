@@ -55,7 +55,8 @@ Special:BotPasswords で発行したログイン名（`User@BotName` 形式）�
 | `EDIT_RETRY_BASE_MS` | `10000` | 1回目の再試行までの待ち時間（2回目以降は倍々） |
 | `NULL_EDIT_INTERVAL_MS` | `1000` | null edit 1件（purgeは1バッチ）ごとの間隔 |
 | `RATE_LIMIT_WAIT_MS` | `60000` | purge がレート制限に当たったときに待つ時間 |
-| `TASK_PAGES_RETENTION_DAYS` | `14` | ページ単位の作業データの保持日数（**自動削除は未実装**） |
+| `TASK_PAGES_RETENTION_DAYS` | `14` | 終わったタスクのページ単位の作業データ（`task_pages`）を残す日数。`0` で削除しない → [作業データの自動削除](task-lifecycle.md#作業データの自動削除) |
+| `CLEANUP_INTERVAL_MS` | `3600000`（1時間） | 作業データの削除を実行する間隔（ワーカーの起動時と、その後この間隔ごとにタスクの合間で実行） |
 
 ### 通知
 
