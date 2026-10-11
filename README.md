@@ -2,6 +2,10 @@
 
 Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜10実装です。
 
+**各画面の使い方・各動作の詳しい説明**は [`docs/`](docs/README.md) にまとめている
+（[使い方ガイド](docs/user-guide.md)・[置換ルールの種類](docs/rule-types.md)・[タスクの流れと各動作](docs/task-lifecycle.md)・
+[BOTREQ](docs/botreq.md)・[通知](docs/notifications.md)・[設定](docs/configuration.md)・[API](docs/api.md)）。
+
 **実環境で最初から最後まで確認したい場合**は、本READMEより先に
 [`docs/DEPLOY_VERIFICATION.md`](docs/DEPLOY_VERIFICATION.md) のチェックリストに沿って進めることを推奨する
 （コード転送→OAuth登録→Botパスワード発行→DB→環境変数→起動→ブラウザでの確認まで一本道）。
