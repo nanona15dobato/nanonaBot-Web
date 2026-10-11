@@ -8,6 +8,7 @@ const { isEmergencyStopped } = require('./src/worker/emergencyStop');
 const { writeTaskLogSafely } = require('./src/worker/taskLog');
 const { notifyTaskStatus } = require('./src/services/notify');
 const { cleanupOldTaskPages } = require('./src/worker/cleanup');
+const { getWorkerSettings, setSetting, WORKER_HEARTBEAT_KEY } = require('./src/services/settings');
 
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS || 1000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,7 +20,8 @@ async function cleanupIfDue() {
   if (Date.now() - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
   lastCleanupAt = Date.now();
   try {
-    const { tasks, pages } = await cleanupOldTaskPages({ retentionDays: config.taskPagesRetentionDays });
+    const { taskPagesRetentionDays } = await getWorkerSettings();
+    const { tasks, pages } = await cleanupOldTaskPages({ retentionDays: taskPagesRetentionDays });
     if (tasks > 0) console.log(`[worker] 保持期間を過ぎた作業データを削除しました（タスク${tasks}件、ページ${pages}件）`);
   } catch (err) {
     // 掃除の失敗でタスクの処理は止めない（次の周期でやり直す）
@@ -51,7 +53,35 @@ async function requeueInterruptedTasks() {
   }
 }
 
+// ===== 稼働状況（ハートビート） =====
+// ワーカーが動いていることと、今何をしているかを10秒ごとにDBへ記録する（フェーズ11）。
+// メインループとは別のタイマーで書くので、長いタスクの処理中も記録が途切れない。
+// ダッシュボードはこの記録が古いと「ワーカーが応答していません」と表示する。
+const HEARTBEAT_INTERVAL_MS = 10 * 1000;
+const workerState = { startedAt: new Date().toISOString(), state: 'idle', taskId: null };
+
+async function writeHeartbeat() {
+  try {
+    await setSetting(
+      WORKER_HEARTBEAT_KEY,
+      JSON.stringify({ ...workerState, pid: process.pid, at: new Date().toISOString() }),
+      'worker'
+    );
+  } catch (err) {
+    // app_settings テーブルが無い環境では記録しない（処理には影響しない）
+  }
+}
+
+function setWorkerState(state, taskId = null) {
+  workerState.state = state;
+  workerState.taskId = taskId;
+  writeHeartbeat();
+}
+
 async function mainLoop() {
+  writeHeartbeat();
+  setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS).unref();
+
   console.log(`NanonaBot Tool worker starting (poll interval ${POLL_INTERVAL_MS}ms)`);
 
   try {
@@ -66,15 +96,18 @@ async function mainLoop() {
       await cleanupIfDue();
 
       if (await isEmergencyStopped()) {
+        if (workerState.state !== 'emergency_stopped') setWorkerState('emergency_stopped');
         await sleep(POLL_INTERVAL_MS);
         continue;
       }
 
       const task = await claimNextQueuedTask();
       if (!task) {
+        if (workerState.state !== 'idle') setWorkerState('idle');
         await sleep(POLL_INTERVAL_MS);
         continue;
       }
+      setWorkerState('running', task.id);
 
       console.log(`[worker] タスク ${task.id} の処理を開始します（account=${task.account}, mode=${task.mode}）`);
       let errorDetail = null;

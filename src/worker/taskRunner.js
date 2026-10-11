@@ -31,8 +31,9 @@ const WAVE_TEMPLATE_TYPES = ['linkRename', 'linkRename2', 'linkRenameExact', 'ur
  */
 const CATEGORY_TEMPLATE_TYPES = ['categoryRename', 'categoryRemove'];
 const TEMPLATE_NAMESPACE = 10;
-/** null edit（purge時は1バッチ）同士の間隔（ミリ秒）。版を作らない軽い操作のため通常の編集間隔より短くする。 */
-const NULL_EDIT_INTERVAL_MS = Number(process.env.NULL_EDIT_INTERVAL_MS || 1000);
+// null edit（purge時は1バッチ）同士の間隔は、設定画面（DB）→ 環境変数 NULL_EDIT_INTERVAL_MS → 既定1秒（フェーズ11）。
+// 版を作らない軽い操作のため通常の編集間隔より短くする。
+const { getWorkerSettings } = require('../services/settings');
 /** purge（forcelinkupdate）1リクエストあたりのページ数（action=purge の titles 上限） */
 const PURGE_BATCH_SIZE = 50;
 /** レート制限（ratelimited）に当たったときに待つ時間（ミリ秒） */
@@ -168,8 +169,13 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient, options = {}) {
 
     case 'urlRename':
       // 外部リンクの付け替え（フェーズ10）: リンク置換と同じく、テンプレートを先に直す2ウェーブ構成
-      if (stage === 1) return { results: await resolveExtUrlUsage({ url: rule.from, namespaces: [10] }), error: null };
-      return { results: await resolveExtUrlUsage({ url: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
+      if (stage === 1) {
+        return { results: await resolveExtUrlUsage({ url: rule.from, namespaces: [10], bothSchemes: rule.bothSchemes }), error: null };
+      }
+      return {
+        results: await resolveExtUrlUsage({ url: rule.from, namespaces: namespacesOrDefault(rule.namespaces), bothSchemes: rule.bothSchemes }),
+        error: null,
+      };
 
     case 'categoryRename':
     case 'categoryRemove': {
@@ -440,6 +446,7 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
   const usePurge = method === 'purge';
   const methodLabel = usePurge ? 'purge（forcelinkupdate）' : 'null edit';
   const batchSize = usePurge ? PURGE_BATCH_SIZE : 1;
+  const { nullEditIntervalMs } = await getWorkerSettings();
   const saveProgress = (done) =>
     updateTargetTitlesJson(task.id, (json) => {
       if (json.nullEdit) json.nullEdit.done = done;
@@ -498,7 +505,7 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
       await saveProgress(i + batch.length);
       sinceSave = 0;
     }
-    if (i + batchSize < titles.length) await sleep(NULL_EDIT_INTERVAL_MS);
+    if (i + batchSize < titles.length) await sleep(nullEditIntervalMs);
   }
 
   if (titles.length > 0) {

@@ -263,3 +263,11 @@ test('urlRenameSteps: 改名元が / で終わるときは配下のURLすべて�
   assert.equal(applyReplacementSteps('http://old.example/a/b と [http://old.example/ top]', steps), 'https://new.example/a/b と [https://new.example/ top]');
   assert.equal(applyReplacementSteps('http://old.example.com/x', steps), 'http://old.example.com/x');
 });
+
+test('urlRenameSteps: bothSchemes指定時は http と https のどちらの旧URLも付け替える', () => {
+  const both = presets.urlRenameSteps('http://old.example/path', 'https://new.example/path', { bothSchemes: true });
+  const only = presets.urlRenameSteps('http://old.example/path', 'https://new.example/path');
+  const text = 'http://old.example/path と HTTPS://old.example/path/x と https://www.old.example/path';
+  assert.equal(applyReplacementSteps(text, both), 'https://new.example/path と https://new.example/path/x と https://www.old.example/path');
+  assert.equal(applyReplacementSteps(text, only), 'https://new.example/path と HTTPS://old.example/path/x と https://www.old.example/path');
+});

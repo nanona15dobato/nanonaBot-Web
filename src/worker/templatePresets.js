@@ -219,11 +219,16 @@ function categoryTextSteps(from, to) {
  * - それ以外は、from そのものか、続きが "/" "?" "#" のURLだけを付け替える
  *   （"http://example.com/page" が "http://example.com/page2" を書き換えないように）
  * スキーム（http/https）とホスト名の大文字小文字は区別しない。
+ * bothSchemes を指定すると、改名元が http:// でも https:// でも（その逆でも）同じ旧URLとして付け替える（フェーズ11）。
  */
-function urlRenameSteps(from, to) {
+function urlRenameSteps(from, to, { bothSchemes = false } = {}) {
   const src = String(from).trim();
   const m = /^(https?:\/\/)([^/?#]+)(.*)$/i.exec(src);
-  const head = m ? `(?:${escapeRegExp(m[1])})`.replace(/http/i, '[Hh][Tt][Tt][Pp]') : '';
+  const head = !m
+    ? ''
+    : bothSchemes
+      ? '[Hh][Tt][Tt][Pp][Ss]?://'
+      : `(?:${escapeRegExp(m[1])})`.replace(/http/i, '[Hh][Tt][Tt][Pp]').replace(/s:/i, '[Ss]:');
   const host = m ? escapeRegExp(m[2]).replace(/[A-Za-z]/g, (c) => `[${c.toUpperCase()}${c.toLowerCase()}]`) : '';
   const rest = m ? escapeRegExp(m[3]) : escapeRegExp(src);
   const boundary = src.endsWith('/') ? '' : '(?=$|[/?#\\s\\]|<>"\'{}]|\\[)';
@@ -336,7 +341,7 @@ function buildStepsForTemplateType(templateType, params) {
     case 'templateSubst':
       return templateSubstSteps(from);
     case 'urlRename':
-      return urlRenameSteps(from, to);
+      return urlRenameSteps(from, to, { bothSchemes: Boolean(params.bothSchemes) });
     default:
       throw new Error(`buildStepsForTemplateType: 未知のtemplateType "${templateType}"`);
   }

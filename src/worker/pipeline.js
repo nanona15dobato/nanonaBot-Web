@@ -10,8 +10,9 @@ const { removePageFromHatnotes } = require('./hatnoteUnlink');
 const { writeTaskLogSafely } = require('./taskLog');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-// 承認待ちの確認間隔。画面での承認から編集開始までの遅れがこの間隔以内になる。
-const MANUAL_POLL_MS = Number(process.env.REVIEW_POLL_INTERVAL_MS || 500);
+// 承認待ちの確認間隔・再試行の回数と間隔は、設定画面（DB）→ 環境変数 → 既定値 の順で決まる（フェーズ11）。
+// 画面での承認から編集開始までの遅れは、承認待ちの確認間隔（既定500ms）以内になる。
+const { getWorkerSettings } = require('../services/settings');
 
 /**
  * 正規表現では安全に扱えない、テンプレート引数の構造にもとづく書き換えを行う。
@@ -116,6 +117,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
   // 先読み中に画面から前もって承認・却下されたページ（status が approved/rejected）は
   // 確認待ちに戻さず、そのまま結果を使う（待ち時間を無くすため）。
   const reviewStartedAt = Date.now();
+  const { reviewPollMs } = await getWorkerSettings();
   await pool.query(
     `UPDATE task_pages SET status = 'awaiting_review', prepared_at = NOW() WHERE id = ? AND status = 'prepared'`,
     [pageId]
@@ -142,12 +144,12 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
       ...parseJsonColumn(task.config_json, {}).reviewSettings,
       mode: task.mode || reviewSettings.mode,
     };
-    let sleepMs = MANUAL_POLL_MS;
+    let sleepMs = reviewPollMs;
     if (currentSettings.mode === 'auto') {
       const autoWaitSeconds = Math.max(0, Number(currentSettings.autoWaitSeconds) || 0);
       const deadline = reviewStartedAt + autoWaitSeconds * 1000;
       // 自動承認の予定時刻が次の確認より前なら、その時刻ちょうどに起きる
-      sleepMs = Math.max(0, Math.min(MANUAL_POLL_MS, deadline - Date.now()));
+      sleepMs = Math.max(0, Math.min(reviewPollMs, deadline - Date.now()));
       if (Date.now() >= deadline) {
         const [result] = await pool.query(
           `UPDATE task_pages SET status = 'approved', reviewed_at = NOW()
@@ -172,13 +174,9 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
 /** 一時的な失敗として再試行するMediaWiki APIのエラーコード */
 const RETRYABLE_MW_CODES = ['editconflict', 'ratelimited', 'readonly', 'maxlag', 'lockmanager-fail-conflict'];
 
-function editRetryCount() {
-  return Math.max(0, Number(process.env.EDIT_RETRY_COUNT ?? 3));
-}
-
 /** n回目（1始まり）の再試行までの待ち時間。既定は10秒・20秒・40秒と倍々に延ばす。 */
-function retryDelayMs(n) {
-  return Math.max(0, Number(process.env.EDIT_RETRY_BASE_MS ?? 10000)) * 2 ** (n - 1);
+function retryDelayMs(n, baseMs = Number(process.env.EDIT_RETRY_BASE_MS ?? 10000)) {
+  return Math.max(0, Number(baseMs)) * 2 ** (n - 1);
 }
 
 /**
@@ -303,7 +301,8 @@ async function returnToReviewAfterConflict(row, ctx, page, msg) {
 async function editOnePage(prepared, ctx) {
   const { row } = prepared;
   let { page, newWikitext } = prepared;
-  const maxRetries = editRetryCount();
+  const workerSettings = await getWorkerSettings();
+  const maxRetries = Math.max(0, workerSettings.editRetryCount);
   await pool.query(`UPDATE task_pages SET status = 'editing' WHERE id = ?`, [row.id]);
 
   for (let attempt = 0; ; attempt++) {
@@ -346,7 +345,7 @@ async function editOnePage(prepared, ctx) {
       }
 
       const retryNo = attempt + 1;
-      const delayMs = retryDelayMs(retryNo);
+      const delayMs = retryDelayMs(retryNo, workerSettings.editRetryBaseMs);
       const waitText = `約${Math.round(delayMs / 1000)}秒後`;
       await pool.query(`UPDATE task_pages SET error_message = ? WHERE id = ?`, [
         `再試行待ち（${retryNo}/${maxRetries}、${waitText}）: ${msg}`,

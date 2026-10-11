@@ -47,6 +47,8 @@ Special:BotPasswords で発行したログイン名（`User@BotName` 形式）�
 
 ### ワーカーの動き
 
+このうち `REVIEW_POLL_INTERVAL_MS`・`EDIT_RETRY_COUNT`・`EDIT_RETRY_BASE_MS`・`NULL_EDIT_INTERVAL_MS`・`TASK_PAGES_RETENTION_DAYS` は、**設定画面の「ワーカーの動作」から再起動せずに変更できます**。画面で保存した値は環境変数より優先され、ワーカーには最大30秒で反映されます（値の決まり方: 画面の設定 → 環境変数 → 既定値）。
+
 | 名前 | 既定値 | 説明 |
 |---|---|---|
 | `WORKER_POLL_INTERVAL_MS` | `1000` | キューに新しいタスクが無いか確認する間隔 |
@@ -92,5 +94,5 @@ Special:BotPasswords で発行したログイン名（`User@BotName` 形式）�
 | `task_logs` | タスクの実行ログ・操作の記録 |
 | `task_warnings` | Category系の要手動確認の警告 |
 | `bot_account_defaults` | Botアカウントごとの編集設定・実行モードの既定値 |
-| `app_settings` | 画面から変更した運用設定（現在は通知先） |
+| `app_settings` | 画面から変更した運用設定（通知先・ワーカーの動作）と、ワーカーの稼働状況（`worker.heartbeat`） |
 | `sessions` | ログインセッション（`express-mysql-session` が自動で作る） |

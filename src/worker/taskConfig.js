@@ -116,6 +116,9 @@ function validateRule(rule, i, errors) {
       errors.push(`${prefix}.${key}: 文字列またはnullである必要があります`);
     }
   }
+  if (rule.bothSchemes !== undefined && typeof rule.bothSchemes !== 'boolean') {
+    errors.push(`${prefix}.bothSchemes: 真偽値である必要があります`);
+  }
   if (rule.fixCategoryLinks !== undefined && typeof rule.fixCategoryLinks !== 'boolean') {
     errors.push(`${prefix}.fixCategoryLinks: 真偽値である必要があります`);
   }

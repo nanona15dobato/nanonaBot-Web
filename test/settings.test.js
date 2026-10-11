@@ -3,8 +3,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateNotifySettings } = require('../src/routes/settings');
-const { getNotifySettings, saveNotifySettings, clearSettingsCache } = require('../src/services/settings');
+const { validateNotifySettings, validateWorkerSettings } = require('../src/routes/settings');
+const {
+  getNotifySettings,
+  saveNotifySettings,
+  getWorkerSettings,
+  saveWorkerSettings,
+  clearSettingsCache,
+} = require('../src/services/settings');
 const { ALL_EVENTS } = require('../src/services/notify');
 
 test('validateNotifySettings: 正しい値はそのまま、全種類を選んだ通知は空（＝すべて）にする', () => {
@@ -88,4 +94,68 @@ test('getNotifySettings: app_settingsテーブルが無い環境では環境変�
   const settings = await getNotifySettings({ fresh: true, pool });
   assert.equal(typeof settings.webhookUrl, 'string');
   clearSettingsCache();
+});
+
+// ---- フェーズ11: ワーカーの動作設定 ----
+
+function memoryPool() {
+  const rows = new Map();
+  return {
+    rows,
+    async query(sql, params) {
+      const s = sql.replace(/\s+/g, ' ').trim();
+      if (s.startsWith('SELECT setting_key')) {
+        return [[...rows.entries()].filter(([k]) => params[0].includes(k)).map(([k, v]) => ({ setting_key: k, setting_value: v }))];
+      }
+      if (s.startsWith('INSERT INTO app_settings')) {
+        rows.set(params[0], params[1]);
+        return [{}];
+      }
+      if (s.startsWith('DELETE FROM app_settings')) {
+        rows.delete(params[0]);
+        return [{}];
+      }
+      throw new Error('想定外のSQL: ' + s);
+    },
+  };
+}
+
+test('validateWorkerSettings: 範囲内の整数だけを受け付け、null は既定に戻す指定として渡す', () => {
+  assert.deepEqual(validateWorkerSettings({ reviewPollMs: 300, editRetryCount: 5, taskPagesRetentionDays: null }), {
+    values: { reviewPollMs: 300, editRetryCount: 5, taskPagesRetentionDays: null },
+    errors: [],
+  });
+  const { errors } = validateWorkerSettings({ reviewPollMs: 50, editRetryCount: 1.5, editRetryBaseMs: 'x', nullEditIntervalMs: 999999 });
+  assert.equal(errors.length, 4);
+});
+
+test('getWorkerSettings: DB > 環境変数 > 既定値 の順で数値として返す', async () => {
+  const pool = memoryPool();
+  const saved = { REVIEW_POLL_INTERVAL_MS: process.env.REVIEW_POLL_INTERVAL_MS, EDIT_RETRY_COUNT: process.env.EDIT_RETRY_COUNT };
+  process.env.REVIEW_POLL_INTERVAL_MS = '800';
+  delete process.env.EDIT_RETRY_COUNT;
+  try {
+    clearSettingsCache();
+    let settings = await getWorkerSettings({ fresh: true, pool });
+    assert.equal(settings.reviewPollMs, 800);
+    assert.equal(settings.sources.reviewPollMs, 'env');
+    assert.equal(settings.editRetryCount, 3);
+    assert.equal(settings.sources.editRetryCount, 'default');
+
+    await saveWorkerSettings({ reviewPollMs: 250, editRetryCount: 0 }, 'Nanona15dobato', pool);
+    settings = await getWorkerSettings({ fresh: true, pool });
+    assert.equal(settings.reviewPollMs, 250);
+    assert.equal(settings.editRetryCount, 0);
+    assert.equal(settings.sources.editRetryCount, 'db');
+
+    await saveWorkerSettings({ reviewPollMs: null }, 'Nanona15dobato', pool);
+    settings = await getWorkerSettings({ fresh: true, pool });
+    assert.equal(settings.reviewPollMs, 800);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    clearSettingsCache();
+  }
 });

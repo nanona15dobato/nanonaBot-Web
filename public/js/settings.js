@@ -63,6 +63,93 @@
   );
   page.$main.append(notifySection.$element);
 
+  // ===== ワーカーの動作（フェーズ11） =====
+  const WORKER_FIELDS = [
+    { name: 'reviewPollMs', label: '承認待ちの確認間隔（ミリ秒）', help: '画面で承認してから編集が始まるまでの最大の遅れです。短いほど速く反応しますが、DBへの問い合わせが増えます。' },
+    { name: 'editRetryCount', label: '一時的な失敗の再試行回数', help: '編集競合（自動更新モード）・サーバーエラー等で再試行する回数。0で再試行しません。' },
+    { name: 'editRetryBaseMs', label: '1回目の再試行までの待ち時間（ミリ秒）', help: '2回目以降は倍々に延ばします（既定: 10秒・20秒・40秒）。' },
+    { name: 'nullEditIntervalMs', label: 'null edit / purge の間隔（ミリ秒）', help: 'Category系ルールのウェーブ1後に、テンプレート使用ページを更新する間隔（purgeは50件ごと）。' },
+    { name: 'taskPagesRetentionDays', label: '作業データの保持日数', help: '終わったタスクのページ単位の作業データを残す日数。0で削除しません。' },
+  ];
+  const SOURCE_LABELS_WORKER = { db: '画面で設定', env: '環境変数', default: '既定値' };
+  const workerWidgets = {};
+  const workerSection = C.section({
+    title: 'ワーカーの動作',
+    hint:
+      '実環境で動かしながら調整するための設定です。ここで保存した値は環境変数より優先され、ワーカーには最大30秒で反映されます（再起動は不要）。',
+  });
+  const $workerFields = $('<div>');
+  WORKER_FIELDS.forEach((f) => {
+    const widget = new OO.ui.NumberInputWidget({ step: 1, isInteger: true });
+    const layout = new OO.ui.FieldLayout(widget, { label: f.label, align: 'top', help: f.help, helpInline: true });
+    const $source = $('<span>').addClass('nb-chip nb-setting-source');
+    layout.$label.append(' ', $source);
+    workerWidgets[f.name] = { widget, $source, layout };
+    $workerFields.append(layout.$element);
+  });
+  const workerSaveBtn = new OO.ui.ButtonWidget({ label: '保存', icon: 'check', flags: ['primary', 'progressive'] });
+  const workerResetBtn = new OO.ui.ButtonWidget({ label: '環境変数・既定値に戻す', framed: false, flags: ['destructive'] });
+  const $workerResult = $('<div>');
+  workerSection.$body.append(
+    $workerFields,
+    $('<div>').addClass('nb-form-actions').append(workerSaveBtn.$element, workerResetBtn.$element),
+    $workerResult
+  );
+  page.$main.append(workerSection.$element);
+
+  function renderWorker(data) {
+    Object.entries(workerWidgets).forEach(([name, w]) => {
+      const limit = data.limits[name];
+      w.widget.setRange(limit.min, limit.max);
+      w.widget.setValue(data.values[name]);
+      const source = data.sources[name] || 'default';
+      w.$source
+        .text(SOURCE_LABELS_WORKER[source] + (source === 'default' ? '（' + limit.def + '）' : ''))
+        .attr('data-source', source === 'default' ? 'none' : source)
+        .attr('title', '環境変数: ' + limit.env + ' ／ 範囲: ' + limit.min + '〜' + limit.max);
+    });
+  }
+
+  function showWorkerErrors(errors) {
+    $workerResult.empty();
+    if (!errors || errors.length === 0) return;
+    $workerResult.append(new OO.ui.MessageWidget({ type: 'error', label: $('<ul>').append(errors.map((e) => $('<li>').text(e))) }).$element);
+  }
+
+  workerSaveBtn.on('click', () =>
+    C.withBusy(workerSaveBtn, '保存', async () => {
+      const body = {};
+      Object.entries(workerWidgets).forEach(([name, w]) => {
+        body[name] = Number(w.widget.getValue());
+      });
+      try {
+        renderWorker(await C.putJson('/api/settings/worker', body));
+        showWorkerErrors([]);
+        C.toast('ワーカーの動作設定を保存しました（最大30秒で反映されます）。');
+      } catch (e) {
+        if (e.data && e.data.errors) showWorkerErrors(e.data.errors);
+        else throw e;
+      }
+    })
+  );
+  workerResetBtn.on('click', async () => {
+    const ok = await C.confirm('画面で保存したワーカーの動作設定を消し、環境変数（無ければ既定値）に戻します。', {
+      title: '環境変数・既定値に戻しますか？',
+      okLabel: '戻す',
+      destructive: true,
+    });
+    if (!ok) return;
+    await C.withBusy(workerResetBtn, '設定のリセット', async () => {
+      const body = Object.fromEntries(Object.keys(workerWidgets).map((name) => [name, null]));
+      renderWorker(await C.putJson('/api/settings/worker', body));
+      showWorkerErrors([]);
+      C.toast('環境変数・既定値に戻しました。');
+    });
+  });
+  C.fetchJson('/api/settings/worker')
+    .then(renderWorker)
+    .catch((e) => C.toast('ワーカーの動作設定の読み込みに失敗しました: ' + e.message, 'error'));
+
   function render(settings) {
     webhookWidget.setValue(settings.webhookUrl || '');
     mailToWidget.setValue(settings.mailTo || '');
