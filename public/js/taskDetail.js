@@ -31,13 +31,18 @@
   };
   const compareCache = new Map(); // pageId -> diff html（同じページを何度もaction=compareしないためのキャッシュ）
 
-  function loadCompare(pageId) {
-    if (!compareCache.has(pageId)) {
-      const promise = C.fetchJson('/api/tasks/' + taskId + '/pages/' + pageId + '/compare').then((r) => r.html);
-      promise.catch(() => compareCache.delete(pageId)); // 失敗したら次回取り直す
-      compareCache.set(pageId, promise);
+  /**
+   * 差分はページIDと基準の版ごとにキャッシュする（編集競合で最新版から作り直されたら取り直す）。
+   * @param {{id:number, base_revid:number}} p
+   */
+  function loadCompare(p) {
+    const key = p.id + ':' + (p.base_revid || '');
+    if (!compareCache.has(key)) {
+      const promise = C.fetchJson('/api/tasks/' + taskId + '/pages/' + p.id + '/compare').then((r) => r.html);
+      promise.catch(() => compareCache.delete(key)); // 失敗したら次回取り直す
+      compareCache.set(key, promise);
     }
-    return compareCache.get(pageId);
+    return compareCache.get(key);
   }
 
   /** action=compareが返すHTMLはMediaWiki本体の差分テーブルそのもの（信頼できる自ウィキAPIの出力）。仕様書9章の設計どおり埋め込む。 */
@@ -69,7 +74,7 @@
     return DiffDialog.super.prototype.getSetupProcess.call(this, data).next(() => {
       this.title.setLabel(data.title);
       const $content = this.content.$element.empty().append(C.loading('差分を読み込み中…'));
-      loadCompare(data.pageId)
+      loadCompare(data.page)
         .then((html) => {
           $content.empty().append(
             $('<p>').append(C.wikiLink(data.title), ' の準備時点の版との差分'),
@@ -94,7 +99,7 @@
   const diffDialog = new DiffDialog();
   windowManager.addWindows([diffDialog]);
   function openDiff(p) {
-    windowManager.openWindow(diffDialog, { pageId: p.id, title: p.page_title });
+    windowManager.openWindow(diffDialog, { page: p, title: p.page_title });
   }
 
   // ===== 画面の骨組み =====
@@ -357,7 +362,7 @@
     // 自動更新で毎回作り直すと、開いているドロップダウンが閉じたりDiffのスクロール位置が
     // 戻ったりするため、表示内容が変わったときだけ作り直す（カウントダウンは別タイマーで更新）。
     const key = [
-      focus.kind, p.id, p.status, p.error_message, mode, p.prepared_at, reviewSettings.autoWaitSeconds,
+      focus.kind, p.id, p.status, p.base_revid, p.error_message, mode, p.prepared_at, reviewSettings.autoWaitSeconds,
       focus.inFlight && focus.inFlight.id, focus.inFlight && focus.inFlight.error_message, focus.lastEdited && focus.lastEdited.id,
     ].join('|');
     if (key === state.lastReviewKey) return;
@@ -453,6 +458,10 @@
     if (focus.kind === 'failed' && p.error_message) {
       $panel.append(new OO.ui.MessageWidget({ type: 'error', label: p.error_message }).$element.addClass('nb-review__error'));
     }
+    // 手動確認モードで編集競合が起き、最新版で作り直されて確認待ちに戻ったページ
+    if ((focus.kind === 'review' || focus.kind === 'next') && p.error_message) {
+      $panel.append(new OO.ui.MessageWidget({ type: 'warning', label: p.error_message }).$element.addClass('nb-review__error'));
+    }
     if (focus.kind === 'editing' && p.error_message) {
       $panel.append(new OO.ui.MessageWidget({ type: 'warning', label: p.error_message }).$element.addClass('nb-review__error'));
     }
@@ -494,7 +503,7 @@
     $review.empty().append($panel);
 
     // 取得済みのDiffはcompareCacheから返るため、パネルを作り直してもaction=compareは再実行されない
-    loadCompare(p.id)
+    loadCompare(p)
       .then((html) => $diff.empty().append(diffTable(html)))
       .catch((e) => $diff.empty().append(new OO.ui.MessageWidget({ type: 'error', label: '差分の取得に失敗しました: ' + e.message }).$element));
   }
