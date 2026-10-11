@@ -485,10 +485,18 @@
   const botreqParam = new URLSearchParams(location.search).get('botreq');
   const botreqThreadId = botreqParam && botreqParam.startsWith('h-') ? botreqParam : null;
   let botreqLink = null; // { threadId, name }
+  // 着手時に botreq.js（または Bot作業依頼の画面）が作業記録に書いた Bot の要約。紐づけている間は、アカウントを切り替えても要約欄に残す
+  let botreqSummary = null;
   const $botreqLinkBox = $('<div>');
 
+  /**
+   * タスクを依頼に紐づける（null で外す）。link.botSummary があれば要約欄に入れる。
+   * link.botSummary が undefined（複製元のタスクの紐づけ等）のときは、要約欄には触れない。
+   */
   function setBotreqLink(link) {
     botreqLink = link && link.threadId ? { threadId: link.threadId, name: link.name || '' } : null;
+    botreqSummary = botreqLink && link.botSummary ? link.botSummary : null;
+    if (botreqSummary) editSummaryWidget.setValue(botreqSummary);
     $botreqLinkBox.empty();
     if (!botreqLink) return;
     const unlinkBtn = new OO.ui.ButtonWidget({ label: '紐づけない', framed: false, flags: ['destructive'] });
@@ -504,6 +512,21 @@
     });
     message.$label.append(unlinkBtn.$element);
     $botreqLinkBox.append(message.$element);
+    if (link.botSummary !== undefined) {
+      $botreqLinkBox.append(
+        new OO.ui.MessageWidget({
+          type: botreqSummary ? 'success' : 'warning',
+          inline: true,
+          label: botreqSummary
+            ? $('<span>').append('要約欄に、作業記録の要約を入れました: ', $('<code>').text(botreqSummary))
+            : $('<span>').append(
+                'この依頼はまだ着手の記録が無いため、要約欄は変えていません（',
+                $('<a>').attr({ href: '/botreq', target: '_blank' }).text('Bot作業依頼の画面'),
+                'または botreq.js で着手すると、要約が作られます）。'
+              ),
+        }).$element
+      );
+    }
   }
 
   function renderBotreqProposals(proposals, topicProgress) {
@@ -534,6 +557,13 @@
           '提案 #' + (p.index + 1) + (p.proposal ? '（' + p.proposal + '）' : '（提案先の記載なし）')
         )
       );
+      if (p.request) {
+        $card.append(
+          $('<div>').addClass('nb-botreq-proposal-request').text(
+            '依頼: ' + p.request.name + (p.request.botSummary ? '（要約欄: ' + p.request.botSummary + '）' : '（未着手のため要約なし）')
+          )
+        );
+      }
       const $pairList = $('<div>').css('margin', '6px 0');
       p.pairs.forEach((pair) => {
         const $row = $('<div>').css({ fontFamily: 'monospace', fontSize: '0.9em' });
@@ -577,6 +607,8 @@
               toLabel: pair.toLabel,
             })
           );
+        // 提案が書かれた依頼にタスクを紐づけ、着手時に作った Bot の要約を要約欄に入れる
+        if (p.request && (!botreqLink || botreqLink.threadId !== p.request.threadId || p.request.botSummary)) setBotreqLink(p.request);
         C.toast(supportedCount + '件のルールを追加しました。内容を確認してから送信してください。');
         rules[rules.length - 1].$card[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
@@ -644,7 +676,7 @@
     const review = defaults.reviewSettings || {};
     botFlagWidget.setSelected(edit.botFlag !== false);
     minorEditWidget.setSelected(edit.minorEdit !== false);
-    editSummaryWidget.setValue(edit.editSummary || '');
+    editSummaryWidget.setValue(botreqSummary || edit.editSummary || '');
     editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
     linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'nullEdit');
     modeWidget.setValue(review.mode || 'auto');

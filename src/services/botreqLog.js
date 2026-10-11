@@ -120,6 +120,16 @@ function findLogSection(content, threadId) {
   };
 }
 
+/**
+ * 作業記録の節から、着手時に作った Bot の編集の要約（「* 要約欄 - <code><nowiki>…</nowiki></code>」）を取り出す。
+ * @returns {string|null}
+ */
+function extractBotSummary(core) {
+  const m = String(core || '').match(/^\* 要約欄 - (?:<code>)?(?:<nowiki>)?(.*?)(?:<\/nowiki>)?(?:<\/code>)?[ \t]*$/m);
+  const summary = m && m[1].trim();
+  return summary || null;
+}
+
 /** {{利用者の投稿記録リンク}} を、新しい順に perLink 件ずつ並べる。contribs は新しい順。 */
 function contributionLinks(user, contribs, perLink = 5000) {
   const links = [];
@@ -333,6 +343,7 @@ module.exports = {
   buildStartSection,
   logSectionBounds,
   findLogSection,
+  extractBotSummary,
   contributionLinks,
   buildCompleteSection,
   completeComment,

@@ -15,23 +15,44 @@ const {
 
 // Wikipedia:Bot作業依頼 から {{リンク修正依頼/改名}} を検出・パースして返す（owner専用）。
 // 検出結果はプレビューのみで、キューへの投入はタスク作成画面で操作者が明示的に行う（仕様書7章）。
-// ?threadId=h-… を付けると、その依頼の節の中の {{リンク修正依頼/改名}} だけを返す（Bot作業依頼の画面から来たとき。フェーズ13）。
+/**
+ * 依頼ごとに {{リンク修正依頼/改名}} を取り出し、各提案に依頼（threadId・name・着手時に作った Bot の要約 botSummary）を付ける。
+ * 依頼の節に入っていない呼び出しは含めない。
+ */
+function proposalsByRequest(requests) {
+  const proposals = [];
+  for (const r of requests) {
+    for (const p of parseBotreqTemplates(r.text)) {
+      proposals.push({ ...p, index: proposals.length, request: { threadId: r.threadId, name: r.name, botSummary: r.botSummary, logTitle: r.logTitle } });
+    }
+  }
+  return proposals;
+}
+
+// 各提案に、それが書かれた依頼と、着手時に作った Bot の要約を付けて返す（フェーズ13）。
+// ?threadId=h-… を付けると、その依頼の提案だけを返し、request にその依頼を入れる（Bot作業依頼の画面から来たとき）。
+// 依頼ごとの情報を取れない場合（運用者アカウントでログインできない等）は、従来どおりページ全体から依頼なしで返す。
 router.get('/api/botreq/proposals', requireRole('owner'), async (req, res, next) => {
   try {
     const threadId = typeof req.query.threadId === 'string' && req.query.threadId ? req.query.threadId : null;
-    const [{ wikitext, revid }, { wikitext: topicListWikitext, timestamp: topicListTimestamp }, request] = await Promise.all([
+    const [{ wikitext, revid }, { wikitext: topicListWikitext, timestamp: topicListTimestamp }, requests] = await Promise.all([
       fetchBotreqWikitext(),
       fetchBotreqWikitext(BOTREQ_TOPIC_LIST_TITLE),
-      threadId ? botreqDesk.requestSection(threadId) : null,
+      botreqDesk.requestSections({ threadId }).catch((err) => {
+        if (threadId) throw err;
+        console.error('[botreq] 依頼ごとの情報を取れないため、ページ全体から取り込みます:', err.message);
+        return null;
+      }),
     ]);
     // REDIRECT_TARGET は取得時点の解決先を確定させて表示する（取り込むかは操作者が判断する）
-    const proposals = await resolveRedirectTargets(parseBotreqTemplates(request ? request.text : wikitext));
+    const proposals = await resolveRedirectTargets(requests ? proposalsByRequest(requests) : parseBotreqTemplates(wikitext));
+    const request = threadId && requests ? requests[0] : null;
     res.json({
       revid,
       proposals,
       topicProgress: parseBotreqTopicList(topicListWikitext),
       topicListTimestamp,
-      request: request ? { threadId: request.threadId, name: request.name } : null,
+      request: request ? { threadId: request.threadId, name: request.name, botSummary: request.botSummary, logTitle: request.logTitle } : null,
     });
   } catch (err) {
     sendDeskError(res, next, err);
@@ -112,3 +133,4 @@ router.post('/api/botreq/save', requireRole('owner'), async (req, res, next) => 
 
 module.exports = router;
 module.exports.sendDeskError = sendDeskError;
+module.exports.proposalsByRequest = proposalsByRequest;
