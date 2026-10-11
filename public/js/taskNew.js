@@ -70,8 +70,12 @@
     { data: 100, label: 'Portal (100)' },
   ];
 
+  // 複製・取り込みで、カードを作るときの名前空間の初期値（addRuleCard が最初の描画の間だけ設定する）
+  let namespacePrefill;
+
   function buildNamespaceField(defaultSelected, help) {
-    const widget = new OO.ui.CheckboxMultiselectInputWidget({ options: NAMESPACE_OPTIONS, value: defaultSelected || [] });
+    const initial = namespacePrefill !== undefined ? namespacePrefill || [] : defaultSelected || [];
+    const widget = new OO.ui.CheckboxMultiselectInputWidget({ options: NAMESPACE_OPTIONS, value: initial });
     const field = new OO.ui.FieldLayout(widget, {
       label: '名前空間（未選択=全名前空間）',
       align: 'top',
@@ -94,11 +98,12 @@
   const $rulesContainer = $('<div>');
   const ruleCountLabel = new OO.ui.LabelWidget({ label: '' });
 
-  function addStepRow(rule) {
+  function addStepRow(rule, initial) {
     const id = ++stepSeq;
-    const patternWidget = new OO.ui.TextInputWidget({ placeholder: '正規表現（例: プタリン・ジャヤ・スタジアム）' });
-    const flagsWidget = new OO.ui.TextInputWidget({ placeholder: 'flags', value: 'g' });
-    const replacementWidget = new OO.ui.TextInputWidget({ placeholder: '置換後（例: ペタリン・ジャヤ・スタジアム）' });
+    const step0 = initial || {};
+    const patternWidget = new OO.ui.TextInputWidget({ placeholder: '正規表現（例: プタリン・ジャヤ・スタジアム）', value: step0.pattern || '' });
+    const flagsWidget = new OO.ui.TextInputWidget({ placeholder: 'flags', value: step0.flags || 'g' });
+    const replacementWidget = new OO.ui.TextInputWidget({ placeholder: '置換後（例: ペタリン・ジャヤ・スタジアム）', value: step0.replacement || '' });
     const removeBtn = new OO.ui.ButtonWidget({ icon: 'trash', flags: ['destructive'], framed: false, title: 'このステップを削除' });
 
     const $row = $('<div>').addClass('nb-step-row');
@@ -120,16 +125,19 @@
   }
 
   /** targetType(custom用)に応じた入力欄一式を構築する。 */
-  function buildCustomTargetArea(rule) {
+  function buildCustomTargetArea(rule, initial) {
+    const ts = initial || {};
     const $area = $('<div>');
-    const sourceTypeWidget = new OO.ui.DropdownInputWidget({ options: CUSTOM_TARGET_SOURCE_TYPES, value: 'manualList' });
+    const sourceTypeWidget = new OO.ui.DropdownInputWidget({ options: CUSTOM_TARGET_SOURCE_TYPES, value: ts.type || 'manualList' });
     const titlesWidget = new OO.ui.MultilineTextInputWidget({
       placeholder: '対象ページ名を1行に1つ（例: 利用者:Nanona15dobato/sandbox）',
       rows: 3,
+      value: (ts.titles || []).join('\n'),
     });
-    const categoryWidget = new OO.ui.TextInputWidget({ placeholder: '例: 日本の橋（Category:は省略可）' });
-    const pageWidget = new OO.ui.TextInputWidget({ placeholder: '例: プタリン・ジャヤ・スタジアム' });
-    const queryWidget = new OO.ui.TextInputWidget({ placeholder: '例: insource:/旧テンプレ/' });
+    const categoryWidget = new OO.ui.TextInputWidget({ placeholder: '例: 日本の橋（Category:は省略可）', value: ts.category || '' });
+    const pageWidget = new OO.ui.TextInputWidget({ placeholder: '例: プタリン・ジャヤ・スタジアム', value: ts.page || '' });
+    const queryWidget = new OO.ui.TextInputWidget({ placeholder: '例: insource:/旧テンプレ/', value: ts.query || '' });
+    if (initial) namespacePrefill = ts.namespaces === undefined ? undefined : ts.namespaces;
     const ns = buildNamespaceField(null, 'category/backlinks/embeddedin/regexSearchで使用');
 
     const $dynamic = $('<div>');
@@ -210,7 +218,7 @@
         rule.customSteps = [];
         const $stepsContainer = $('<div>');
         rule.$stepsContainer = $stepsContainer;
-        const targetArea = buildCustomTargetArea(rule);
+        const targetArea = buildCustomTargetArea(rule, prefill && prefill.templateType === 'custom' ? prefill.targetSource : undefined);
         const addStepBtn = new OO.ui.ButtonWidget({ label: 'ステップを追加', icon: 'add', framed: false });
         addStepBtn.on('click', () => addStepRow(rule));
 
@@ -220,7 +228,8 @@
           $('<div>').css('margin', '4px 0').append(addStepBtn.$element),
           targetArea.$element
         );
-        addStepRow(rule);
+        const initialSteps = prefill && prefill.templateType === 'custom' && prefill.steps && prefill.steps.length ? prefill.steps : [undefined];
+        initialSteps.forEach((step) => addStepRow(rule, step));
 
         rule.getConfig = () => ({
           templateType: 'custom',
@@ -300,7 +309,9 @@
           ),
           ns.$element
         );
-        const bothSchemesWidget = new OO.ui.CheckboxInputWidget({ selected: true });
+        const bothSchemesWidget = new OO.ui.CheckboxInputWidget({
+          selected: prefill && prefill.bothSchemes !== undefined ? Boolean(prefill.bothSchemes) : true,
+        });
         $body.append(
           new OO.ui.FieldLayout(bothSchemesWidget, {
             label: 'http:// と https:// の両方の旧URLを付け替える',
@@ -347,7 +358,7 @@
         );
         let fixLinksWidget = null;
         if (type === 'categoryRename') {
-          fixLinksWidget = new OO.ui.CheckboxInputWidget({ selected: false });
+          fixLinksWidget = new OO.ui.CheckboxInputWidget({ selected: Boolean(prefill && prefill.fixCategoryLinks) });
           $body.append(
             new OO.ui.FieldLayout(fixLinksWidget, {
               label: '「Category:旧」の記述も置換する',
@@ -431,7 +442,10 @@
 
     $card.append($cardHeader, new OO.ui.FieldLayout(typeWidget, { label: '種別', align: 'top' }).$element, $body);
 
+    // 最初の描画だけ、複製元・取り込み元の名前空間を初期値にする（種別を変えたら各種別の既定値）
+    namespacePrefill = prefill && Object.prototype.hasOwnProperty.call(prefill, 'namespaces') ? prefill.namespaces : undefined;
     renderBody();
+    namespacePrefill = undefined;
     rules.push(rule);
     $rulesContainer.append($card);
     renumberRules();
@@ -823,11 +837,58 @@
   );
 
   renderModeFields();
-  addRuleCard();
-  C.fetchJson('/api/bot-accounts/defaults')
+
+  // ===== タスクの複製（フェーズ12）: /tasks/new?from=タスクID =====
+  const duplicateFrom = Number(new URLSearchParams(location.search).get('from')) || null;
+
+  /** 複製元のタスクの設定をフォームに入れる（アカウントの既定値を読み込んだあとに呼ぶ）。 */
+  function applyDuplicate(task) {
+    const config = task.config_json || {};
+    const edit = config.editSettings || {};
+    const review = config.reviewSettings || {};
+    if (config.account) accountWidget.setValue(config.account);
+    botFlagWidget.setSelected(edit.botFlag !== false);
+    minorEditWidget.setSelected(edit.minorEdit !== false);
+    editSummaryWidget.setValue(edit.editSummary || '');
+    editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
+    linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'nullEdit');
+    modeWidget.setValue(review.mode || 'auto');
+    if (review.autoWaitSeconds !== undefined) autoWaitWidget.setValue(Number(review.autoWaitSeconds));
+    if (review.manualTimeoutHours !== undefined) manualTimeoutWidget.setValue(Number(review.manualTimeoutHours));
+    onFailureWidget.setValue(config.onFailure || 'pause');
+    renderModeFields();
+    (config.replacements || [])
+      .filter((r) => r.templateType !== 'revertEdits')
+      .forEach((r) => {
+        const copy = Object.assign({}, r);
+        delete copy.forceTargets; // 失敗ページの再試行タスクを複製したときは、元のルールの対象取得に戻す
+        addRuleCard(copy);
+      });
+    if (rules.length === 0) addRuleCard();
+    dirty = false;
+    C.toast('タスク #' + task.id + ' の設定を読み込みました。内容を確認してから作成してください。');
+  }
+
+  if (!duplicateFrom) addRuleCard();
+  const defaultsLoaded = C.fetchJson('/api/bot-accounts/defaults')
     .then((defaults) => {
       accountDefaults = Object.fromEntries(defaults.map((item) => [item.account, item]));
       applyAccountDefaults(accountWidget.getValue());
     })
     .catch((e) => C.toast('アカウントデフォルト設定の取得に失敗しました: ' + e.message, 'error'));
+  if (duplicateFrom) {
+    Promise.all([C.fetchJson('/api/tasks/' + duplicateFrom), defaultsLoaded])
+      .then(([task]) => {
+        // アカウントを切り替えると既定値が読み込まれるため、先にアカウントだけ切り替えてから他の値を入れる
+        if (task.config_json && task.config_json.account) {
+          accountWidget.setValue(task.config_json.account);
+          applyAccountDefaults(task.config_json.account);
+        }
+        applyDuplicate(task);
+      })
+      .catch((e) => {
+        C.toast('複製元のタスクを読み込めませんでした: ' + e.message, 'error');
+        if (rules.length === 0) addRuleCard();
+      });
+  }
 })();

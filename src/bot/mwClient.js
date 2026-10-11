@@ -176,6 +176,19 @@ class MediaWikiBotClient {
   }
 
   /**
+   * 指定した版の本文を取得する（一括取り消しで、編集前の版に戻すために使う）。
+   * @param {number} revid
+   * @returns {Promise<string|null>} 版が無い・本文を読めない（版の削除等）場合は null
+   */
+  async getRevisionContent(revid) {
+    const res = await this.request({ action: 'query', prop: 'revisions', revids: String(revid), rvprop: 'content', rvslots: 'main' });
+    const page = res.query && res.query.pages && res.query.pages[0];
+    const rev = page && page.revisions && page.revisions[0];
+    if (!rev || !rev.slots || !rev.slots.main || rev.slots.main.texthidden || typeof rev.slots.main.content !== 'string') return null;
+    return rev.slots.main.content;
+  }
+
+  /**
    * ページを編集する。basetimestamp/starttimestampを必ず指定し、
    * 準備後に他の利用者が編集していた場合はMediaWiki側が editconflict を
    * 返すようにする（仕様書9.2節 手順4）。

@@ -38,6 +38,7 @@
 | `POST /api/tasks/:id/cancel` | 中止（待機中・実行中・一時停止のみ） |
 | `POST /api/tasks/:id/resume` | 再開（一時停止・緊急停止・期限切れのみ） |
 | `POST /api/tasks/:id/retry-failed` | 失敗ページだけの再試行タスクを作る |
+| `POST /api/tasks/:id/revert` | 編集の一括取り消しタスクを作る（`{"editSummary", "mode": "auto"\|"manual", "autoWaitSeconds", "manualTimeoutHours"}`。実行中・待機中は `409 not_revertable`、編集が無ければ `409 nothing_to_revert`） |
 
 権限はすべてオーナーです。
 
@@ -78,6 +79,7 @@
 | メソッド・パス | 内容 |
 |---|---|
 | `GET /api/edit-log?task_id=&page_title=&status=&limit=` | 編集ログの検索（`status` は `edited`/`failed`、`limit` は最大200） |
+| `GET /api/edit-log.csv?task_id=&page_title=&status=` | 編集ログのCSV（同じ条件で最大10000件。UTF-8・BOMつき） |
 | `GET /api/botreq/proposals` | Bot作業依頼の `{{リンク修正依頼/改名}}` の分類結果と topic list の進捗 |
 | `GET /api/bot-accounts/defaults` | Botアカウントごとの既定値 |
 | `PUT /api/bot-accounts/:account/defaults` | 既定値の保存 |
