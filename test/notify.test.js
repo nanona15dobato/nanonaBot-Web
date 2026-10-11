@@ -117,3 +117,14 @@ test('notify: Fromが無ければメールは送らず、メール送信の失�
       assert.equal(await notify({ event: 'failed', title: 'x', mailTransport }), false);
     })
   ));
+
+test('notifyDetailed: テスト送信（event=test）は通知する種類の絞り込みに関係なく送り、通知先ごとの結果を返す', async () => {
+  const { notifyDetailed } = require('../src/services/notify');
+  const result = await notifyDetailed({
+    event: 'test',
+    title: 'テスト',
+    settings: { webhookUrl: 'https://hooks.example/abc', mailTo: '', mailFrom: '', events: 'failed' },
+    fetchFn: async () => ({ ok: true, status: 200 }),
+  });
+  assert.deepEqual(result, { webhook: true, mail: null });
+});

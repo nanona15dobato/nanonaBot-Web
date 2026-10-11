@@ -1074,3 +1074,13 @@ table.diff th {
   color: var(--nb-color-warning);
   font-weight: bold;
 }
+
+/* ===== 設定画面 ===== */
+.nb-setting-source {
+  font-size: 0.78em;
+  padding: 0 8px;
+  font-weight: normal;
+  vertical-align: middle;
+}
+.nb-setting-source[data-source='db'] { border-color: var(--nb-color-progressive); background: var(--nb-color-progressive-bg); }
+.nb-setting-source[data-source='none'] { color: var(--nb-color-subtle); }

@@ -146,3 +146,13 @@ CREATE TABLE IF NOT EXISTS task_warnings (
   CONSTRAINT fk_task_warnings_task
     FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 画面から変更できる運用設定（フェーズ10: 通知先など）。値が無い項目は環境変数の値を使う。
+-- 既存のDBにも、このファイルをもう一度流し込めば追加される（CREATE TABLE IF NOT EXISTS）。
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key   VARCHAR(64) NOT NULL PRIMARY KEY,
+  setting_value TEXT NULL,
+  updated_by    VARCHAR(255) NOT NULL,
+  updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                  ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

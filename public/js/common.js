@@ -72,6 +72,7 @@
     templateRename: 'テンプレート置換',
     unlinkPage: 'リンク解除',
     templateSubst: 'テンプレートのsubst化',
+    urlRename: '外部リンクの付け替え',
   };
 
   /** ウェーブ構成の説明（stage_count別） */
@@ -329,7 +330,7 @@
    * ページの共通枠を作る（上部バー・緊急停止の警告帯・ページ見出し）。
    * @param {object} params
    * @param {string} params.title - ページ見出し
-   * @param {'dashboard'|'new'|'editLog'|null} [params.active] - ナビの現在位置
+   * @param {'dashboard'|'new'|'editLog'|'settings'|null} [params.active] - ナビの現在位置
    * @param {Array<OO.ui.Widget|jQuery>} [params.actions] - 見出し右側の操作
    * @param {jQuery|Node|string} [params.subtitle]
    * @returns {{$main: jQuery, $titleLine: jQuery, user: object, isOwner: boolean}}
@@ -349,6 +350,7 @@
         { key: 'dashboard', label: 'ダッシュボード', href: '/', icon: 'home' },
         { key: 'new', label: '新規タスク', href: '/tasks/new', icon: 'add' },
         { key: 'editLog', label: '編集ログ', href: '/edit-log', icon: 'history' },
+        { key: 'settings', label: '設定', href: '/settings', icon: 'settings' },
       ].forEach((item) => {
         const btn = new OO.ui.ButtonWidget({
           label: item.label,

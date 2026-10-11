@@ -80,9 +80,16 @@ test('classifyPair: Template:プレフィックスの無いfromに対するsubst
   assert.equal(result.reason, 'subst');
 });
 
-test('classifyPair: URLペアは未対応', () => {
-  assert.equal(classifyPair('http://move.from/x', 'https://move.to/y').reason, 'URL');
-  assert.equal(classifyPair('http://a', 'http://b').type, 'unsupported');
+test('classifyPair: 両方が外部URLのペアはurlRename、片方だけURLのペアは未対応（フェーズ10）', () => {
+  assert.deepEqual(classifyPair('http://move.from/x', 'https://move.to/y'), {
+    type: 'urlRename',
+    from: 'http://move.from/x',
+    to: 'https://move.to/y',
+    rawFrom: 'http://move.from/x',
+    rawTo: 'https://move.to/y',
+  });
+  assert.equal(classifyPair('http://move.from/x', '記事').reason, 'URL');
+  assert.equal(classifyPair('記事', 'https://move.to/y').reason, 'URL');
 });
 
 test('classifyPair: アンカー・{{!}}パイプラベル付きはlinkRenameExactとして分解する（フェーズ9）', () => {
@@ -147,7 +154,7 @@ test('parseBotreqTemplates: 仕様書8章の複合例（複数ペア種別混在
   const proposals = parseBotreqTemplates(wikitext);
   assert.equal(proposals.length, 1);
   const types = proposals[0].pairs.map((p) => p.type);
-  assert.deepEqual(types, ['linkRename', 'templateRename', 'categoryRename', 'unlinkPage', 'unsupported', 'unsupported']);
+  assert.deepEqual(types, ['linkRename', 'templateRename', 'categoryRename', 'unlinkPage', 'unsupported', 'urlRename']);
 });
 
 test('parseBotreqTemplates: 複数の{{リンク修正依頼/改名}}呼び出しをすべて検出する', () => {

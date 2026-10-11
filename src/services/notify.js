@@ -1,10 +1,13 @@
 'use strict';
 
 const config = require('../config');
+const { getNotifySettings } = require('./settings');
 
 /**
  * 運用上の重要な出来事（緊急停止・タスクの停止/失敗/完了）を外部へ通知する（フェーズ9）。
  * 通知先は次の2種類で、設定されたものすべてに送る（どちらも未設定なら何もしない）。
+ *
+ * 通知先は設定画面（/settings。DBの app_settings）で変更でき、未設定の項目は環境変数の値を使う。
  *
  * - Webhook: NOTIFY_WEBHOOK_URL に Slack の Incoming Webhook または Discord の Webhook の
  *   URLを設定すると、そこへJSONをPOSTする（`text` はSlack、`content` はDiscordが読む）。
@@ -55,8 +58,8 @@ function getMailTransport() {
   return defaultMailTransport;
 }
 
-function mailRecipients() {
-  return (process.env.NOTIFY_MAIL_TO || '')
+function mailRecipients(raw) {
+  return (raw || '')
     .split(',')
     .map((address) => address.trim())
     .filter(Boolean);
@@ -91,8 +94,7 @@ async function sendMail({ from, to, subject, text, transport }) {
   }
 }
 
-function enabledEvents() {
-  const raw = process.env.NOTIFY_EVENTS;
+function enabledEvents(raw) {
   if (!raw) return new Set(ALL_EVENTS);
   return new Set(
     raw
@@ -103,21 +105,25 @@ function enabledEvents() {
 }
 
 /**
+ * 通知を送り、通知先ごとの結果を返す（設定画面のテスト送信でも使う）。
  * @param {object} params
- * @param {string} params.event - ALL_EVENTS のいずれか
+ * @param {string} params.event - ALL_EVENTS のいずれか（'test' は種類の絞り込みに関係なく送る）
  * @param {string} params.title - 1行目（メールでは件名）に出す見出し
  * @param {string} [params.message] - 詳細
  * @param {string} [params.path] - ツール内のパス（例: "/tasks/12"）。TOOL_BASE_URLと連結してリンクにする
+ * @param {object} [params.settings] - 通知設定（省略時は getNotifySettings() の値）
  * @param {typeof fetch} [params.fetchFn] - テスト用
  * @param {{sendMail: Function}} [params.mailTransport] - テスト用
- * @returns {Promise<boolean>} いずれかの通知先へ送れたらtrue
+ * @returns {Promise<{webhook: boolean|null, mail: boolean|null}>} 未設定の通知先は null
  */
-async function notify({ event, title, message, path, fetchFn = fetch, mailTransport }) {
-  const webhookUrl = process.env.NOTIFY_WEBHOOK_URL;
-  const mailTo = mailRecipients();
-  const mailFrom = process.env.NOTIFY_MAIL_FROM;
+async function notifyDetailed({ event, title, message, path, settings, fetchFn = fetch, mailTransport }) {
+  const s = settings || (await getNotifySettings());
+  const webhookUrl = s.webhookUrl;
+  const mailTo = mailRecipients(s.mailTo);
+  const mailFrom = s.mailFrom;
   const useMail = mailTo.length > 0 && Boolean(mailFrom);
-  if ((!webhookUrl && !useMail) || !enabledEvents().has(event)) return false;
+  const result = { webhook: null, mail: null };
+  if ((!webhookUrl && !useMail) || (event !== 'test' && !enabledEvents(s.events).has(event))) return result;
 
   const lines = [`[NanonaBot Tool] ${title}`];
   if (message) lines.push(message);
@@ -125,21 +131,26 @@ async function notify({ event, title, message, path, fetchFn = fetch, mailTransp
   let text = lines.join('\n');
   if (text.length > MAX_MESSAGE_LENGTH) text = `${text.slice(0, MAX_MESSAGE_LENGTH)}…`;
 
-  const sends = [];
-  if (webhookUrl) sends.push(sendWebhook(webhookUrl, text, fetchFn));
-  if (useMail) {
-    sends.push(
-      sendMail({
-        from: mailFrom,
-        to: mailTo,
-        subject: `[NanonaBot Tool] ${title}`,
-        text,
-        transport: mailTransport || getMailTransport(),
-      })
-    );
+  const [webhookOk, mailOk] = await Promise.all([
+    webhookUrl ? sendWebhook(webhookUrl, text, fetchFn) : null,
+    useMail
+      ? sendMail({ from: mailFrom, to: mailTo, subject: `[NanonaBot Tool] ${title}`, text, transport: mailTransport || getMailTransport() })
+      : null,
+  ]);
+  result.webhook = webhookOk;
+  result.mail = mailOk;
+  return result;
+}
+
+/** 通知を送る。いずれかの通知先へ送れたらtrue（例外は投げない）。 */
+async function notify(params) {
+  try {
+    const result = await notifyDetailed(params);
+    return Boolean(result.webhook || result.mail);
+  } catch (err) {
+    console.error('[notify] 通知の送信に失敗しました:', (err && err.message) || err);
+    return false;
   }
-  const results = await Promise.all(sends);
-  return results.some(Boolean);
 }
 
 const TASK_STATUS_NOTICES = {
@@ -172,4 +183,4 @@ async function notifyTaskStatus(task, status, { detail, fetchFn, mailTransport }
   });
 }
 
-module.exports = { notify, notifyTaskStatus, ALL_EVENTS };
+module.exports = { notify, notifyDetailed, notifyTaskStatus, ALL_EVENTS };

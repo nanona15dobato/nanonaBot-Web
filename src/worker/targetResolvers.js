@@ -120,6 +120,48 @@ async function resolveEmbeddedIn({ template, namespaces }) {
 }
 
 /**
+ * 外部リンク（URL）を含むページ一覧を取得する（フェーズ10: 外部リンクの付け替え）。
+ * list=exturlusage は「プロトコルを除いたURLの前方一致」で検索する。継続パラメータの名前が
+ * MediaWikiのバージョンで異なる（euoffset / eucontinue）ため、返された continue をそのまま次に渡す。
+ * @param {object} params
+ * @param {string} params.url - 例: "http://old.example.org/path"
+ * @param {number[]|null} [params.namespaces]
+ */
+async function resolveExtUrlUsage({ url, namespaces }) {
+  const match = /^(https?):\/\/(.+)$/i.exec(String(url).trim());
+  if (!match) throw new Error(`外部リンクのURLが不正です: ${url}`);
+  const results = [];
+  const seen = new Set();
+  let cont = {};
+  do {
+    const data = await apiGet({
+      action: 'query',
+      list: 'exturlusage',
+      euprotocol: match[1].toLowerCase(),
+      euquery: match[2],
+      euprop: 'title',
+      eulimit: String(PAGE_LIMIT),
+      eunamespace: namespaceParam(namespaces),
+      ...cont,
+    });
+    for (const item of (data.query && data.query.exturlusage) || []) {
+      // 1ページに同じURLが複数あると同じページが複数回返るため、ページ単位にまとめる
+      if (seen.has(item.title)) continue;
+      seen.add(item.title);
+      results.push({ title: item.title, namespace: item.ns });
+    }
+    cont = data.continue ? Object.fromEntries(Object.entries(data.continue).filter(([k]) => k !== 'continue')) : null;
+  } while (cont && results.length < MAX_RESULTS);
+
+  if (cont && results.length >= MAX_RESULTS) {
+    const truncated = results.slice(0, MAX_RESULTS);
+    truncated.truncated = true;
+    return truncated;
+  }
+  return results;
+}
+
+/**
  * CirrusSearchのinsource:正規表現検索で対象ページを取得する。
  * 仕様書4章の方針どおり、APIエラー（結果過多・タイムアウト等）は例外にせず
  * { results: [], error: message } を返して呼び出し側が処理を継続できるようにする。
@@ -180,5 +222,6 @@ module.exports = {
   resolveBacklinks,
   resolveEmbeddedIn,
   resolveRegexSearch,
+  resolveExtUrlUsage,
   resolveTargetSource,
 };

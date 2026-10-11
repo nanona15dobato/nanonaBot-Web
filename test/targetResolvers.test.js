@@ -10,6 +10,7 @@ const {
   resolveEmbeddedIn,
   resolveRegexSearch,
   MAX_RESULTS,
+  resolveExtUrlUsage,
 } = require('../src/worker/targetResolvers');
 
 test('namespaceParam: null/未指定はundefined（全名前空間）、配列はパイプ区切り', () => {
@@ -162,4 +163,33 @@ test('fetchList: 上限未満で取り終えた場合は印を付けない', asy
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('resolveExtUrlUsage: プロトコルを分けて外部リンク検索し、返された継続パラメータを次に渡してページ単位にまとめる', async () => {
+  const originalFetch = global.fetch;
+  const requests = [];
+  global.fetch = async (url) => {
+    const params = Object.fromEntries(new URL(String(url)).searchParams.entries());
+    requests.push(params);
+    const body =
+      requests.length === 1
+        ? { query: { exturlusage: [{ title: 'A', ns: 0 }, { title: 'A', ns: 0 }] }, continue: { euoffset: 500, continue: '||' } }
+        : { query: { exturlusage: [{ title: 'B', ns: 0 }] } };
+    return { ok: true, status: 200, json: async () => body };
+  };
+  try {
+    const results = await resolveExtUrlUsage({ url: 'http://old.example.org/path', namespaces: [0] });
+    assert.deepEqual(results, [{ title: 'A', namespace: 0 }, { title: 'B', namespace: 0 }]);
+    assert.equal(requests[0].euprotocol, 'http');
+    assert.equal(requests[0].euquery, 'old.example.org/path');
+    assert.equal(requests[0].eunamespace, '0');
+    assert.equal(requests[1].euoffset, '500');
+    assert.equal(requests[1].continue, undefined);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('resolveExtUrlUsage: http(s)で始まらないURLは例外にする', async () => {
+  await assert.rejects(() => resolveExtUrlUsage({ url: 'ftp://x', namespaces: null }), /URLが不正/);
 });

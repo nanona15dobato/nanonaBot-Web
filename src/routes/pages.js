@@ -65,6 +65,17 @@ router.get('/tasks/:id', (req, res) => {
   );
 });
 
+// 設定画面（owner専用。フェーズ10: 通知先の設定・テスト送信）
+router.get('/settings', (req, res) => {
+  const role = req.session && req.session.role;
+  const username = req.session && req.session.username;
+
+  if (!role) return res.send(loginPageHtml());
+  if (role !== 'owner') return res.status(403).send(deniedPageHtml(username));
+
+  res.send(renderShell({ title: '設定', script: 'settings.js', initialData: { username, role } }));
+});
+
 // 編集ログ画面（owner専用。フェーズ6）
 router.get('/edit-log', (req, res) => {
   const role = req.session && req.session.role;
