@@ -393,3 +393,59 @@ test('MediaWikiBotClient: anonymous はログイン情報なしで作れ、ロ�
   await assert.rejects(anon.login(), /ログインできません/);
   assert.throws(() => new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', userAgent: 'Test/1.0' }), /必須/);
 });
+
+// ---- 運用者アカウントの確認（保存が権限エラーになったときの切り分け） ----
+
+function accountClient({ rights = ['read', 'edit', 'createpage'], editAllowed = true, failEdit = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    async request(params) {
+      calls.push(params);
+      if (params.meta === 'userinfo') return { query: { userinfo: { name: 'Nanona15dobato', groups: ['*', 'user', 'autoconfirmed'], rights } } };
+      if (params.intestactions) {
+        return {
+          query: {
+            pages: params.titles.split('|').map((title) => ({
+              title,
+              actions: { edit: editAllowed ? [] : [{ code: 'badaccess-group0', text: 'You are not allowed to execute the action you have requested.' }] },
+            })),
+          },
+        };
+      }
+      if (params.action === 'edit') {
+        if (failEdit) {
+          throw Object.assign(new Error('denied'), { mwCode: 'permissiondenied', mwInfo: 'You are not allowed to execute the action you have requested.', apiAction: 'edit' });
+        }
+        return { edit: { result: 'Success', newrevid: 1 } };
+      }
+      throw new Error('unexpected ' + JSON.stringify(params));
+    },
+    async getCsrfToken() {
+      return 't';
+    },
+    async withSessionRetry(fn) {
+      return fn();
+    },
+  };
+}
+
+test('checkAccount: ログインした利用者・このセッションの権限・ページごとの可否を返す', async () => {
+  const ok = await desk.checkAccount({ client: accountClient(), titles: [LOG_TITLE] });
+  assert.equal(ok.userName, 'Nanona15dobato');
+  assert.deepEqual(ok.rights, { edit: true, createpage: true });
+  assert.deepEqual(ok.pages, [{ title: LOG_TITLE, exists: true, action: 'edit', allowed: true, reasons: [] }]);
+
+  const ng = await desk.checkAccount({ client: accountClient({ rights: ['read'], editAllowed: false }), titles: [LOG_TITLE] });
+  assert.deepEqual(ng.rights, { edit: false, createpage: false });
+  assert.equal(ng.pages[0].allowed, false);
+  assert.match(desk.describeAccountCheck(ng, LOG_TITLE), /edit・createpage が無い.*編集: 不可/);
+});
+
+test('save: 権限エラーのときは、アカウントの確認結果をエラーに添える', async () => {
+  const client = accountClient({ rights: ['read'], editAllowed: false, failEdit: true });
+  await assert.rejects(
+    desk.save({ title: LOG_TITLE, text: 't', summary: 's', baseTimestamp: 'b' }, { client }),
+    (err) => err.mwCode === 'permissiondenied' && /ログイン: Nanona15dobato.*edit・createpage が無い/.test(err.diagnosis)
+  );
+});

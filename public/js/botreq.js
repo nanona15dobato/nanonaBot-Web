@@ -13,11 +13,12 @@
   const LOG_LABELS = { none: 'なし', started: '着手済み', finished: '完了済み' };
 
   const reloadBtn = new OO.ui.ButtonWidget({ label: '読み込み直す', icon: 'reload' });
+  const accountBtn = new OO.ui.ButtonWidget({ label: '運用者アカウントを確認', icon: 'userAvatar', framed: false });
   const page = C.initPage({
     title: 'Bot作業依頼',
     active: 'botreq',
     subtitle: $('<span>').append('依頼への着手・完了・解決を記録します（', C.wikiLink(REQUEST_PAGE), '）'),
-    actions: [reloadBtn],
+    actions: [accountBtn, reloadBtn],
   });
   if (!page.isOwner) {
     page.$main.append(C.buildEmergencyOnlyPanel(user));
@@ -159,6 +160,37 @@
   }
 
   reloadBtn.on('click', load);
+
+  /** 保存に使う運用者アカウントの確認（ログインした名前・このセッションの権限・ページごとに編集が許されるか）。 */
+  accountBtn.on('click', () =>
+    C.withBusy(accountBtn, 'アカウントの確認', async () => {
+      const r = await C.fetchJson('/api/botreq/account-check');
+      const yes = (ok) => $('<strong>').css('color', ok ? 'var(--nb-color-success)' : 'var(--nb-color-error)').text(ok ? 'あり' : 'なし');
+      const $body = $('<div>').addClass('nb-botreq-account').append(
+        $('<p>').append('ツールの設定（', $('<code>').text('BOTREQ_ACCOUNT=' + r.account), '）で、保存に使うアカウントです。'),
+        $('<table>').addClass('nb-table').append(
+          $('<tbody>').append(
+            $('<tr>').append($('<th>').text('BotPassword のログイン名'), $('<td>').text(r.loginName || '（未設定）')),
+            $('<tr>').append($('<th>').text('ログインした利用者'), $('<td>').text(r.userName || '（ログインしていない）')),
+            $('<tr>').append($('<th>').text('グループ'), $('<td>').text((r.groups || []).join('、'))),
+            $('<tr>').append($('<th>').text('このセッションの edit'), $('<td>').append(yes(r.rights.edit))),
+            $('<tr>').append($('<th>').text('このセッションの createpage'), $('<td>').append(yes(r.rights.createpage))),
+            r.pages.map((p) =>
+              $('<tr>').append(
+                $('<th>').text(p.title + (p.action === 'create' ? '（作成）' : '（編集）')),
+                $('<td>').append(p.allowed ? yes(true).text('可') : $('<span>').append(yes(false).text('不可'), ' ', p.reasons.join(' / ')))
+              )
+            )
+          )
+        ),
+        $('<p>').addClass('nb-section__hint').text(
+          'edit が「なし」の場合は、このログイン名の BotPassword に「既存ページの編集」の権限がありません（作業記録を新しく作るには「ページの作成・編集・移動」も必要）。' +
+            'タスクで使っている BotPassword とログイン名が違わないかも確かめてください。'
+        )
+      );
+      await OO.ui.alert($body, { title: '運用者アカウントの確認', size: 'large' });
+    })
+  );
   filterWidget.on('choose', render);
 
   // ---------- 操作 ----------

@@ -69,10 +69,12 @@ function describeWikiError(err) {
   const where = err.apiAction ? `ウィキの API（action=${err.apiAction}）で失敗しました` : 'ウィキで失敗しました';
   const code = err.mwCode ? ` [${err.mwCode}]` : '';
   let message = `${where}${code}: ${err.mwInfo || err.message}`;
+  if (err.diagnosis) message += ` — ${err.diagnosis}`;
   const permission = PERMISSION_CODES.has(err.mwCode) || /not allowed|permission/i.test(err.mwInfo || '');
   if (permission && ['edit', 'discussiontoolsedit'].includes(err.apiAction)) {
     message +=
-      ' — 運用者アカウントの BotPassword に「既存ページの編集」と「ページの作成・編集・移動」の権限（Special:BotPasswords）があるか確認してください。';
+      ' — 「このセッションの権限」に edit が無い場合は、ツールに設定した BotPassword（上のログイン名）の権限（Special:BotPasswords）が足りません。' +
+      'タスクで使っている BotPassword と同じか、画面右上の「運用者アカウントを確認」で確かめてください。';
   }
   return message;
 }
@@ -97,6 +99,15 @@ function sendDeskError(res, next, err) {
   }
   return next(err);
 }
+
+// 運用者アカウントの確認（ログインした名前・権限・編集するページで編集が許されるか）
+router.get('/api/botreq/account-check', requireRole('owner'), async (req, res, next) => {
+  try {
+    res.json(await botreqDesk.checkAccount());
+  } catch (err) {
+    sendDeskError(res, next, err);
+  }
+});
 
 // 依頼の一覧（状態・依頼者・作業記録の有無）
 router.get('/api/botreq/requests', requireRole('owner'), async (req, res, next) => {
