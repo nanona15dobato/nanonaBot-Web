@@ -345,9 +345,25 @@ test('prepare(complete): 依頼にタスクを紐づけていなければ、内�
   assert.ok(!plan.notes.some((n) => /紐づけていない/.test(n.text)));
 });
 
-test('requestSection: その依頼の節の本文（小節を含まない）', async () => {
-  const r = await desk.requestSection(THREAD, { client: fakeClient() });
+test('extractBotSummary: 作業記録の「要約欄」から Bot の要約を取り出す', () => {
+  assert.equal(
+    L.extractBotSummary('== x ==\n* 要約欄 - <code><nowiki>Bot:[[利用者:nanonaBot/依頼/2026年#botreq-n-1|作業依頼]] - 依頼</nowiki></code>\n* 依頼 - …'),
+    'Bot:[[利用者:nanonaBot/依頼/2026年#botreq-n-1|作業依頼]] - 依頼'
+  );
+  assert.equal(L.extractBotSummary('* 要約欄 - Bot: 手書きの要約 '), 'Bot: 手書きの要約');
+  assert.equal(L.extractBotSummary('* 要約欄 - '), null);
+  assert.equal(L.extractBotSummary('* 依頼 - …'), null);
+});
+
+test('requestSections: 依頼ごとの本文（小節を含まない）と、作業記録の Bot の要約', async () => {
+  const log = LOG.replace('* 要約欄 - …', '* 要約欄 - <code><nowiki>Bot:[[利用者:nanonaBot/依頼/2026年#botreq-n-2|作業依頼]] - バイオハザード</nowiki></code>');
+  const [r] = await desk.requestSections({ client: fakeClient({ log }), threadId: THREAD });
   assert.equal(r.name, 'バイオハザード');
   assert.ok(r.text.startsWith('== バイオハザード =='));
-  await assert.rejects(desk.requestSection('x', { client: fakeClient() }), (err) => err.status === 400);
+  assert.equal(r.botSummary, 'Bot:[[利用者:nanonaBot/依頼/2026年#botreq-n-2|作業依頼]] - バイオハザード');
+  assert.equal(r.logTitle, LOG_TITLE);
+  const [unstarted] = await desk.requestSections({ client: fakeClient({ log: null }) });
+  assert.equal(unstarted.botSummary, null);
+  await assert.rejects(desk.requestSections({ client: fakeClient(), threadId: 'x' }), (err) => err.status === 400);
+  await assert.rejects(desk.requestSections({ client: fakeClient(), threadId: 'h-無い-20260101000000' }), (err) => err.status === 404);
 });

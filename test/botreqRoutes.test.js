@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sendDeskError } = require('../src/routes/botreq');
+const { sendDeskError, proposalsByRequest } = require('../src/routes/botreq');
 
 function fakeRes() {
   return {
@@ -40,4 +40,17 @@ test('sendDeskError: 画面に理由を出せるエラーは JSON で返し、�
   let passed = null;
   sendDeskError(fakeRes(), (err) => (passed = err), new TypeError('bug'));
   assert.ok(passed instanceof TypeError);
+});
+
+test('proposalsByRequest: 提案に、書かれた依頼と Bot の要約を付け、通し番号を振り直す', () => {
+  const t = (from, to) => `{{リンク修正依頼/改名|提案=[[ノート:X]]|${from}|${to}}}`;
+  const proposals = proposalsByRequest([
+    { threadId: 'h-A-20260101000000', name: 'A', text: '== A ==\n' + t('旧1', '新1'), botSummary: 'Bot: A', logTitle: 'L' },
+    { threadId: 'h-B-20260102000000', name: 'B', text: '== B ==\n' + t('旧2', '新2') + '\n' + t('旧3', '新3'), botSummary: null, logTitle: 'L' },
+  ]);
+  assert.deepEqual(proposals.map((p) => [p.index, p.request.name, p.request.botSummary, p.pairs[0].from]), [
+    [0, 'A', 'Bot: A', '旧1'],
+    [1, 'B', null, '旧2'],
+    [2, 'B', null, '旧3'],
+  ]);
 });

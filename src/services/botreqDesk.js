@@ -147,6 +147,24 @@ async function getRecentContribs(client, user, n) {
   return list.slice(0, n);
 }
 
+/** 依頼の年ごとの作業記録のページを取得する（Map: 年 → getPage の結果）。 */
+async function loadLogs(client, requests) {
+  const years = [...new Set(requests.filter((r) => r.requestedAt).map((r) => L.jstYear(r.requestedAt)))];
+  const logs = new Map();
+  await Promise.all(
+    years.map(async (year) => {
+      logs.set(year, await client.getPage(`${config.botreq.logPrefix}${year}年`));
+    })
+  );
+  return logs;
+}
+
+/** その依頼の作業記録の節（無ければ null）。 */
+function logSectionOf(logs, request) {
+  const log = request.requestedAt ? logs.get(L.jstYear(request.requestedAt)) : null;
+  return log && log.exists ? L.findLogSection(log.wikitext, request.threadId) : null;
+}
+
 /**
  * 依頼の一覧（状態・依頼者・作業記録の有無）。
  * @returns {Promise<{revid: number, requests: object[]}>}
@@ -154,21 +172,13 @@ async function getRecentContribs(client, user, n) {
 async function listRequests({ client, query } = {}) {
   client = client || (await defaultClient());
   const [{ page, requests }, tasks] = await Promise.all([loadRequestPage(client), linkedTasks(query || defaultQuery)]);
-  const years = [...new Set(requests.filter((r) => r.requestedAt).map((r) => L.jstYear(r.requestedAt)))];
-  const logs = new Map();
-  await Promise.all(
-    years.map(async (year) => {
-      const title = `${config.botreq.logPrefix}${year}年`;
-      logs.set(year, await client.getPage(title));
-    })
-  );
+  const logs = await loadLogs(client, requests);
   return {
     revid: page.revid,
     logPrefix: config.botreq.logPrefix,
     requests: requests.map((r) => {
       const { status, label } = L.detectStatus(r.ownText);
-      const log = r.requestedAt ? logs.get(L.jstYear(r.requestedAt)) : null;
-      const logSection = log && log.exists ? L.findLogSection(log.wikitext, r.threadId) : null;
+      const logSection = logSectionOf(logs, r);
       return {
         threadId: r.threadId,
         name: r.name,
@@ -461,15 +471,32 @@ async function renderDiff(title, oldText, newText, { client } = {}) {
 }
 
 /**
- * 1つの依頼の節の本文（小節を含まない）。タスク作成画面で、その依頼の {{リンク修正依頼/改名}} だけを取り込むのに使う。
- * @returns {Promise<{threadId: string, name: string, text: string}>}
+ * 依頼ごとの節の本文（小節を含まない）と、着手時に作った Bot の編集の要約。
+ * タスク作成画面で {{リンク修正依頼/改名}} を依頼ごとに取り込み、タスクを依頼に紐づけて要約欄を入れるのに使う。
+ * threadId を指定すると、その依頼だけを返す（見つからなければ 404）。
+ * @returns {Promise<Array<{threadId: string, name: string, text: string, botSummary: string|null, logTitle: string|null}>>}
  */
-async function requestSection(threadId, { client } = {}) {
-  if (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId)) {
+async function requestSections({ client, threadId } = {}) {
+  if (threadId !== undefined && threadId !== null && (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId))) {
     throw Object.assign(new Error('依頼の節の ID が正しくありません'), { status: 400 });
   }
-  const { request } = await findRequest(client || (await defaultClient()), threadId);
-  return { threadId, name: request.name, text: request.ownText };
+  client = client || (await defaultClient());
+  const { requests } = await loadRequestPage(client);
+  const picked = threadId ? requests.filter((r) => r.threadId === threadId) : requests;
+  if (threadId && !picked.length) {
+    throw Object.assign(new Error('この依頼の節が見つかりません。Bot作業依頼の画面を読み込み直してください。'), { status: 404 });
+  }
+  const logs = await loadLogs(client, picked);
+  return picked.map((r) => {
+    const logSection = logSectionOf(logs, r);
+    return {
+      threadId: r.threadId,
+      name: r.name,
+      text: r.ownText,
+      botSummary: logSection ? L.extractBotSummary(logSection.core) : null,
+      logTitle: r.requestedAt ? L.logTitleFor(config.botreq.logPrefix, r.requestedAt) : null,
+    };
+  });
 }
 
-module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSection };
+module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections };
