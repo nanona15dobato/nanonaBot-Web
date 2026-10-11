@@ -581,7 +581,15 @@
     $pageList.empty();
     $pageMore.empty();
     if (state.pages.length === 0) {
-      $pageList.append(C.emptyState('対象ページはまだありません。ワーカーが対象ページを取得するとここに表示されます。'));
+      const finished = state.task && ['completed', 'completed_with_failures', 'failed', 'cancelled'].includes(state.task.status);
+      const purged = finished && Number(state.task.progress_total) > 0;
+      $pageList.append(
+        C.emptyState(
+          purged
+            ? '終わってから保持期間が過ぎたため、ページの作業データは削除しました。編集結果は「このタスクの編集ログを見る」で確認できます。'
+            : '対象ページはまだありません。ワーカーが対象ページを取得するとここに表示されます。'
+        )
+      );
       return;
     }
     if (filtered.length === 0) {

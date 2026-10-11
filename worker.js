@@ -7,9 +7,25 @@ const { runTask } = require('./src/worker/taskRunner');
 const { isEmergencyStopped } = require('./src/worker/emergencyStop');
 const { writeTaskLogSafely } = require('./src/worker/taskLog');
 const { notifyTaskStatus } = require('./src/services/notify');
+const { cleanupOldTaskPages } = require('./src/worker/cleanup');
 
 const POLL_INTERVAL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS || 1000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// 終わったタスクの作業データ（task_pages）を消す処理の実行間隔（タスクとタスクの合間に実行する）
+const CLEANUP_INTERVAL_MS = Number(process.env.CLEANUP_INTERVAL_MS || 60 * 60 * 1000);
+let lastCleanupAt = 0;
+
+async function cleanupIfDue() {
+  if (Date.now() - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
+  lastCleanupAt = Date.now();
+  try {
+    const { tasks, pages } = await cleanupOldTaskPages({ retentionDays: config.taskPagesRetentionDays });
+    if (tasks > 0) console.log(`[worker] 保持期間を過ぎた作業データを削除しました（タスク${tasks}件、ページ${pages}件）`);
+  } catch (err) {
+    // 掃除の失敗でタスクの処理は止めない（次の周期でやり直す）
+    console.error('[worker] 作業データの削除に失敗しました:', err.message || err);
+  }
+}
 
 /**
  * ワーカーのメインループ。1キュー1タスクの原則により、
@@ -47,6 +63,8 @@ async function mainLoop() {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      await cleanupIfDue();
+
       if (await isEmergencyStopped()) {
         await sleep(POLL_INTERVAL_MS);
         continue;
