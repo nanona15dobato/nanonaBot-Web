@@ -4,7 +4,14 @@ const express = require('express');
 const router = express.Router();
 
 const { requireRole } = require('../middleware/auth');
-const { getNotifySettings, saveNotifySettings } = require('../services/settings');
+const {
+  getNotifySettings,
+  saveNotifySettings,
+  getWorkerSettings,
+  saveWorkerSettings,
+  WORKER_KEYS,
+  WORKER_HEARTBEAT_KEY,
+} = require('../services/settings');
 const { notifyDetailed, ALL_EVENTS } = require('../services/notify');
 
 /**
@@ -99,5 +106,99 @@ router.post('/api/settings/notify/test', requireRole('owner'), async (req, res, 
   }
 });
 
+// ===== ワーカーの動作設定（フェーズ11） =====
+
+/**
+ * ワーカーの動作設定の入力チェック（純粋関数）。null は「環境変数・既定値に戻す」。
+ * @returns {{values: object, errors: string[]}}
+ */
+function validateWorkerSettings(body) {
+  const errors = [];
+  const values = {};
+  const input = body || {};
+  for (const [name, key] of Object.entries(WORKER_KEYS)) {
+    if (!(name in input)) continue;
+    if (input[name] === null) {
+      values[name] = null;
+      continue;
+    }
+    const n = Number(input[name]);
+    if (!Number.isInteger(n) || n < key.min || n > key.max) {
+      errors.push(`${key.label}は ${key.min}〜${key.max} の整数にしてください。`);
+    } else {
+      values[name] = n;
+    }
+  }
+  return { values, errors };
+}
+
+function workerSettingsResponse(settings) {
+  const limits = Object.fromEntries(Object.entries(WORKER_KEYS).map(([name, k]) => [name, { min: k.min, max: k.max, def: k.def, env: k.env }]));
+  const { sources, ...values } = settings;
+  return { values, sources, limits };
+}
+
+router.get('/api/settings/worker', requireRole('owner'), async (req, res, next) => {
+  try {
+    res.json(workerSettingsResponse(await getWorkerSettings({ fresh: true })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/api/settings/worker', requireRole('owner'), async (req, res, next) => {
+  try {
+    const { values, errors } = validateWorkerSettings(req.body);
+    if (errors.length > 0) return res.status(400).json({ error: 'invalid_settings', errors });
+    await saveWorkerSettings(values, req.session.username);
+    console.warn(`[settings] ワーカーの動作設定が ${req.session.username} により変更されました: ${JSON.stringify(values)}`);
+    res.json(workerSettingsResponse(await getWorkerSettings({ fresh: true })));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ===== ワーカーの稼働状況（フェーズ11） =====
+
+/** ハートビートの経過秒数がこれを超えたら「応答していない」とみなす */
+const WORKER_STALE_SECONDS = 60;
+
+router.get('/api/system/worker', requireRole('owner'), async (req, res, next) => {
+  try {
+    let rows = [];
+    try {
+      // eslint-disable-next-line global-require
+      const { pool } = require('../db');
+      [rows] = await pool.query(
+        `SELECT setting_value, TIMESTAMPDIFF(SECOND, updated_at, NOW()) AS age_seconds
+         FROM app_settings WHERE setting_key = ?`,
+        [WORKER_HEARTBEAT_KEY]
+      );
+    } catch (e) {
+      return res.json({ known: false, reason: 'no_table' }); // app_settings 未作成
+    }
+    if (!rows[0]) return res.json({ known: false, reason: 'never' });
+    let heartbeat = {};
+    try {
+      heartbeat = JSON.parse(rows[0].setting_value) || {};
+    } catch (e) {
+      heartbeat = {};
+    }
+    const ageSeconds = Number(rows[0].age_seconds);
+    res.json({
+      known: true,
+      alive: ageSeconds <= WORKER_STALE_SECONDS,
+      ageSeconds,
+      staleAfterSeconds: WORKER_STALE_SECONDS,
+      state: heartbeat.state || null,
+      taskId: heartbeat.taskId || null,
+      startedAt: heartbeat.startedAt || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
 module.exports.validateNotifySettings = validateNotifySettings;
+module.exports.validateWorkerSettings = validateWorkerSettings;

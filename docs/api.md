@@ -66,6 +66,7 @@
 | `namespaces` | 名前空間番号の配列。`null` は全名前空間、省略時は種別ごとの既定 |
 | `fromAnchor` / `toAnchor` / `fromLabel` / `toLabel` | `linkRenameExact` の節・表示名（省略可） |
 | `fixCategoryLinks` | `categoryRename` で「Category:旧」の記述も置換する |
+| `bothSchemes` | `urlRename` で http:// と https:// の両方の旧URLを付け替える |
 | `targetSource.type` | `manualList`（`titles`）/ `category`（`category`）/ `backlinks`・`embeddedin`（`page`）/ `regexSearch`（`query`） |
 | `editIntervalSeconds` | 5以上 |
 | `linkUpdateMethod` | `nullEdit` / `purge` |
@@ -83,5 +84,8 @@
 | `GET /api/settings/notify` | 通知設定（値と出どころ） |
 | `PUT /api/settings/notify` | 通知設定の保存（項目を `null` にすると環境変数の値に戻す） |
 | `POST /api/settings/notify/test` | テスト通知（`{"webhook": true/false/null, "mail": true/false/null}`） |
+| `GET /api/settings/worker` | ワーカーの動作設定（値・出どころ・範囲） |
+| `PUT /api/settings/worker` | ワーカーの動作設定の保存（項目を `null` にすると環境変数・既定値に戻す） |
+| `GET /api/system/worker` | ワーカーの稼働状況（`{"known", "alive", "ageSeconds", "state", "taskId"}`） |
 
 権限はすべてオーナーです。

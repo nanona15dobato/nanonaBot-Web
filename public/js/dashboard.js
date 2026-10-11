@@ -95,6 +95,47 @@
     return $card;
   }
 
+  // ---- ワーカーの稼働状況（フェーズ11） ----
+  const $workerNotice = $('<div>');
+  let worker = null;
+  const WORKER_STATE_LABELS = { idle: '待機中', running: '処理中', emergency_stopped: '緊急停止中' };
+
+  function workerStatCard() {
+    let value = '不明';
+    let modifier = null;
+    let title = 'ワーカーの稼働状況はまだ記録されていません';
+    if (worker && worker.known) {
+      if (!worker.alive) {
+        value = '応答なし';
+        modifier = 'error';
+      } else {
+        value = (WORKER_STATE_LABELS[worker.state] || worker.state || '稼働中') + (worker.taskId ? ' #' + worker.taskId : '');
+        modifier = worker.state === 'running' ? 'progressive' : null;
+      }
+      title = '最終確認: ' + worker.ageSeconds + '秒前';
+    }
+    const $card = statCard('ワーカー', value, modifier, null).attr('title', title).addClass('nb-stat--worker');
+    if (worker && worker.known && worker.alive && worker.taskId) {
+      $card.attr('title', title + '（クリックでタスクを開く）').off('click').on('click', () => {
+        location.href = '/tasks/' + worker.taskId;
+      });
+    }
+    return $card;
+  }
+
+  function renderWorkerNotice() {
+    $workerNotice.empty();
+    if (!worker || !worker.known || worker.alive) return;
+    $workerNotice.append(
+      new OO.ui.MessageWidget({
+        type: 'error',
+        label:
+          'ワーカーからの応答が' + worker.ageSeconds + '秒ありません。タスクは処理されません。' +
+          'Toolforgeで `toolforge jobs list` と `toolforge jobs logs` を確認し、必要ならワーカーのジョブを再起動してください。',
+      }).$element
+    );
+  }
+
   // ---- 要対応 ----
   const attentionSection = C.section({
     title: '要対応',
@@ -114,7 +155,7 @@
   const $list = $('<div>').addClass('nb-task-list').append(C.loading());
   listSection.$body.append($listTools, $list);
 
-  page.$main.append($stats, attentionSection.$element, listSection.$element);
+  page.$main.append($workerNotice, $stats, attentionSection.$element, listSection.$element);
 
   let tasks = [];
 
@@ -144,6 +185,7 @@
     const count = (statuses) => tasks.filter((t) => statuses.includes(t.status)).length;
     const awaitingPages = attention.reduce((sum, t) => sum + (Number(t.awaiting_review_count) || 0), 0);
     $stats.empty().append(
+      workerStatCard(),
       statCard('実行中', count(['running']), 'progressive', 'active'),
       statCard('待機中', count(['queued']), null, 'active'),
       statCard('要対応', attention.length, attention.length > 0 ? 'warning' : null, 'attention'),
@@ -167,8 +209,14 @@
   let lastErrorShown = false;
   C.poll(async () => {
     try {
-      const [taskList, attention] = await Promise.all([C.fetchJson('/api/tasks'), C.fetchJson('/api/tasks/attention')]);
+      const [taskList, attention, workerStatus] = await Promise.all([
+        C.fetchJson('/api/tasks'),
+        C.fetchJson('/api/tasks/attention'),
+        C.fetchJson('/api/system/worker').catch(() => null),
+      ]);
       tasks = taskList;
+      worker = workerStatus;
+      renderWorkerNotice();
       renderStats(attention);
       renderAttention(attention);
       renderList();

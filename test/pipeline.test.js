@@ -812,7 +812,8 @@ test('isRetryableEditError / retryDelayMs: 再試行する失敗の判定と、�
     const saved = process.env.EDIT_RETRY_BASE_MS;
     process.env.EDIT_RETRY_BASE_MS = '10000';
     try {
-      assert.deepEqual([1, 2, 3].map(retryDelayMs), [10000, 20000, 40000]);
+      assert.deepEqual([1, 2, 3].map((n) => retryDelayMs(n)), [10000, 20000, 40000]);
+      assert.deepEqual([1, 2].map((n) => retryDelayMs(n, 5000)), [5000, 10000]);
     } finally {
       process.env.EDIT_RETRY_BASE_MS = saved;
     }

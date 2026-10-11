@@ -723,6 +723,7 @@
       if (rule.to) fact('改名先', rule.templateType === 'linkRenameExact' ? linkSpec(rule.to, rule.toAnchor, rule.toLabel) : rule.to);
       if (rule.namespaces !== undefined) fact('名前空間', rule.namespaces === null ? '全名前空間' : rule.namespaces.join(', '));
       if (rule.fixCategoryLinks) fact('追加', '「Category:旧」の記述も置換');
+      if (rule.bothSchemes) fact('追加', 'http:// と https:// の両方の旧URLを付け替え');
       if (rule.forceTargets) fact('再試行対象', rule.forceTargets.length + '件');
     }
     return $rule.append($dl);

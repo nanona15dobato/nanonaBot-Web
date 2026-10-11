@@ -126,10 +126,25 @@ async function resolveEmbeddedIn({ template, namespaces }) {
  * @param {object} params
  * @param {string} params.url - 例: "http://old.example.org/path"
  * @param {number[]|null} [params.namespaces]
+ * @param {boolean} [params.bothSchemes] - http と https の両方で検索して統合する（フェーズ11）
  */
-async function resolveExtUrlUsage({ url, namespaces }) {
+async function resolveExtUrlUsage({ url, namespaces, bothSchemes = false }) {
   const match = /^(https?):\/\/(.+)$/i.exec(String(url).trim());
   if (!match) throw new Error(`外部リンクのURLが不正です: ${url}`);
+  if (bothSchemes) {
+    const [http, https] = await Promise.all(
+      ['http', 'https'].map((scheme) => resolveExtUrlUsage({ url: `${scheme}://${match[2]}`, namespaces }))
+    );
+    const seen = new Set();
+    const merged = [];
+    for (const p of [...http, ...https]) {
+      if (seen.has(p.title)) continue;
+      seen.add(p.title);
+      merged.push(p);
+    }
+    if (http.truncated || https.truncated) merged.truncated = true;
+    return merged;
+  }
   const results = [];
   const seen = new Set();
   let cont = {};

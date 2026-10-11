@@ -193,3 +193,21 @@ test('resolveExtUrlUsage: プロトコルを分けて外部リンク検索し、
 test('resolveExtUrlUsage: http(s)で始まらないURLは例外にする', async () => {
   await assert.rejects(() => resolveExtUrlUsage({ url: 'ftp://x', namespaces: null }), /URLが不正/);
 });
+
+test('resolveExtUrlUsage: bothSchemes指定時は http と https の両方で検索して重複なく統合する', async () => {
+  const originalFetch = global.fetch;
+  const protocols = [];
+  global.fetch = async (url) => {
+    const params = Object.fromEntries(new URL(String(url)).searchParams.entries());
+    protocols.push(params.euprotocol);
+    const items = params.euprotocol === 'http' ? [{ title: 'A', ns: 0 }, { title: 'B', ns: 0 }] : [{ title: 'B', ns: 0 }, { title: 'C', ns: 0 }];
+    return { ok: true, status: 200, json: async () => ({ query: { exturlusage: items } }) };
+  };
+  try {
+    const results = await resolveExtUrlUsage({ url: 'https://old.example/path', namespaces: [0], bothSchemes: true });
+    assert.deepEqual(results.map((r) => r.title), ['A', 'B', 'C']);
+    assert.deepEqual(protocols.sort(), ['http', 'https']);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

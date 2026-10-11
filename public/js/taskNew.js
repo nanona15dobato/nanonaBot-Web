@@ -300,11 +300,21 @@
           ),
           ns.$element
         );
+        const bothSchemesWidget = new OO.ui.CheckboxInputWidget({ selected: true });
+        $body.append(
+          new OO.ui.FieldLayout(bothSchemesWidget, {
+            label: 'http:// と https:// の両方の旧URLを付け替える',
+            align: 'inline',
+            help: '改名元が http://旧 でも、https://旧 で書かれたリンクも同じ旧URLとして付け替えます（サイトの移転ではどちらの書き方も残っていることが多いため既定でオン）。',
+            helpInline: true,
+          }).$element
+        );
         rule.getConfig = () => ({
           templateType: 'urlRename',
           from: fromWidget.getValue().trim(),
           to: toWidget.getValue().trim(),
           namespaces: namespacesOrNull(ns.widget),
+          bothSchemes: bothSchemesWidget.isSelected(),
         });
       } else if (type === 'linkRename' || type === 'linkRename2') {
         const ns = buildNamespaceField(

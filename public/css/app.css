@@ -360,7 +360,7 @@ button.nb-chip:focus-visible {
 
 .nb-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -1084,3 +1084,14 @@ table.diff th {
 }
 .nb-setting-source[data-source='db'] { border-color: var(--nb-color-progressive); background: var(--nb-color-progressive-bg); }
 .nb-setting-source[data-source='none'] { color: var(--nb-color-subtle); }
+
+/* ワーカーの稼働状況（フェーズ11） */
+.nb-stat--error { border-left-color: var(--nb-color-error); background: var(--nb-color-error-bg); }
+.nb-stat--worker .nb-stat__value { font-size: 1.3em; }
+
+@media (max-width: 900px) {
+  .nb-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .nb-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
