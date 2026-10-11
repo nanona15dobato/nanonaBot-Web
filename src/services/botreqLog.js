@@ -160,19 +160,28 @@ function insertResolved(sectionText) {
   return lines.join('\n');
 }
 
+// 節を閉じるテンプレート（Hmbox の resolved / stale）。リダイレクト名も含む
+const CLOSING_TEMPLATES = [
+  { re: /\{\{\s*(?:(?:Template|テンプレート)\s*:\s*)?(?:解決済み|[Rr]esolved)\s*[|}]/, label: '解決済み' },
+  { re: /\{\{\s*(?:(?:Template|テンプレート)\s*:\s*)?済み\s*[|}]/, label: '済み' },
+  { re: /\{\{\s*(?:(?:Template|テンプレート)\s*:\s*)?(?:失効|[Ss]tale)\s*[|}]/, label: '失効' },
+];
+
 /**
  * 依頼の節のウィキテキストから状態を読む。
- * {{解決済み}} があれば解決済み、無ければ最後の {{BOTREQ|…}} で判断する。
+ * {{解決済み}}・{{済み}}・{{失効}}（とそのリダイレクト）があれば閉じられた依頼（resolved。label はテンプレート名）、
+ * 無ければ最後の {{BOTREQ|…}} で判断する。
  * @returns {{status: 'open'|'started'|'completed'|'resolved'|'other', label: string|null}}
  */
 function detectStatus(sectionText) {
-  const text = String(sectionText || '');
-  if (/\{\{\s*解決済み/.test(text)) return { status: 'resolved', label: '解決済み' };
+  const text = String(sectionText || '').replace(/<!--[\s\S]*?-->/g, '');
+  const closing = CLOSING_TEMPLATES.find((t) => t.re.test(text));
+  if (closing) return { status: 'resolved', label: closing.label };
   const all = [...text.matchAll(/\{\{\s*BOTREQ\s*\|\s*([^|}]+?)\s*[|}]/gi)];
   if (!all.length) return { status: 'open', label: null };
   const last = all[all.length - 1][1];
-  if (/完了|済/.test(last)) return { status: 'completed', label: last };
-  if (/着手/.test(last)) return { status: 'started', label: last };
+  if (/完了|済|^done$/i.test(last)) return { status: 'completed', label: last };
+  if (/着手|作業中|準備中|調査中|再開/.test(last)) return { status: 'started', label: last };
   return { status: 'other', label: last };
 }
 

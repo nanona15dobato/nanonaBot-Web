@@ -29,11 +29,13 @@ class MediaWikiBotClient {
    * @param {string} params.username - Special:BotPasswords発行のログイン名（"User@BotName"形式）
    * @param {string} params.password - Special:BotPasswords発行のボットパスワード
    * @param {string} params.userAgent
+   * @param {boolean} [params.anonymous] - ログインせずに公開情報だけを読むクライアントにする（username/password 不要。編集はできない）
    */
-  constructor({ apiUrl, username, password, userAgent }) {
-    if (!apiUrl || !username || !password) {
+  constructor({ apiUrl, username, password, userAgent, anonymous = false }) {
+    if (!apiUrl || (!anonymous && (!username || !password))) {
       throw new Error('MediaWikiBotClient: apiUrl/username/passwordは必須です');
     }
+    this.anonymous = anonymous;
     this.apiUrl = apiUrl;
     this.username = username;
     this.password = password;
@@ -86,6 +88,7 @@ class MediaWikiBotClient {
     if (!res.ok) {
       const err = new Error(`MediaWiki APIへのHTTPリクエストが失敗しました (${res.status})`);
       err.httpStatus = res.status;
+      err.apiAction = params.action || null;
       const retryAfter = typeof res.headers.get === 'function' ? Number(res.headers.get('retry-after')) : NaN;
       if (Number.isFinite(retryAfter) && retryAfter > 0) err.retryAfterSeconds = retryAfter;
       throw err;
@@ -95,6 +98,7 @@ class MediaWikiBotClient {
       const err = new Error(`MediaWiki APIエラー [${data.error.code}]: ${data.error.info}`);
       err.mwCode = data.error.code;
       err.mwInfo = data.error.info;
+      err.apiAction = params.action || null; // どの API で失敗したか（画面にエラーの理由を出すため）
       const retryAfter = typeof res.headers.get === 'function' ? Number(res.headers.get('retry-after')) : NaN;
       if (Number.isFinite(retryAfter) && retryAfter > 0) err.retryAfterSeconds = retryAfter;
       throw err;
@@ -104,6 +108,7 @@ class MediaWikiBotClient {
 
   /** ログイン（Special:BotPasswords方式）。再ログイン時は古いセッションCookieを捨ててからやり直す。 */
   async login() {
+    if (this.anonymous) throw new Error('ログインしない読み取り専用のクライアントでは、ログインできません');
     this.cookieJar = new CookieJar();
     this.loggedIn = false;
     const tokenRes = await this.request({ action: 'query', meta: 'tokens', type: 'login' });

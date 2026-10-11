@@ -367,3 +367,29 @@ test('requestSections: 依頼ごとの本文（小節を含まない）と、作
   await assert.rejects(desk.requestSections({ client: fakeClient(), threadId: 'x' }), (err) => err.status === 400);
   await assert.rejects(desk.requestSections({ client: fakeClient(), threadId: 'h-無い-20260101000000' }), (err) => err.status === 404);
 });
+
+test('detectStatus: {{済み}}・{{失効}} とリダイレクト（Resolved・Stale）も閉じられた依頼にする', () => {
+  assert.deepEqual(L.detectStatus('== a ==\n{{済み|--署名}}\n{{BOTREQ|着手}}'), { status: 'resolved', label: '済み' });
+  assert.deepEqual(L.detectStatus('{{失効|--署名}}'), { status: 'resolved', label: '失効' });
+  assert.deepEqual(L.detectStatus('{{Resolved|x}}'), { status: 'resolved', label: '解決済み' });
+  assert.deepEqual(L.detectStatus('{{stale}}'), { status: 'resolved', label: '失効' });
+  assert.deepEqual(L.detectStatus('{{Template:解決済み|x}}'), { status: 'resolved', label: '解決済み' });
+  assert.equal(L.detectStatus('<!-- {{解決済み}} -->').status, 'open'); // コメントアウトは数えない
+  assert.equal(L.detectStatus('{{済みマーク}}').status, 'open'); // 別のテンプレート
+});
+
+test('detectStatus: BOTREQ の作業中・準備中は着手、done・作業済みは完了', () => {
+  assert.equal(L.detectStatus('{{BOTREQ|作業中}}').status, 'started');
+  assert.equal(L.detectStatus('{{BOTREQ|準備中}}').status, 'started');
+  assert.equal(L.detectStatus('{{BOTREQ|done}}').status, 'completed');
+  assert.equal(L.detectStatus('{{BOTREQ|作業済み3}}').status, 'completed');
+  assert.deepEqual(L.detectStatus('{{BOTREQ|不受理}}'), { status: 'other', label: '不受理' });
+});
+
+test('MediaWikiBotClient: anonymous はログイン情報なしで作れ、ログインはできない（読み取り専用）', async () => {
+  const { MediaWikiBotClient } = require('../src/bot/mwClient');
+  const anon = new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', userAgent: 'Test/1.0', anonymous: true });
+  assert.equal(anon.anonymous, true);
+  await assert.rejects(anon.login(), /ログインできません/);
+  assert.throws(() => new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', userAgent: 'Test/1.0' }), /必須/);
+});

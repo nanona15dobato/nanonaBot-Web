@@ -9,7 +9,7 @@
   const REQUEST_PAGE = 'Wikipedia:Bot作業依頼';
 
   const ACTION_LABELS = { start: '着手', complete: '完了', resolve: '解決' };
-  const STATUS_LABELS = { open: '未着手', started: '着手', completed: '完了', resolved: '解決済み', other: 'その他' };
+  const STATUS_LABELS = { open: '未着手', started: '着手', completed: '完了', resolved: '閉じられた依頼', other: 'その他' };
   const LOG_LABELS = { none: 'なし', started: '着手済み', finished: '完了済み' };
 
   const reloadBtn = new OO.ui.ButtonWidget({ label: '読み込み直す', icon: 'reload' });
@@ -26,7 +26,7 @@
 
   const filterWidget = new OO.ui.ButtonSelectWidget({
     items: [
-      new OO.ui.ButtonOptionWidget({ data: 'active', label: '未解決' }),
+      new OO.ui.ButtonOptionWidget({ data: 'active', label: '未解決', title: '{{解決済み}}・{{済み}}・{{失効}} の無い依頼' }),
       new OO.ui.ButtonOptionWidget({ data: 'all', label: 'すべて' }),
     ],
   });
@@ -53,7 +53,8 @@
   }
 
   function statusBadge(r) {
-    const label = r.status === 'other' ? r.statusLabel : STATUS_LABELS[r.status];
+    // 閉じたテンプレート名（解決済み・済み・失効）や「作業中」などはそのまま出す。完了（完了・済…）は「完了」にそろえる
+    const label = (r.status !== 'completed' && r.statusLabel) || STATUS_LABELS[r.status];
     return $('<span>').addClass('nb-status-badge nb-status-badge--botreq-' + r.status).text(label);
   }
 
