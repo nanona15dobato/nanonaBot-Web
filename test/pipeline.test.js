@@ -956,7 +956,7 @@ test('runStagePipeline: 一括取り消しは、そのタスクの編集が最�
   const [revertable, changedLater] = [...db.taskPages.values()];
   assert.equal(revertable.status, 'edited');
   assert.equal(changedLater.status, 'skipped');
-  assert.match(changedLater.error_message, /後に他の編集があるため取り消していません/);
+  assert.match(changedLater.error_message, /後に他の編集がある.*ため取り消していません/);
 });
 
 test('editOnePage: 一括取り消しで編集競合が起きたら、他の人の編集まで巻き戻さないようスキップする', async () => {
@@ -995,4 +995,102 @@ test('editOnePage: 一括取り消しで編集競合が起きたら、他の人�
   const row = [...db.taskPages.values()][0];
   assert.equal(row.status, 'skipped');
   assert.match(row.error_message, /準備後に他の編集があった/);
+});
+
+async function runRevert(db, taskId, mwClient, rule) {
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    await runStagePipeline({
+      taskId,
+      stage: 1,
+      mwClient,
+      account: 'NanonaBot',
+      replacements: [{ templateType: 'revertEdits', steps: [], ...rule }],
+      editSettings: { botFlag: true, minorEdit: true, editSummary: 'Bot: 取り消し', editIntervalSeconds: 0 },
+      reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+      onFailure: 'skipAndContinue',
+    });
+  });
+}
+
+test('一括取り消し（undo指定）: 後に他の編集があるページは、他の編集を残して統合して取り消し、統合できないページは取り消さない', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 12, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([
+    { task_id: 12, stage: 1, order_index: 0, page_title: '統合できる', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+    { task_id: 12, stage: 1, order_index: 1, page_title: '統合できない', namespace: 0, matched_rule_indices: '[0]', status: 'pending' },
+  ]);
+  const revisions = {
+    100: 'a\n[[Category:旧]]\nb\nc', 101: 'a\n[[Category:新]]\nb\nc',
+    200: 'x\n[[Category:旧]]\nz', 201: 'x\n[[Category:新]]\nz',
+  };
+  const current = {
+    // 他の人の編集はBotの編集と離れた行（間に変更の無い行がある）
+    統合できる: { revid: 105, text: 'a\n[[Category:新]]\nb\nc（他人の追記）' },
+    統合できない: { revid: 205, text: 'x\n[[Category:他人の変更]]\nz' },
+  };
+  const edits = [];
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: current[title].revid, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: current[title].text };
+    },
+    async getRevisionContent(revid) {
+      return revisions[revid] ?? null;
+    },
+    async edit(params) {
+      edits.push(params);
+      return { revid: 999, newTimestamp: '2026-08-11T09:10:05Z' };
+    },
+  };
+  await runRevert(db, 12, mwClient, {
+    useUndo: true,
+    targets: [
+      { title: '統合できる', revid: 101, baseRevid: 100, edits: [{ revid: 101, baseRevid: 100 }] },
+      { title: '統合できない', revid: 201, baseRevid: 200, edits: [{ revid: 201, baseRevid: 200 }] },
+    ],
+  });
+
+  assert.deepEqual(edits.map((e) => [e.title, e.text]), [['統合できる', 'a\n[[Category:旧]]\nb\nc（他人の追記）']]);
+  const [merged, conflicted] = [...db.taskPages.values()];
+  assert.equal(merged.status, 'edited');
+  assert.equal(conflicted.status, 'skipped');
+  assert.match(conflicted.error_message, /統合できず/);
+});
+
+test('一括取り消し: タスクの編集どうしの間に他の人の編集が挟まっていたら、undo指定が無ければその編集まで巻き戻さない', async () => {
+  const db = createFakeDb();
+  db.seedTask({ id: 13, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages([{ task_id: 13, stage: 1, order_index: 0, page_title: '間に他人の編集', namespace: 10, matched_rule_indices: '[0]', status: 'pending' }]);
+  const revisions = {
+    100: 'A\n-\nB\n-\nC',
+    110: 'A2\n-\nB\n-\nC', // タスクの1回目の編集
+    120: 'A2\n-\nB（他人）\n-\nC', // 間に他の人の編集
+    130: 'A2\n-\nB（他人）\n-\nC2', // タスクの2回目の編集
+  };
+  const edits = [];
+  const mwClient = {
+    async getPage(title) {
+      return { title, exists: true, revid: 130, baseTimestamp: '2026-08-11T09:00:00Z', startTimestamp: '2026-08-11T09:10:00Z', wikitext: revisions[130] };
+    },
+    async getRevisionContent(revid) {
+      return revisions[revid] ?? null;
+    },
+    async edit(params) {
+      edits.push(params.text);
+      return { revid: 999, newTimestamp: '2026-08-11T09:10:05Z' };
+    },
+  };
+  const target = { title: '間に他人の編集', revid: 130, baseRevid: 100, edits: [{ revid: 110, baseRevid: 100 }, { revid: 130, baseRevid: 120 }] };
+
+  // undo指定なし: 版100に戻すと他人の編集（版120）まで消えるので、取り消さない
+  await runRevert(db, 13, mwClient, { targets: [target] });
+  assert.deepEqual(edits, []);
+  const row = [...db.taskPages.values()][0];
+  assert.equal(row.status, 'skipped');
+  assert.match(row.error_message, /このタスクの編集の間に他の編集がある/);
+
+  // undo指定あり: タスクの2つの編集だけを取り除き、他人の編集は残す
+  row.status = 'pending';
+  await runRevert(db, 13, mwClient, { targets: [target], useUndo: true });
+  assert.deepEqual(edits, ['A\n-\nB（他人）\n-\nC']);
 });

@@ -22,8 +22,17 @@ test('buildRevertTargets: ページごとに、最初の編集の前の版へ戻
     { id: 4, page_title: '版なし', namespace: 0, revid: null, base_revid: 1 },
   ]);
   assert.deepEqual(targets, [
-    { title: 'Template:橋', namespace: 10, revid: 130, baseRevid: 100 },
-    { title: '記事A', namespace: 0, revid: 210, baseRevid: 200 },
+    {
+      title: 'Template:橋',
+      namespace: 10,
+      revid: 130,
+      baseRevid: 100,
+      edits: [
+        { revid: 110, baseRevid: 100 },
+        { revid: 130, baseRevid: 120 }, // 120 ≠ 110 なので、間に他の人の編集（120）が挟まっている
+      ],
+    },
+    { title: '記事A', namespace: 0, revid: 210, baseRevid: 200, edits: [{ revid: 210, baseRevid: 200 }] },
   ]);
 });
 

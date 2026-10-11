@@ -81,8 +81,16 @@ function validateRule(rule, i, errors) {
     const validTargets =
       Array.isArray(rule.targets) &&
       rule.targets.length > 0 &&
-      rule.targets.every((t) => t && typeof t.title === 'string' && Number.isInteger(t.revid) && Number.isInteger(t.baseRevid));
+      rule.targets.every(
+        (t) =>
+          t &&
+          typeof t.title === 'string' &&
+          Number.isInteger(t.revid) &&
+          Number.isInteger(t.baseRevid) &&
+          (t.edits === undefined || (Array.isArray(t.edits) && t.edits.every((e) => Number.isInteger(e.revid) && Number.isInteger(e.baseRevid))))
+      );
     if (!validTargets) errors.push(`${prefix}.targets: 取り消す編集（title・revid・baseRevid）が1件以上必要です`);
+    if (rule.useUndo !== undefined && typeof rule.useUndo !== 'boolean') errors.push(`${prefix}.useUndo: 真偽値である必要があります`);
     return;
   }
 

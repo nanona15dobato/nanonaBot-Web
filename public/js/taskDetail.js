@@ -235,13 +235,22 @@
       ],
       value: 'manual',
     });
+    const undoWidget = new OO.ui.CheckboxInputWidget({ selected: false });
     const $content = $('<div>').addClass('nb-revert-dialog').append(
       $('<p>').text(
         'このタスクが編集したページを、編集前の版に戻す新しいタスクを作ります。' +
           'このタスクの編集がまだ最新版のページだけを取り消し、後に他の人の編集があるページは取り消さずに理由つきで残します。'
       ),
       new OO.ui.FieldLayout(summaryWidget, { label: '要約欄', align: 'top' }).$element,
-      new OO.ui.FieldLayout(modeWidget, { label: '確認モード', align: 'top' }).$element
+      new OO.ui.FieldLayout(modeWidget, { label: '確認モード', align: 'top' }).$element,
+      new OO.ui.FieldLayout(undoWidget, {
+        label: '後に他の人の編集があるページも、取り消し（undo）で統合して取り消す',
+        align: 'inline',
+        help:
+          'MediaWikiの取り消しと同じ行単位の統合で、他の人の編集を残したままこのタスクの変更だけを取り除きます。' +
+          '同じ箇所が他の編集でも変わっていて統合できないページは取り消しません。統合したページは差分を確認してから承認してください（手動確認を推奨）。',
+        helpInline: true,
+      }).$element
     );
     const ok = await C.confirm($content, { title: 'タスク #' + task.id + ' の編集を一括で取り消しますか？', okLabel: '取り消しタスクを作成', destructive: true });
     if (!ok) return;
@@ -250,6 +259,7 @@
         editSummary: summaryWidget.getValue(),
         mode: modeWidget.getValue(),
         autoWaitSeconds: 0,
+        useUndo: undoWidget.isSelected(),
       });
       C.toast(result.pageCount + 'ページを対象に取り消しタスク #' + result.id + ' を作成しました。');
       location.href = '/tasks/' + result.id;
@@ -756,7 +766,13 @@
     const fact = (label, value) => $dl.append($('<dt>').text(label), $('<dd>').text(value));
     if (rule.templateType === 'revertEdits') {
       fact('取り消すタスク', '#' + rule.revertOfTaskId);
-      fact('対象', (rule.targets || []).length + 'ページ（そのタスクの編集が最新版のページだけを編集前の版に戻す）');
+      fact(
+        '対象',
+        (rule.targets || []).length +
+          (rule.useUndo
+            ? 'ページ（後に他の編集があるページも取り消し（undo）で統合して取り消す）'
+            : 'ページ（そのタスクの編集が最新版のページだけを編集前の版に戻す）')
+      );
       return $rule.append($dl);
     }
     if (rule.templateType === 'custom') {
