@@ -65,6 +65,17 @@ router.get('/tasks/:id', (req, res) => {
   );
 });
 
+// Bot作業依頼の着手・完了・解決（owner専用。フェーズ13）
+router.get('/botreq', (req, res) => {
+  const role = req.session && req.session.role;
+  const username = req.session && req.session.username;
+
+  if (!role) return res.send(loginPageHtml());
+  if (role !== 'owner') return res.status(403).send(deniedPageHtml(username));
+
+  res.send(renderShell({ title: 'Bot作業依頼', script: 'botreq.js', initialData: { username, role } }));
+});
+
 // 設定画面（owner専用。フェーズ10: 通知先の設定・テスト送信）
 router.get('/settings', (req, res) => {
   const role = req.session && req.session.role;

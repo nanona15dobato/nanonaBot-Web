@@ -1095,3 +1095,17 @@ table.diff th {
 @media (max-width: 720px) {
   .nb-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ===== Bot作業依頼（フェーズ13） ===== */
+.nb-status-badge--botreq-open { background: var(--nb-color-progressive); }
+.nb-status-badge--botreq-started { background: var(--nb-color-warning); }
+.nb-status-badge--botreq-completed { background: var(--nb-color-success); }
+.nb-status-badge--botreq-resolved,
+.nb-status-badge--botreq-other { background: #72777d; }
+.nb-botreq-actions { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.nb-botreq-sub { margin-left: 4px; color: var(--nb-color-subtle); font-size: 0.9em; }
+.nb-botreq-dialog .nb-botreq-note { margin-bottom: 8px; }
+.nb-botreq-dialog .nb-botreq-tabs { margin-top: 12px; }
+.nb-botreq-dialog .nb-botreq-render { max-height: 45vh; overflow: auto; padding: 8px; border: 1px solid var(--nb-border); border-top: 0; }
+.nb-botreq-dialog .nb-botreq-wikitext textarea { font-family: monospace, monospace; font-size: 90%; }
+.nb-botreq-dialog .nb-botreq-extra { margin-top: 12px; }

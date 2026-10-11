@@ -838,6 +838,9 @@
 
   renderModeFields();
 
+  // ===== Bot作業依頼の画面から来たとき（フェーズ13）: /tasks/new?botreq=1 で取り込みを開く =====
+  if (new URLSearchParams(location.search).get('botreq') === '1') botreqBtn.emit('click');
+
   // ===== タスクの複製（フェーズ12）: /tasks/new?from=タスクID =====
   const duplicateFrom = Number(new URLSearchParams(location.search).get('from')) || null;
 

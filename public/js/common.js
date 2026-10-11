@@ -351,6 +351,7 @@
         { key: 'dashboard', label: 'ダッシュボード', href: '/', icon: 'home' },
         { key: 'new', label: '新規タスク', href: '/tasks/new', icon: 'add' },
         { key: 'editLog', label: '編集ログ', href: '/edit-log', icon: 'history' },
+        { key: 'botreq', label: 'Bot作業依頼', href: '/botreq', icon: 'speechBubbles' },
         { key: 'settings', label: '設定', href: '/settings', icon: 'settings' },
       ].forEach((item) => {
         const btn = new OO.ui.ButtonWidget({

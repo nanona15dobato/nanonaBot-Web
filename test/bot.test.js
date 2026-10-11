@@ -314,3 +314,21 @@ test('MediaWikiBotClient: purgeWithLinkUpdateはforcelinkupdate付きでまと�
     global.fetch = originalFetch;
   }
 });
+
+test('MediaWikiBotClient: HTTP 429（リクエストが多すぎる）は Retry-After だけ待って再試行する', async () => {
+  const originalFetch = global.fetch;
+  let count = 0;
+  global.fetch = async () => {
+    count++;
+    if (count === 1) return { ok: false, status: 429, headers: { getSetCookie: () => [], get: (h) => (h === 'retry-after' ? '0.01' : null) } };
+    return { ok: true, status: 200, headers: { getSetCookie: () => [] }, json: async () => ({ query: { users: [{ editcount: 5 }] } }) };
+  };
+  try {
+    const client = new MediaWikiBotClient({ apiUrl: 'https://ja.wikipedia.org/w/api.php', username: 'X@Y', password: 'z', userAgent: 'Test/1.0' });
+    const data = await client.request({ action: 'query', list: 'users', ususers: 'A', usprop: 'editcount' });
+    assert.equal(data.query.users[0].editcount, 5);
+    assert.equal(count, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

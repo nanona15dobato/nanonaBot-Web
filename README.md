@@ -1,6 +1,6 @@
-# NanonaBot Tool（フェーズ1-12）
+# NanonaBot Tool（フェーズ1-13）
 
-Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜12実装です。
+Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜13実装です。
 
 **各画面の使い方・各動作の詳しい説明**は [`docs/`](docs/README.md) にまとめている
 （[使い方ガイド](docs/user-guide.md)・[置換ルールの種類](docs/rule-types.md)・[タスクの流れと各動作](docs/task-lifecycle.md)・
@@ -232,6 +232,15 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
   統合できないページはスキップ）
 - **タスクの複製**: タスク詳細の「複製」で、同じアカウント・ルール・設定を入れたタスク作成画面を開く
 - **編集ログのCSV書き出し**: 編集ログ画面の「CSVで書き出し」（今の検索条件で最大10000件、UTF-8・BOMつき）
+
+**フェーズ13**
+- **Bot作業依頼の着手・完了・解決**（`/botreq`、owner専用）: 依頼の一覧（状態・依頼者・作業記録の有無）から、作業記録
+  （`利用者:nanonaBot/依頼/YYYY年`）への着手の記録・完了の記録（着手からの投稿記録リンク）と、依頼の節への `{{解決済み}}` の貼付を行う。
+  保存前にプレビュー・差分・ウィキテキストで確認・修正でき、依頼への返信（`{{BOTREQ|着手}}` など）も保存と同時に投稿できる。
+  編集は運用者のアカウント（`BOTREQ_ACCOUNT`、既定 `Nanona15dobato`）で、`basetimestamp` つきで行う
+- **利用者スクリプトの OOUI 化**: 同じ操作をウィキ上で行う [`userscripts/botreq.js`](userscripts/botreq.js) を書き直した
+  （右クリックメニュー・自作の窓を OOUI のメニューとダイアログに。依頼者の取り違え・ダイアログでの修正が反映されない等の不具合を修正）
+- APIへのリクエストが HTTP 429（多すぎる）で拒否された場合も、`Retry-After` だけ待って再試行する
 
 詳しくは [`docs/`](docs/README.md) を参照。
 
@@ -526,9 +535,11 @@ src/routes/emergency.js      緊急停止API
 src/routes/tasks.js         タスクCRUD・進捗確認・承認/却下/再開・再試行・Diff取得・
                               警告一覧・編集ログ検索API
 src/routes/pages.js          HTMLページルート（/、/tasks/new、/tasks/:id、/edit-log）
-src/routes/botreq.js         BOTREQ取得API（仕様書7章）
+src/routes/botreq.js         BOTREQ取得API（仕様書7章）・着手/完了/解決のAPI（フェーズ13）
 src/services/mediawiki.js    ユーザーグループ確認・action=compareによるDiff HTML取得
 src/services/notify.js       Slack/Discord Webhook・メールへの通知（緊急停止・タスクの停止/失敗/完了。フェーズ9）
+src/services/botreqLog.js    Bot作業依頼の作業記録の書式・依頼の節の読み取り（純粋関数。フェーズ13）
+src/services/botreqDesk.js   Bot作業依頼の着手・完了・解決（一覧・保存内容の作成・保存。フェーズ13）
 src/bot/mwClient.js          MediaWiki Botクライアント（生fetch実装。ログイン/取得/編集）
 src/bot/cookieJar.js         ログインセッション保持用の簡易CookieJar
 src/bot/mwUtil.js            タイムスタンプ変換等の純粋関数
@@ -558,6 +569,8 @@ public/js/taskNew.js         タスク作成画面ロジック（8種類のtempl
 public/js/taskDetail.js      タスク詳細/Diff確認画面ロジック（ストリーミング表示・ウェーブ表示・
                               警告パネル・失敗ページ再試行ボタン）
 public/js/editLog.js         編集ログ画面ロジック（検索・フィルタ・差分リンク。フェーズ6）
+public/js/botreq.js          Bot作業依頼画面ロジック（一覧・確認ダイアログ。フェーズ13）
+userscripts/botreq.js        ウィキ上で同じ操作を行う利用者スクリプト（利用者:Nanona15dobato/script/botreq.js の元。フェーズ13）
 lib/WikitextParser.js        Wikitext解析共有ライブラリ
 scripts/check-redirect-category-template.js
                               Template:リダイレクトの所属カテゴリ 書式確認スクリプト
@@ -575,6 +588,7 @@ test/categoryWarnings.test.js Category系警告収集のテスト（構造一致
 test/redirectCategoryTemplate.test.js Template:リダイレクトの所属カテゴリの改名/除去テスト
                               （Toolforge上で取得した実際のページの呼び出し例を使用。フェーズ7）
 test/botreq.test.js          BOTREQパーサーのテスト（ユーザー提示の実例・複合例を含む全分類パターン）
+test/botreqDesk.test.js      着手・完了・解決のテスト（記録の書式・節の切り出し・ウィキはスタブ）
 ```
 
 `npm test` で全テスト（`node --test`）を実行できる。`public/js/`配下のクライアントサイドJSは、
@@ -623,5 +637,5 @@ Toolforgeのポリシー上、公開するコードはOSI承認ライセンス�
 
 ## 8. 次のフェーズ
 
-フェーズ13候補: 実環境（Toolforge/ToolsDB/jawiki）での通し確認の結果を踏まえた既定値の見直し（設定画面で調整した値を既定値に反映）、
+フェーズ14候補: 実環境（Toolforge/ToolsDB/jawiki）での通し確認の結果を踏まえた既定値の見直し（設定画面で調整した値を既定値に反映）、
 タスクの検索（ルールの改名元・改名先で探す）。
