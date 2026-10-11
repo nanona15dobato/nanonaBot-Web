@@ -15,17 +15,26 @@ const {
 
 // Wikipedia:Bot作業依頼 から {{リンク修正依頼/改名}} を検出・パースして返す（owner専用）。
 // 検出結果はプレビューのみで、キューへの投入はタスク作成画面で操作者が明示的に行う（仕様書7章）。
+// ?threadId=h-… を付けると、その依頼の節の中の {{リンク修正依頼/改名}} だけを返す（Bot作業依頼の画面から来たとき。フェーズ13）。
 router.get('/api/botreq/proposals', requireRole('owner'), async (req, res, next) => {
   try {
-    const [{ wikitext, revid }, { wikitext: topicListWikitext, timestamp: topicListTimestamp }] = await Promise.all([
+    const threadId = typeof req.query.threadId === 'string' && req.query.threadId ? req.query.threadId : null;
+    const [{ wikitext, revid }, { wikitext: topicListWikitext, timestamp: topicListTimestamp }, request] = await Promise.all([
       fetchBotreqWikitext(),
       fetchBotreqWikitext(BOTREQ_TOPIC_LIST_TITLE),
+      threadId ? botreqDesk.requestSection(threadId) : null,
     ]);
     // REDIRECT_TARGET は取得時点の解決先を確定させて表示する（取り込むかは操作者が判断する）
-    const proposals = await resolveRedirectTargets(parseBotreqTemplates(wikitext));
-    res.json({ revid, proposals, topicProgress: parseBotreqTopicList(topicListWikitext), topicListTimestamp });
+    const proposals = await resolveRedirectTargets(parseBotreqTemplates(request ? request.text : wikitext));
+    res.json({
+      revid,
+      proposals,
+      topicProgress: parseBotreqTopicList(topicListWikitext),
+      topicListTimestamp,
+      request: request ? { threadId: request.threadId, name: request.name } : null,
+    });
   } catch (err) {
-    next(err);
+    sendDeskError(res, next, err);
   }
 });
 
@@ -40,6 +49,10 @@ function sendDeskError(res, next, err) {
     return res.status(409).json({ code: 'articleexists', message: '作業記録のページが既に作成されていました。閉じて、もう一度操作してください。' });
   }
   if (err.mwCode || err.editResult) return res.status(502).json({ code: err.mwCode || null, message: err.mwInfo || err.message });
+  if (err.httpStatus) {
+    const message = err.httpStatus === 429 ? 'ウィキへのリクエストが多すぎるため断られました。少し待ってから、もう一度操作してください。' : err.message;
+    return res.status(502).json({ code: `http_${err.httpStatus}`, message });
+  }
   return next(err);
 }
 
@@ -98,3 +111,4 @@ router.post('/api/botreq/save', requireRole('owner'), async (req, res, next) => 
 });
 
 module.exports = router;
+module.exports.sendDeskError = sendDeskError;

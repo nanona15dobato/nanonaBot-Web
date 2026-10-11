@@ -481,6 +481,30 @@
 
   const botreqBtn = new OO.ui.ButtonWidget({ label: 'Bot作業依頼から取り込む', icon: 'download', title: 'Wikipedia:Bot作業依頼 の {{リンク修正依頼/改名}} を読み込みます' });
   const $botreqPanel = $('<div>');
+  // Bot作業依頼の画面から来たとき（/tasks/new?botreq=h-…）は、その依頼の提案だけを取り込み、タスクを依頼に紐づける（フェーズ13）
+  const botreqParam = new URLSearchParams(location.search).get('botreq');
+  const botreqThreadId = botreqParam && botreqParam.startsWith('h-') ? botreqParam : null;
+  let botreqLink = null; // { threadId, name }
+  const $botreqLinkBox = $('<div>');
+
+  function setBotreqLink(link) {
+    botreqLink = link && link.threadId ? { threadId: link.threadId, name: link.name || '' } : null;
+    $botreqLinkBox.empty();
+    if (!botreqLink) return;
+    const unlinkBtn = new OO.ui.ButtonWidget({ label: '紐づけない', framed: false, flags: ['destructive'] });
+    unlinkBtn.on('click', () => setBotreqLink(null));
+    const message = new OO.ui.MessageWidget({
+      type: 'notice',
+      inline: true,
+      label: $('<span>').append(
+        '依頼「',
+        $('<a>').attr({ href: '/botreq', target: '_blank' }).text(botreqLink.name || botreqLink.threadId),
+        '」のタスクとして作成します（Bot作業依頼の画面に表示され、完了時の編集の内訳の確認に使います）。 '
+      ),
+    });
+    message.$label.append(unlinkBtn.$element);
+    $botreqLinkBox.append(message.$element);
+  }
 
   function renderBotreqProposals(proposals, topicProgress) {
     $botreqPanel.empty();
@@ -566,7 +590,8 @@
     botreqBtn.setDisabled(true);
     $botreqPanel.empty().append(C.loading('Wikipedia:Bot作業依頼を読み込み中…'));
     try {
-      const data = await C.fetchJson('/api/botreq/proposals');
+      const data = await C.fetchJson('/api/botreq/proposals' + (botreqThreadId ? '?threadId=' + encodeURIComponent(botreqThreadId) : ''));
+      if (data.request) setBotreqLink(data.request);
       renderBotreqProposals(data.proposals, data.topicProgress);
     } catch (e) {
       $botreqPanel.empty();
@@ -692,6 +717,7 @@
       },
       reviewSettings,
       onFailure: onFailureWidget.getValue(),
+      botreq: botreqLink || undefined,
     };
   }
 
@@ -795,7 +821,7 @@
     hint: '上から順にルールを適用します。同じページに複数ルールが該当する場合はまとめて準備します。',
     actions: [botreqBtn],
   });
-  rulesSection.$body.append($botreqPanel, $rulesContainer, $('<div>').addClass('nb-form-actions').append(addRuleBtn.$element));
+  rulesSection.$body.append($botreqLinkBox, $botreqPanel, $rulesContainer, $('<div>').addClass('nb-form-actions').append(addRuleBtn.$element));
 
   const editSection = C.section({ title: '編集設定', hint: 'Botフラグと編集間隔は、実際の編集処理にも適用されます。', actions: [saveDefaultsBtn] });
   editSection.$body.append(
@@ -838,8 +864,8 @@
 
   renderModeFields();
 
-  // ===== Bot作業依頼の画面から来たとき（フェーズ13）: /tasks/new?botreq=1 で取り込みを開く =====
-  if (new URLSearchParams(location.search).get('botreq') === '1') botreqBtn.emit('click');
+  // ===== Bot作業依頼の画面から来たとき（フェーズ13）: /tasks/new?botreq=h-… で、その依頼の取り込みを開く =====
+  if (botreqParam) botreqBtn.emit('click');
 
   // ===== タスクの複製（フェーズ12）: /tasks/new?from=タスクID =====
   const duplicateFrom = Number(new URLSearchParams(location.search).get('from')) || null;
@@ -859,6 +885,7 @@
     if (review.autoWaitSeconds !== undefined) autoWaitWidget.setValue(Number(review.autoWaitSeconds));
     if (review.manualTimeoutHours !== undefined) manualTimeoutWidget.setValue(Number(review.manualTimeoutHours));
     onFailureWidget.setValue(config.onFailure || 'pause');
+    if (config.botreq) setBotreqLink(config.botreq);
     renderModeFields();
     (config.replacements || [])
       .filter((r) => r.templateType !== 'revertEdits')

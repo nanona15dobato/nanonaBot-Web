@@ -15,8 +15,76 @@ const { BOTREQ_PAGE_TITLE } = require('../worker/botreq');
 
 const MAX_CONTRIBS = 100000; // 完了時に数える投稿の上限（記録の取り違えなどで極端に多いときは止める）
 
-function defaultClient() {
-  return require('../bot/accounts').getClient(config.botreq.account);
+const REVID_CHUNK = 500; // edit_log を revid で引くときの1回の IN の件数
+
+async function defaultClient() {
+  try {
+    return await require('../bot/accounts').getClient(config.botreq.account);
+  } catch (err) {
+    // 認証情報が未設定・BotPassword の失効など。画面に理由を出せるようにする
+    throw Object.assign(new Error(`${config.botreq.account} でウィキにログインできません: ${err.message}`), { status: 502 });
+  }
+}
+
+/** DB へのクエリ（テストでは差し替える）。DB を使わない環境でも一覧などは動くよう、遅延して読み込む。 */
+function defaultQuery(sql, params) {
+  return require('../db').pool.query(sql, params);
+}
+
+/**
+ * Bot作業依頼に紐づけたタスク（config_json.botreq.threadId）を、依頼の節 ID ごとにまとめる。
+ * DB が使えないときは空にする（一覧の表示は続ける）。
+ * @returns {Promise<Map<string, Array<{id: number, status: string, account: string}>>>}
+ */
+async function linkedTasks(query) {
+  const byThread = new Map();
+  try {
+    const [rows] = await query(
+      `SELECT id, status, account, JSON_UNQUOTE(JSON_EXTRACT(config_json, '$.botreq.threadId')) AS thread_id
+         FROM tasks
+        WHERE JSON_EXTRACT(config_json, '$.botreq.threadId') IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1000`
+    );
+    for (const row of rows) {
+      if (!row.thread_id) continue;
+      if (!byThread.has(row.thread_id)) byThread.set(row.thread_id, []);
+      byThread.get(row.thread_id).push({ id: row.id, status: row.status, account: row.account });
+    }
+  } catch (err) {
+    console.error('[botreq] 紐づけたタスクを読めません:', err.message);
+  }
+  return byThread;
+}
+
+/**
+ * 投稿の revid から、どのタスクの編集か（edit_log）を数える。ツール以外の編集は taskId=null。
+ * @returns {Promise<Array<{taskId: number|null, count: number}>>}
+ */
+async function editsByTask(query, revids) {
+  const counts = new Map();
+  const found = new Set();
+  try {
+    for (let i = 0; i < revids.length; i += REVID_CHUNK) {
+      const chunk = revids.slice(i, i + REVID_CHUNK);
+      const [rows] = await query(
+        `SELECT task_id, revid FROM edit_log WHERE status = 'edited' AND revid IN (${chunk.map(() => '?').join(',')})`,
+        chunk
+      );
+      for (const row of rows) {
+        if (found.has(Number(row.revid))) continue;
+        found.add(Number(row.revid));
+        counts.set(row.task_id, (counts.get(row.task_id) || 0) + 1);
+      }
+    }
+  } catch (err) {
+    console.error('[botreq] 編集ログを読めません:', err.message);
+    return null;
+  }
+  const other = revids.length - found.size;
+  const list = [...counts.entries()].map(([taskId, count]) => ({ taskId, count })).sort((a, b) => b.count - a.count);
+  if (other > 0) list.push({ taskId: null, count: other });
+  return list;
 }
 
 function isLogTitle(title) {
@@ -47,6 +115,7 @@ async function loadRequestPage(client) {
       level: Number(heading.headingLevel) || (section && section.level) || 2,
       sectionIndex: section ? section.index : null,
       sectionText: section ? section.text : '',
+      ownText: section ? section.ownText : '',
       requester: first ? first.author : null,
       requesterName: first ? first.displayName || first.author : null,
       requestedAt: first ? first.timestamp : null,
@@ -70,7 +139,7 @@ async function getRecentContribs(client, user, n) {
   const list = [];
   let cont = {};
   while (list.length < n) {
-    const data = await client.request({ action: 'query', list: 'usercontribs', ucuser: user, ucprop: 'timestamp', uclimit: 'max', ...cont });
+    const data = await client.request({ action: 'query', list: 'usercontribs', ucuser: user, ucprop: 'ids|timestamp', uclimit: 'max', ...cont });
     list.push(...data.query.usercontribs);
     if (!data.continue) break;
     cont = data.continue;
@@ -82,9 +151,9 @@ async function getRecentContribs(client, user, n) {
  * 依頼の一覧（状態・依頼者・作業記録の有無）。
  * @returns {Promise<{revid: number, requests: object[]}>}
  */
-async function listRequests({ client } = {}) {
+async function listRequests({ client, query } = {}) {
   client = client || (await defaultClient());
-  const { page, requests } = await loadRequestPage(client);
+  const [{ page, requests }, tasks] = await Promise.all([loadRequestPage(client), linkedTasks(query || defaultQuery)]);
   const years = [...new Set(requests.filter((r) => r.requestedAt).map((r) => L.jstYear(r.requestedAt)))];
   const logs = new Map();
   await Promise.all(
@@ -97,7 +166,7 @@ async function listRequests({ client } = {}) {
     revid: page.revid,
     logPrefix: config.botreq.logPrefix,
     requests: requests.map((r) => {
-      const { status, label } = L.detectStatus(r.sectionText);
+      const { status, label } = L.detectStatus(r.ownText);
       const log = r.requestedAt ? logs.get(L.jstYear(r.requestedAt)) : null;
       const logSection = log && log.exists ? L.findLogSection(log.wikitext, r.threadId) : null;
       return {
@@ -114,6 +183,7 @@ async function listRequests({ client } = {}) {
         latestReplyAt: r.latestReplyAt,
         logTitle: r.requestedAt ? L.logTitleFor(config.botreq.logPrefix, r.requestedAt) : null,
         logState: !logSection ? 'none' : logSection.finished ? 'finished' : 'started',
+        tasks: tasks.get(r.threadId) || [],
       };
     }),
   };
@@ -139,7 +209,7 @@ async function prepareStart(client, threadId) {
   if (log.exists && L.findLogSection(log.wikitext, threadId)) {
     notes.push({ type: 'warning', text: 'この依頼の作業記録は既にあります。続けると、もう1つ追加します。' });
   }
-  const links = L.discussionLinks(req.sectionText, { requestPage: BOTREQ_PAGE_TITLE });
+  const links = L.discussionLinks(req.ownText, { requestPage: BOTREQ_PAGE_TITLE });
   const { text, botSummary } = L.buildStartSection({
     num: counted.num,
     name: req.name,
@@ -172,7 +242,7 @@ async function prepareStart(client, threadId) {
   };
 }
 
-async function prepareComplete(client, threadId) {
+async function prepareComplete(client, threadId, query) {
   const { request: req } = await findRequest(client, threadId);
   const logTitle = L.logTitleFor(config.botreq.logPrefix, req.requestedAt);
   const [editCount, log] = await Promise.all([getEditCount(client, config.botreq.botUser), client.getPage(logTitle)]);
@@ -193,6 +263,18 @@ async function prepareComplete(client, threadId) {
     });
   }
   if (section.finished) notes.push({ type: 'warning', text: 'この依頼の作業記録は既に完了しています。保存すると上書きします。' });
+  // 内訳: どのタスクの編集か。この依頼に紐づけていないタスクやツール以外の編集が混ざっていれば知らせる
+  const breakdown = await editsByTask(query, contribs.map((c) => Number(c.revid)).filter(Boolean));
+  if (breakdown) {
+    const linked = new Set(((await linkedTasks(query)).get(threadId) || []).map((t) => t.id));
+    const foreign = breakdown.filter((b) => b.taskId !== null && linked.size > 0 && !linked.has(b.taskId));
+    if (foreign.length) {
+      notes.push({
+        type: 'warning',
+        text: `この依頼に紐づけていないタスクの編集が含まれています（${foreign.map((b) => `#${b.taskId}: ${b.count}件`).join('、')}）。範囲を確認してください。`,
+      });
+    }
+  }
   const work = L.contributionLinks(config.botreq.botUser, contribs);
   const text = L.buildCompleteSection(section.core, {
     oldest: contribs[contribs.length - 1].timestamp,
@@ -217,7 +299,12 @@ async function prepareComplete(client, threadId) {
       commentId: req.commentId,
       help: '「…が0項目のため」の部分は、必要に応じて書き換えてください。',
     },
-    workSummary: { count: contribs.length, oldest: contribs[contribs.length - 1].timestamp, newest: contribs[0].timestamp },
+    workSummary: {
+      count: contribs.length,
+      oldest: contribs[contribs.length - 1].timestamp,
+      newest: contribs[0].timestamp,
+      breakdown, // [{taskId, count}]（taskId=null はツール以外の編集）。DB が読めなければ null
+    },
     notes,
   };
 }
@@ -226,7 +313,7 @@ async function prepareResolve(client, threadId) {
   const { page, request: req } = await findRequest(client, threadId);
   if (!req.sectionIndex) throw new Error('この依頼の節の番号を特定できません。');
   const notes = [];
-  if (/\{\{\s*解決済み/.test(req.sectionText)) notes.push({ type: 'warning', text: 'この節には既に {{解決済み}} があります。' });
+  if (/\{\{\s*解決済み/.test(req.ownText)) notes.push({ type: 'warning', text: 'この節には既に {{解決済み}} があります。' });
   const core = req.sectionText.replace(/\s+$/, '');
   return {
     kind: 'resolve',
@@ -248,12 +335,12 @@ async function prepareResolve(client, threadId) {
 
 const PREPARE = { start: prepareStart, complete: prepareComplete, resolve: prepareResolve };
 
-async function prepare(kind, threadId, { client } = {}) {
+async function prepare(kind, threadId, { client, query } = {}) {
   if (!PREPARE[kind]) throw Object.assign(new Error(`不明な操作です: ${kind}`), { status: 400 });
   if (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId)) {
     throw Object.assign(new Error('依頼の節の ID が正しくありません'), { status: 400 });
   }
-  return PREPARE[kind](client || (await defaultClient()), threadId);
+  return PREPARE[kind](client || (await defaultClient()), threadId, query || defaultQuery);
 }
 
 /** 保存の入力を確かめる。誤りがあれば理由の配列を返す。 */
@@ -373,4 +460,16 @@ async function renderDiff(title, oldText, newText, { client } = {}) {
   return (data.compare && data.compare.body) || '';
 }
 
-module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle };
+/**
+ * 1つの依頼の節の本文（小節を含まない）。タスク作成画面で、その依頼の {{リンク修正依頼/改名}} だけを取り込むのに使う。
+ * @returns {Promise<{threadId: string, name: string, text: string}>}
+ */
+async function requestSection(threadId, { client } = {}) {
+  if (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId)) {
+    throw Object.assign(new Error('依頼の節の ID が正しくありません'), { status: 400 });
+  }
+  const { request } = await findRequest(client || (await defaultClient()), threadId);
+  return { threadId, name: request.name, text: request.ownText };
+}
+
+module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSection };
