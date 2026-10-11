@@ -73,6 +73,7 @@
 | `linkUpdateMethod` | `nullEdit` / `purge` |
 | `reviewSettings` | `{"mode":"auto","autoWaitSeconds":0以上}` または `{"mode":"manual","manualTimeoutHours":正の数}` |
 | `onFailure` | `pause` / `skipAndContinue` |
+| `botreq` | 任意。Bot作業依頼への紐づけ `{"threadId": "h-…-YYYYMMDDhhmmss", "name": "依頼名"}` |
 
 ## その他
 
@@ -80,9 +81,9 @@
 |---|---|
 | `GET /api/edit-log?task_id=&page_title=&status=&limit=` | 編集ログの検索（`status` は `edited`/`failed`、`limit` は最大200） |
 | `GET /api/edit-log.csv?task_id=&page_title=&status=` | 編集ログのCSV（同じ条件で最大10000件。UTF-8・BOMつき） |
-| `GET /api/botreq/proposals` | Bot作業依頼の `{{リンク修正依頼/改名}}` の分類結果と topic list の進捗 |
-| `GET /api/botreq/requests` | Bot作業依頼の依頼の一覧（`threadId`・`name`・`sectionIndex`・`status`・`requester`・`requestedAt`・`logTitle`・`logState` など） |
-| `POST /api/botreq/prepare` | 着手・完了・解決で保存する内容を作る（`{"kind": "start"/"complete"/"resolve", "threadId": "h-…"}`）。ウィキは編集しない。返す本文は `before + text + after` |
+| `GET /api/botreq/proposals?threadId=` | Bot作業依頼の `{{リンク修正依頼/改名}}` の分類結果と topic list の進捗。`threadId` を付けるとその依頼の節の中だけを返し、`request`（`threadId`・`name`）も返す |
+| `GET /api/botreq/requests` | Bot作業依頼の依頼の一覧（`threadId`・`name`・`sectionIndex`・`status`・`requester`・`requestedAt`・`logTitle`・`logState`・紐づけたタスク `tasks` など） |
+| `POST /api/botreq/prepare` | 着手・完了・解決で保存する内容を作る（`{"kind": "start"/"complete"/"resolve", "threadId": "h-…"}`）。ウィキは編集しない。返す本文は `before + text + after`。完了では `workSummary.breakdown`（タスクごとの編集数。`taskId: null` はツール以外）も返す |
 | `POST /api/botreq/render` | プレビュー（`{"title", "text"}` → `{"html"}`） |
 | `POST /api/botreq/diff` | 差分（`{"title", "oldText", "newText"}` → `{"html"}`。差分の表の行） |
 | `POST /api/botreq/save` | 保存（`{"title", "text", "section"?, "summary", "baseTimestamp", "startTimestamp", "createOnly", "comment"?: {"text", "commentId"}}`）。編集競合は 409 |

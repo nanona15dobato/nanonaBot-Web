@@ -262,12 +262,14 @@
 			return 'open';
 		}
 
-		/** 見出しの下の本文（Parsoid の <section> と、従来の HTML の両方に対応）。 */
-		function sectionContent($headingWrap, level) {
+		/**
+		 * 見出しの下の、その見出しだけの本文（小見出しの節は含めない。親の見出しの状態が小見出しの依頼に引きずられないように）。
+		 * Parsoid の <section> と、従来の HTML の両方に対応。
+		 */
+		function sectionContent($headingWrap) {
 			const $section = $headingWrap.parent('section');
-			if ($section.length) return $section.children().not($headingWrap);
-			const stop = level === 2 ? 'h2, .mw-heading2' : 'h2, h3, .mw-heading2, .mw-heading3';
-			return $headingWrap.nextUntil(stop);
+			if ($section.length) return $section.children().not($headingWrap).not('section');
+			return $headingWrap.nextUntil('h2, h3, h4, h5, h6, .mw-heading');
 		}
 
 		/** 節の中のリンクを、議論場所の候補（ウィキテキスト）にする。署名などの利用者ページは除く。 */
@@ -813,7 +815,6 @@
 			const threadId = $heading.attr('data-mw-thread-id');
 			// 依頼の節だけ（冒頭の案内など、署名つきコメントの無い節は ID が時刻で終わらない）
 			if (!threadId || !/-\d{14}$/.test(threadId)) return;
-			const level = $heading.is('h2') ? 2 : 3;
 			const $wrap = $heading.parent('.mw-heading').length ? $heading.parent() : $heading;
 			const $editsection = $wrap.find('.mw-editsection').first();
 			const editHref = $editsection.find('a[href*="section="]').attr('href') || '';
@@ -824,7 +825,7 @@
 				threadId: threadId,
 				name: $heading.text().trim(),
 				sectionIndex: sectionMatch[1],
-				$content: sectionContent($wrap, level)
+				$content: sectionContent($wrap)
 			};
 			req.status = detectStatus(req.$content.text());
 

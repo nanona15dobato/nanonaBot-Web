@@ -78,12 +78,25 @@
       $('<div>').addClass('nb-table-wrap').append(
         $('<table>').addClass('nb-table nb-botreq-table').append(
           $('<thead>').append(
-            $('<tr>').append(['依頼', '状態', '依頼者', '依頼日時', '作業記録', '操作'].map((h) => $('<th>').text(h)))
+            $('<tr>').append(['依頼', '状態', '依頼者', '依頼日時', '作業記録', 'タスク', '操作'].map((h) => $('<th>').text(h)))
           ),
           $tbody
         )
       )
     );
+  }
+
+  /** この依頼に紐づけたタスク（新しい順に最大3件）。 */
+  function taskLinks(tasks) {
+    if (!tasks || !tasks.length) return $('<span>').addClass('nb-botreq-none').text('—');
+    const $box = $('<div>').addClass('nb-botreq-tasks');
+    tasks.slice(0, 3).forEach((t) => {
+      $box.append(
+        $('<a>').addClass('nb-botreq-task').attr('href', '/tasks/' + t.id).append($('<span>').text('#' + t.id + ' '), C.taskStatusBadge(t.status))
+      );
+    });
+    if (tasks.length > 3) $box.append($('<span>').addClass('nb-botreq-none').text('ほか' + (tasks.length - 3) + '件'));
+    return $box;
   }
 
   function renderRow(r) {
@@ -110,7 +123,7 @@
       },
     });
     menu.getMenu().on('choose', (item) => {
-      if (item.getData() === 'task') window.location.href = '/tasks/new?botreq=1';
+      if (item.getData() === 'task') window.location.href = '/tasks/new?botreq=' + encodeURIComponent(r.threadId);
       else runAction(item.getData(), r, menu);
     });
     $actions.append(menu.$element);
@@ -125,6 +138,7 @@
       $('<td>').append(r.requester ? C.wikiLink('利用者:' + r.requester).text(r.requesterName || r.requester) : '—'),
       $('<td>').addClass('nb-table__nowrap').append(r.requestedAt ? C.timeElement(r.requestedAt) : '—'),
       $('<td>').append($log),
+      $('<td>').append(taskLinks(r.tasks)),
       $('<td>').append($actions)
     );
   }
@@ -257,6 +271,15 @@
           label: `着手してからの ${plan.workSummary.count} 編集（${C.formatDateTime(plan.workSummary.oldest)} 〜 ${C.formatDateTime(plan.workSummary.newest)}）を記録します。`,
         }).$element
       );
+      if (plan.workSummary.breakdown && plan.workSummary.breakdown.length) {
+        const $breakdown = $('<div>').addClass('nb-botreq-breakdown').append($('<span>').text('内訳: '));
+        plan.workSummary.breakdown.forEach((b, i) => {
+          if (i > 0) $breakdown.append('、');
+          if (b.taskId === null) $breakdown.append($('<span>').text('ツール以外の編集 ' + b.count + '件'));
+          else $breakdown.append($('<a>').attr({ href: '/tasks/' + b.taskId, target: '_blank' }).text('タスク #' + b.taskId), ' ' + b.count + '件');
+        });
+        $c.append($breakdown);
+      }
     }
 
     this.textInput = new OO.ui.MultilineTextInputWidget({ value: plan.text, rows: 14, classes: ['nb-botreq-wikitext'] });
