@@ -243,3 +243,18 @@ test('validateTaskConfig: Bot作業依頼への紐づけ（botreq）は任意で
   assert.equal(bad.valid, false);
   assert.match(bad.errors.join(), /botreq\.threadId/);
 });
+
+test('validateTaskConfig: searchNarrowing はリンク置換だけで使える真偽値', () => {
+  const base = {
+    account: 'NanonaBot',
+    editSettings: { botFlag: true, minorEdit: true, editSummary: 'test edit', editIntervalSeconds: 10 },
+    reviewSettings: { mode: 'auto', autoWaitSeconds: 30 },
+    onFailure: 'pause',
+  };
+  const ok = validateTaskConfig({ ...base, replacements: [{ templateType: 'linkRename2', from: 'A', to: 'B', searchNarrowing: true }] });
+  assert.equal(ok.valid, true, JSON.stringify(ok.errors));
+  const wrongType = validateTaskConfig({ ...base, replacements: [{ templateType: 'templateRename', from: 'Template:A', to: 'Template:B', searchNarrowing: true }] });
+  assert.match(wrongType.errors.join(), /リンク置換だけ/);
+  const notBool = validateTaskConfig({ ...base, replacements: [{ templateType: 'linkRename', from: 'A', to: 'B', searchNarrowing: 'yes' }] });
+  assert.match(notBool.errors.join(), /searchNarrowing: 真偽値/);
+});

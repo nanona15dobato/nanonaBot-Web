@@ -17,6 +17,7 @@ const {
 const { collectCategoryWarnings } = require('./categoryWarnings');
 const { findCandidatePages: findRedirectCategoryTemplatePages } = require('./redirectCategoryTemplate');
 const { writeTaskLogSafely } = require('./taskLog');
+const { narrowBySearch } = require('./searchNarrowing');
 const { isEmergencyStopped } = require('./emergencyStop');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -171,7 +172,14 @@ async function resolveRuleTargetsForStage(rule, stage, mwClient, options = {}) {
       }
       // ウェーブ2: その他ページ（未指定時は既定ns=0、nullは全名前空間、複数選択可）。
       // ウェーブ1の編集完了後に再取得する。
-      return { results: await resolveBacklinks({ page: rule.from, namespaces: namespacesOrDefault(rule.namespaces) }), error: null };
+      {
+        const namespaces = namespacesOrDefault(rule.namespaces);
+        const backlinks = await resolveBacklinks({ page: rule.from, namespaces });
+        if (!rule.searchNarrowing) return { results: backlinks, error: null };
+        // 任意: 本文に旧リンクの記述があるページだけに検索で絞る（時間切れ等のときはリンク元のすべてに戻す）
+        const narrowed = await narrowBySearch({ from: rule.from, namespaces, candidates: backlinks });
+        return { results: narrowed.results, error: null, note: narrowed.note };
+      }
 
     case 'urlRename':
       // 外部リンクの付け替え（フェーズ10）: リンク置換と同じく、テンプレートを先に直す2ウェーブ構成
@@ -289,12 +297,14 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
 
   const titleToInfo = new Map(); // title -> { namespace, ruleIndices: Set }
   const stageErrors = [];
+  const stageNotes = []; // 取得時のお知らせ（検索での絞り込みの結果など）
 
   for (let idx = 0; idx < replacements.length; idx++) {
     const rule = replacements[idx];
     if (!ruleAppliesToStage(rule, stage)) continue;
 
-    const { results, error } = await resolveRuleTargetsForStage(rule, stage, mwClient, options);
+    const { results, error, note } = await resolveRuleTargetsForStage(rule, stage, mwClient, options);
+    if (note) stageNotes.push(`replacements[${idx}]: ${note}`);
     if (error) {
       stageErrors.push(`replacements[${idx}] (${rule.templateType}): ${error}`);
     }
@@ -320,7 +330,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
   if (titles.length === 0) {
     // このステージの対象が0件。ウェーブ2でよくあるケース（9章: 0件でも必ず実行する。
     // 実行した結果0件だったのはウェーブ1の結果とは独立した事実であり、異常ではない）。
-    return { alreadyEnumerated: false, targetCount: 0, errors: stageErrors };
+    return { alreadyEnumerated: false, targetCount: 0, errors: stageErrors, notes: stageNotes };
   }
 
   const values = titles.map((title, i) => {
@@ -346,7 +356,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
     stage,
     task.id,
   ]);
-  return { alreadyEnumerated: false, targetCount: titles.length, errors: stageErrors };
+  return { alreadyEnumerated: false, targetCount: titles.length, errors: stageErrors, notes: stageNotes };
 }
 
 /**
@@ -584,6 +594,7 @@ async function runTask(task) {
         (enumeration.alreadyEnumerated
           ? `${label}は既に列挙済みです（${enumeration.targetCount}件）。`
           : `${label}の対象ページ取得が完了しました（${enumeration.targetCount}件）。`) +
+        (enumeration.notes && enumeration.notes.length > 0 ? ` ${enumeration.notes.join(' / ')}` : '') +
         (enumeration.errors.length > 0 ? ` 注意: ${enumeration.errors.join(' / ')}` : ''),
     });
 

@@ -786,6 +786,7 @@
     } else {
       fact('改名元', rule.templateType === 'linkRenameExact' ? linkSpec(rule.from, rule.fromAnchor, rule.fromLabel) : rule.from);
       if (rule.to) fact('改名先', rule.templateType === 'linkRenameExact' ? linkSpec(rule.to, rule.toAnchor, rule.toLabel) : rule.to);
+      if (rule.searchNarrowing) fact('対象の絞り込み', '検索で、本文に旧リンクの記述があるページだけに絞る（ウェーブ2）');
       if (rule.namespaces !== undefined) fact('名前空間', rule.namespaces === null ? '全名前空間' : rule.namespaces.join(', '));
       if (rule.fixCategoryLinks) fact('追加', '「Category:旧」の記述も置換');
       if (rule.bothSchemes) fact('追加', 'http:// と https:// の両方の旧URLを付け替え');
