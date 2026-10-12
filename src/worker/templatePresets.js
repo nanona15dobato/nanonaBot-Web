@@ -50,7 +50,9 @@ function flexibleTextPattern(text) {
  * 節（アンカー）・表示名を指定したリンク置換（フェーズ9。BOTREQの
  * 「改名元#節1{{!}}ラベル |改名先#節2{{!}}ラベル」形式）。
  *
- * - fromAnchor 指定時はその節へのリンクだけ、未指定時は節なしのリンクだけを対象にする
+ * - 改名元の節: fromAnchor 指定時はその節へのリンクだけ、fromAnchorAny 指定時は節の有無・内容を問わず、
+ *   どちらも無いときは節なしのリンクだけを対象にする
+ * - 節を問わないとき、改名先の節（toAnchor）が無ければ元の節をそのまま残す（[[旧#x|…]] → [[新#x|…]]）
  * - fromLabel 指定時はその表示名のリンクだけを対象にし、表示名は toLabel（無ければ fromLabel）にする
  * - fromLabel 未指定時は、表示名付きのリンクは表示名をそのまま残し、表示名なしのリンクには
  *   toLabel があればそれを付ける
@@ -59,14 +61,24 @@ function flexibleTextPattern(text) {
  * @param {string} params.from
  * @param {string} params.to
  * @param {string|null} [params.fromAnchor]
+ * @param {boolean} [params.fromAnchorAny] - 改名元の節を問わない
  * @param {string|null} [params.toAnchor]
  * @param {string|null} [params.fromLabel]
  * @param {string|null} [params.toLabel]
  */
-function linkRenameExactSteps({ from, to, fromAnchor, toAnchor, fromLabel, toLabel }) {
+function linkRenameExactSteps({ from, to, fromAnchor, fromAnchorAny, toAnchor, fromLabel, toLabel }) {
   const f = firstLetterFlexiblePattern(from);
-  const anchorPattern = fromAnchor ? `\\s*\\#\\s*${flexibleTextPattern(fromAnchor)}\\s*` : '\\s*';
-  const target = escapeReplacementDollar(String(to).trim() + (toAnchor ? `#${String(toAnchor).trim()}` : ''));
+  const any = Boolean(fromAnchorAny) && !fromAnchor;
+  // 節を問わないときは、節（"#…"）を1番目のグループで受ける（節が無ければ空）
+  const anchorPattern = fromAnchor
+    ? `\\s*\\#\\s*${flexibleTextPattern(fromAnchor)}\\s*`
+    : any
+      ? '\\s*(\\#[^\\]\\|]*?)?\\s*'
+      : '\\s*';
+  const keepAnchor = any && !toAnchor;
+  const target =
+    escapeReplacementDollar(String(to).trim() + (toAnchor ? `#${String(toAnchor).trim()}` : '')) + (keepAnchor ? '$1' : '');
+  const labelGroup = any ? '$2' : '$1'; // 節のグループの分だけ、表示名のグループの番号がずれる
 
   if (fromLabel) {
     const label = escapeReplacementDollar(String(toLabel || fromLabel).trim());
@@ -83,7 +95,7 @@ function linkRenameExactSteps({ from, to, fromAnchor, toAnchor, fromLabel, toLab
       // 表示名付きのリンク: 表示名はそのまま残す
       pattern: `\\[\\[\\s*${f}${anchorPattern}\\|([^\\]]*)\\]\\]`,
       flags: 'g',
-      replacement: `[[${target}|$1]]`,
+      replacement: `[[${target}|${labelGroup}]]`,
     },
     {
       // 表示名なしのリンク

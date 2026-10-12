@@ -258,3 +258,16 @@ test('validateTaskConfig: searchNarrowing はリンク置換だけで使える�
   const notBool = validateTaskConfig({ ...base, replacements: [{ templateType: 'linkRename', from: 'A', to: 'B', searchNarrowing: 'yes' }] });
   assert.match(notBool.errors.join(), /searchNarrowing: 真偽値/);
 });
+
+test('validateTaskConfig: fromAnchorAny は真偽値で、改名元の節と同時には指定できない', () => {
+  const base = {
+    account: 'NanonaBot',
+    editSettings: { botFlag: true, minorEdit: true, editSummary: 'test edit', editIntervalSeconds: 10 },
+    reviewSettings: { mode: 'auto', autoWaitSeconds: 30 },
+    onFailure: 'pause',
+  };
+  const rule = { templateType: 'linkRenameExact', from: 'A', to: 'B', fromLabel: 'L' };
+  assert.equal(validateTaskConfig({ ...base, replacements: [{ ...rule, fromAnchorAny: true }] }).valid, true);
+  assert.match(validateTaskConfig({ ...base, replacements: [{ ...rule, fromAnchorAny: true, fromAnchor: '節' }] }).errors.join(), /同時|節を問わない/);
+  assert.match(validateTaskConfig({ ...base, replacements: [{ ...rule, fromAnchorAny: 'yes' }] }).errors.join(), /fromAnchorAny: 真偽値/);
+});

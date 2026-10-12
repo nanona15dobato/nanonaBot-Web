@@ -271,3 +271,28 @@ test('urlRenameSteps: bothSchemes指定時は http と https のどちらの旧U
   assert.equal(applyReplacementSteps(text, both), 'https://new.example/path と https://new.example/path/x と https://www.old.example/path');
   assert.equal(applyReplacementSteps(text, only), 'https://new.example/path と HTTPS://old.example/path/x と https://www.old.example/path');
 });
+
+test('linkRenameExactSteps: 改名元の節を問わず表示名で絞る（fromAnchorAny）。改名先の節が無ければ元の節を残す', () => {
+  const { linkRenameExactSteps: exact } = require('../src/worker/templatePresets');
+  const { applyReplacementSteps: apply } = require('../src/worker/regexEngine');
+  const text = '[[旧記事|ラベル]] [[旧記事#節A|ラベル]] [[旧記事 #節B |ラベル]] [[旧記事#節A|別]] [[旧記事]]';
+  assert.equal(
+    apply(text, exact({ from: '旧記事', to: '新記事', fromAnchorAny: true, fromLabel: 'ラベル', toLabel: '新ラベル' })),
+    '[[新記事|新ラベル]] [[新記事#節A|新ラベル]] [[新記事#節B|新ラベル]] [[旧記事#節A|別]] [[旧記事]]'
+  );
+  // 改名先の節を指定すると、どの節からのリンクもその節へ
+  assert.equal(
+    apply(text, exact({ from: '旧記事', to: '新記事', fromAnchorAny: true, toAnchor: '節Z', fromLabel: 'ラベル' })),
+    '[[新記事#節Z|ラベル]] [[新記事#節Z|ラベル]] [[新記事#節Z|ラベル]] [[旧記事#節A|別]] [[旧記事]]'
+  );
+  // 表示名も問わないとき: 表示名・節を残してリンク先だけ変える
+  assert.equal(
+    apply(text, exact({ from: '旧記事', to: '新記事', fromAnchorAny: true })),
+    '[[新記事|ラベル]] [[新記事#節A|ラベル]] [[新記事#節B|ラベル]] [[新記事#節A|別]] [[新記事]]'
+  );
+  // 従来どおり: 節の指定が無ければ節なしのリンクだけ
+  assert.equal(
+    apply(text, exact({ from: '旧記事', to: '新記事', fromLabel: 'ラベル' })),
+    '[[新記事|ラベル]] [[旧記事#節A|ラベル]] [[旧記事 #節B |ラベル]] [[旧記事#節A|別]] [[旧記事]]'
+  );
+});

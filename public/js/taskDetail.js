@@ -784,7 +784,7 @@
           : ts.type + ': ' + (ts.category || ts.page || ts.query || '');
       fact('対象', sourceText);
     } else {
-      fact('改名元', rule.templateType === 'linkRenameExact' ? linkSpec(rule.from, rule.fromAnchor, rule.fromLabel) : rule.from);
+      fact('改名元', rule.templateType === 'linkRenameExact' ? linkSpec(rule.from, rule.fromAnchorAny ? '（どの節でも）' : rule.fromAnchor, rule.fromLabel) : rule.from);
       if (rule.to) fact('改名先', rule.templateType === 'linkRenameExact' ? linkSpec(rule.to, rule.toAnchor, rule.toLabel) : rule.to);
       if (rule.searchNarrowing) fact('対象の絞り込み', '検索で、本文に旧リンクの記述があるページだけに絞る（ウェーブ2）');
       if (rule.namespaces !== undefined) fact('名前空間', rule.namespaces === null ? '全名前空間' : rule.namespaces.join(', '));
