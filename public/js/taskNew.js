@@ -196,11 +196,22 @@
   function buildLinkRenameFields(rule, $body, fromWidget, toWidget, prefill) {
     const prefillType = prefill && prefill.templateType;
     const textField = (value, placeholder) => new OO.ui.TextInputWidget({ value: value || '', placeholder });
-    const fromAnchorWidget = textField(prefill && prefill.fromAnchor, '未入力=節なしのリンクだけが対象');
-    const toAnchorWidget = textField(prefill && prefill.toAnchor, '未入力=節なし');
+    // 改名元の節: 節なしのリンクだけ（既定）／節を問わない／指定した節だけ
+    const anchorModeWidget = new OO.ui.DropdownInputWidget({
+      options: [
+        { data: 'none', label: '節なしのリンクだけ（[[旧]]・[[旧|…]]）' },
+        { data: 'any', label: '節を問わない（[[旧#どの節でも|…]] も対象）' },
+        { data: 'specific', label: '指定した節へのリンクだけ' },
+      ],
+      value: prefill && prefill.fromAnchor ? 'specific' : prefill && prefill.fromAnchorAny ? 'any' : 'none',
+    });
+    const fromAnchorWidget = textField(prefill && prefill.fromAnchor, '改名元の節');
+    const toAnchorWidget = textField(prefill && prefill.toAnchor, '未入力=節なし（「節を問わない」のときは元の節のまま）');
     const fromLabelWidget = textField(prefill && prefill.fromLabel, '未入力=表示名を問わない（表示名は残す）');
     const toLabelWidget = textField(prefill && prefill.toLabel, '未入力=元の表示名のまま');
-    const hasExactFields = Boolean(prefill && (prefill.fromAnchor || prefill.toAnchor || prefill.fromLabel || prefill.toLabel));
+    const hasExactFields = Boolean(
+      prefill && (prefill.fromAnchor || prefill.fromAnchorAny || prefill.toAnchor || prefill.fromLabel || prefill.toLabel)
+    );
 
     const keepDisplayWidget = new OO.ui.CheckboxInputWidget({ selected: prefillType === 'linkRename2' });
     const exactWidget = new OO.ui.CheckboxInputWidget({ selected: prefillType === 'linkRenameExact' || hasExactFields });
@@ -211,14 +222,19 @@
       help: '改名元に無い括弧（曖昧さ回避など）が改名先に付く場合に使います（従来の「リンク置換2」）。表示名付きのリンクは表示名をそのまま残します。',
       helpInline: true,
     });
+    const fromAnchorField = new OO.ui.FieldLayout(fromAnchorWidget, { label: '改名元の節（名前）', align: 'top' });
+    const syncAnchorMode = () => fromAnchorField.toggle(anchorModeWidget.getValue() === 'specific');
+    anchorModeWidget.on('change', syncAnchorMode);
+    syncAnchorMode();
     const $exactFields = $('<div>').addClass('nb-link-exact').append(
-      new OO.ui.FieldLayout(fromAnchorWidget, { label: '改名元の節', align: 'top' }).$element,
+      new OO.ui.FieldLayout(anchorModeWidget, { label: '改名元の節', align: 'top' }).$element,
+      fromAnchorField.$element,
       new OO.ui.FieldLayout(fromLabelWidget, { label: '改名元の表示名', align: 'top' }).$element,
       new OO.ui.FieldLayout(toAnchorWidget, { label: '改名先の節', align: 'top' }).$element,
       new OO.ui.FieldLayout(toLabelWidget, { label: '改名先の表示名', align: 'top' }).$element,
       $('<p>').addClass('nb-hint').text(
         '[[改名元#節|表示名]] の形のリンクだけを [[改名先#節|表示名]] に付け替えます（BOTREQの「改名元#節{{!}}ラベル」形式）。' +
-          '改名元の節を空にすると、節なしのリンクだけが対象になります（節付きのリンクは変えません）。ハットノートのテンプレートは直しません。'
+          '「節を問わない」は表示名だけで絞りたいときに使います（改名先の節が空なら元の節を残します）。ハットノートのテンプレートは直しません。'
       )
     );
     const ns = buildNamespaceField([0], 'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。');
@@ -256,9 +272,11 @@
       const base = { from: fromWidget.getValue(), to: toWidget.getValue(), namespaces: namespacesOrNull(ns.widget) };
       if (searchWidget.isSelected()) base.searchNarrowing = true;
       if (exactWidget.isSelected()) {
+        const anchorMode = anchorModeWidget.getValue();
+        if (anchorMode === 'any') base.fromAnchorAny = true;
         return Object.assign(base, {
           templateType: 'linkRenameExact',
-          fromAnchor: orNull(fromAnchorWidget),
+          fromAnchor: anchorMode === 'specific' ? orNull(fromAnchorWidget) : null,
           toAnchor: orNull(toAnchorWidget),
           fromLabel: orNull(fromLabelWidget),
           toLabel: orNull(toLabelWidget),
@@ -851,7 +869,7 @@
       const detail =
         r.templateType === 'custom'
           ? r.steps.length + 'ステップ'
-          : formatLinkSpec(r.from, r.fromAnchor, r.fromLabel) + (r.to ? ' → ' + formatLinkSpec(r.to, r.toAnchor, r.toLabel) : '');
+          : formatLinkSpec(r.from, r.fromAnchorAny ? '（どの節でも）' : r.fromAnchor, r.fromLabel) + (r.to ? ' → ' + formatLinkSpec(r.to, r.toAnchor, r.toLabel) : '');
       $list.append($('<li>').text('ルール' + (i + 1) + ': [' + type + '] ' + detail));
     });
     const review = config.reviewSettings;

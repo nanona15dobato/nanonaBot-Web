@@ -137,6 +137,13 @@ function validateRule(rule, i, errors) {
       errors.push(`${prefix}.${key}: 文字列またはnullである必要があります`);
     }
   }
+  if (rule.fromAnchorAny !== undefined) {
+    if (typeof rule.fromAnchorAny !== 'boolean') {
+      errors.push(`${prefix}.fromAnchorAny: 真偽値である必要があります`);
+    } else if (rule.fromAnchorAny && rule.fromAnchor) {
+      errors.push(`${prefix}.fromAnchorAny: 改名元の節を指定したときは「節を問わない」にできません`);
+    }
+  }
   if (rule.bothSchemes !== undefined && typeof rule.bothSchemes !== 'boolean') {
     errors.push(`${prefix}.bothSchemes: 真偽値である必要があります`);
   }

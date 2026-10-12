@@ -66,6 +66,7 @@
 | `templateType` | `linkRename` / `linkRename2` / `linkRenameExact` / `categoryRename` / `categoryRemove` / `templateRename` / `unlinkPage` / `templateSubst` / `urlRename` / `custom`（→ [置換ルールの種類](rule-types.md)） |
 | `namespaces` | 名前空間番号の配列。`null` は全名前空間、省略時は種別ごとの既定 |
 | `fromAnchor` / `toAnchor` / `fromLabel` / `toLabel` | `linkRenameExact` の節・表示名（省略可） |
+| `fromAnchorAny` | `linkRenameExact` で改名元の節を問わない（`fromAnchor` とは同時に指定できない。改名先の節が無ければ元の節を残す） |
 | `fixCategoryLinks` | `categoryRename` で「Category:旧」の記述も置換する |
 | `searchNarrowing` | `linkRename`・`linkRename2`・`linkRenameExact` で、ウェーブ2の対象を全文検索で本文に旧リンクの記述があるページだけに絞る（時間切れ等のときは絞らない） |
 | `bothSchemes` | `urlRename` で http:// と https:// の両方の旧URLを付け替える |
