@@ -36,8 +36,8 @@ Node.js webserviceの規約上必須の `$HOME/www/js` は、そこへのシン�
 - 正規表現の複数ステップ置換エンジン（`src/worker/regexEngine.js`、
   `WikitextParser.protectRegions`で`<nowiki>`等を保護。仕様書6章）
 - キュー（`src/worker/queue.js`、1キュー1タスクをアトミックにclaim）
-- **1ページ先読みパイプライン**（`src/worker/pipeline.js`、仕様書9.2節）:
-  「Aを確認している間にBを裏で準備する」方式で、対象ページを1件ずつ
+- **先読みパイプライン**（`src/worker/pipeline.js`、仕様書9.2節）:
+  「Aを確認している間にBを裏で準備する」方式で（Bが変更不要ならスキップを確定させて次に編集が要るページまで進める）、対象ページを1件ずつ
   準備→Diff確認待ち→編集していく。`onFailure`（pause/skipAndContinue）、
   緊急停止、manualモードのタイムアウトにも対応
 - `edit_log`への即時書き込み（仕様書9.4節）
@@ -559,7 +559,7 @@ src/worker/redirectCategoryTemplate.js Template:リダイレクトの所属カ�
                               改名/除去（仕様書8章。フェーズ7、実テンプレート本文・実例で確認済み）
 src/worker/taskConfig.js     タスクconfig_jsonのバリデーション（純粋関数。8種類のtemplateType対応）
 src/worker/queue.js          キューからのアトミックなタスクclaim
-src/worker/pipeline.js       1ページ先読みパイプライン本体（仕様書9.2節）
+src/worker/pipeline.js       先読みパイプライン本体（仕様書9.2節。スキップを飛ばして次に編集するページまで準備）
 src/worker/taskRunner.js     ステージ列挙・2ウェーブ orchestration・警告収集・forceTargets
                               （失敗ページ再試行用の直接ターゲット指定。フェーズ6）
 src/worker/botreq.js         BOTREQ({{リンク修正依頼/改名}})の取得・パース・分類（仕様書7章）

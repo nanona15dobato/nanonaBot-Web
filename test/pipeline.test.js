@@ -1094,3 +1094,92 @@ test('一括取り消し: タスクの編集どうしの間に他の人の編集
   await runRevert(db, 13, mwClient, { targets: [target], useUndo: true });
   assert.deepEqual(edits, ['A\n-\nB（他人）\n-\nC']);
 });
+
+/** 本文に「旧」があるページは編集が要り、無いページはスキップになる mwClient。呼び出しの順番を events に記録する。 */
+function lookaheadClient(events, { editDelayMs = 0 } = {}) {
+  return {
+    async getPage(title) {
+      events.push(`get:${title}`);
+      return {
+        title,
+        exists: true,
+        revid: 1,
+        baseTimestamp: '2026-08-11T09:00:00Z',
+        startTimestamp: '2026-08-11T09:00:01Z',
+        wikitext: title.startsWith('編集') ? `本文 旧 ${title}` : `本文 ${title}`,
+      };
+    },
+    async edit({ title }) {
+      events.push(`edit:${title}`);
+      if (editDelayMs) await new Promise((r) => setTimeout(r, editDelayMs));
+      events.push(`edited:${title}`);
+      return { revid: 999, newTimestamp: '2026-08-11T09:00:05Z' };
+    },
+  };
+}
+
+function lookaheadCtx(mwClient, editIntervalSeconds) {
+  return {
+    taskId: 1,
+    stage: 1,
+    mwClient,
+    account: 'NanonaBot',
+    replacements: [{ steps: [{ pattern: '旧', flags: 'g', replacement: '新' }] }],
+    editSettings: { botFlag: true, minorEdit: true, editSummary: 'test', editIntervalSeconds },
+    reviewSettings: { mode: 'auto', autoWaitSeconds: 0 },
+    onFailure: 'skipAndContinue',
+  };
+}
+
+function seedLookahead(db, titles) {
+  db.seedTask({ id: 1, status: 'running', review_timeout_at: null, progress_current: 0, mode: 'auto' });
+  db.seedPages(
+    titles.map((title, i) => ({ task_id: 1, stage: 1, order_index: i, page_title: title, namespace: 0, matched_rule_indices: '[0]', status: 'pending' }))
+  );
+}
+
+test('runStagePipeline: 先読みはスキップのページを飛ばし、今のページの編集中に次に編集するページまで準備しておく', async () => {
+  const db = createFakeDb();
+  seedLookahead(db, ['編集A', 'スキップB', 'スキップC', '編集D']);
+  const events = [];
+  await withStubbedDb(db.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    const result = await runStagePipeline(lookaheadCtx(lookaheadClient(events, { editDelayMs: 50 }), 0));
+    assert.equal(result.completed, true);
+  });
+  // 編集A の最中に、スキップB・C を飛ばして 編集D まで準備が済んでいる
+  assert.ok(events.indexOf('get:編集D') < events.indexOf('edited:編集A'), events.join(' → '));
+  assert.deepEqual(
+    [...db.taskPages.values()].map((p) => [p.page_title, p.status]),
+    [['編集A', 'edited'], ['スキップB', 'skipped'], ['スキップC', 'skipped'], ['編集D', 'edited']]
+  );
+});
+
+test('runStagePipeline: 編集間隔は編集した時刻から数え、残りがスキップだけなら待たない', async () => {
+  // 残りがスキップだけ: 編集間隔（1秒）を待たずに終わる
+  const db1 = createFakeDb();
+  seedLookahead(db1, ['編集A', 'スキップB', 'スキップC']);
+  let started = Date.now();
+  await withStubbedDb(db1.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    await runStagePipeline(lookaheadCtx(lookaheadClient([]), 1));
+  });
+  assert.ok(Date.now() - started < 900, `待たずに終わる（${Date.now() - started}ms）`);
+
+  // 間にスキップを挟んでも、次の編集は前の編集から編集間隔以上あける
+  const db2 = createFakeDb();
+  seedLookahead(db2, ['編集A', 'スキップB', '編集C']);
+  const times = {};
+  const client = lookaheadClient([]);
+  const edit = client.edit;
+  client.edit = async (params) => {
+    times[params.title] = Date.now();
+    return edit(params);
+  };
+  started = Date.now();
+  await withStubbedDb(db2.pool, async () => {
+    const { runStagePipeline } = require('../src/worker/pipeline');
+    await runStagePipeline(lookaheadCtx(client, 1));
+  });
+  assert.ok(times['編集C'] - times['編集A'] >= 950, `間隔 ${times['編集C'] - times['編集A']}ms`);
+});
