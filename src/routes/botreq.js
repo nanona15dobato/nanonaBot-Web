@@ -100,6 +100,15 @@ function sendDeskError(res, next, err) {
   return next(err);
 }
 
+// タスクに紐づけられる依頼の一覧（{{リンク修正依頼/改名}} が無い依頼も含む。着手時の Bot の要約つき）
+router.get('/api/botreq/link-candidates', requireRole('owner'), async (req, res, next) => {
+  try {
+    res.json({ requests: await botreqDesk.linkCandidates() });
+  } catch (err) {
+    sendDeskError(res, next, err);
+  }
+});
+
 // 運用者アカウントの確認（ログインした名前・権限・編集するページで編集が許されるか）
 router.get('/api/botreq/account-check', requireRole('owner'), async (req, res, next) => {
   try {

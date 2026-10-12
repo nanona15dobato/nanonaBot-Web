@@ -645,4 +645,19 @@ async function requestSections({ client, threadId } = {}) {
   });
 }
 
-module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections, checkAccount, checkAccounts, describeAccountCheck, logAccount, accountFor };
+/**
+ * タスクに紐づけられる依頼の一覧（{{リンク修正依頼/改名}} の有無を問わない）。新しい依頼を先、閉じられた依頼を後にする。
+ * @returns {Promise<Array<{threadId: string, name: string, status: string, statusLabel: string|null, botSummary: string|null, logTitle: string|null}>>}
+ */
+async function linkCandidates(options = {}) {
+  const sections = await requestSections(options);
+  const list = sections.map((r) => {
+    const { status, label } = L.detectStatus(r.text);
+    return { threadId: r.threadId, name: r.name, status, statusLabel: label, botSummary: r.botSummary, logTitle: r.logTitle };
+  });
+  const open = list.filter((r) => r.status !== 'resolved').reverse();
+  const closed = list.filter((r) => r.status === 'resolved').reverse();
+  return [...open, ...closed];
+}
+
+module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections, linkCandidates, checkAccount, checkAccounts, describeAccountCheck, logAccount, accountFor };
