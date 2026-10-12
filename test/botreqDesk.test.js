@@ -472,3 +472,18 @@ test('describeAccountCheck: 権限はあるのに他人の利用者ページを�
   assert.match(text, /editalluserpages/);
   assert.match(text, /BOTREQ_LOG_ACCOUNT=NanonaBot/);
 });
+
+test('linkCandidates: {{リンク修正依頼/改名}} の有無を問わず依頼を返し、状態と作業記録の要約を付ける', async () => {
+  const log = LOG.replace('* 要約欄 - …', '* 要約欄 - <code><nowiki>Bot:[[利用者:nanonaBot/依頼/2026年#botreq-n-2|作業依頼]] - バイオハザード</nowiki></code>');
+  const list = await desk.linkCandidates({ client: fakeClient({ log }) });
+  assert.deepEqual(list, [
+    {
+      threadId: THREAD,
+      name: 'バイオハザード',
+      status: 'started',
+      statusLabel: '着手',
+      botSummary: 'Bot:[[利用者:nanonaBot/依頼/2026年#botreq-n-2|作業依頼]] - バイオハザード',
+      logTitle: LOG_TITLE,
+    },
+  ]);
+});

@@ -84,6 +84,7 @@
 | `GET /api/edit-log?task_id=&page_title=&status=&limit=` | 編集ログの検索（`status` は `edited`/`failed`、`limit` は最大200） |
 | `GET /api/edit-log.csv?task_id=&page_title=&status=` | 編集ログのCSV（同じ条件で最大10000件。UTF-8・BOMつき） |
 | `GET /api/botreq/proposals?threadId=` | Bot作業依頼の `{{リンク修正依頼/改名}}` の分類結果と topic list の進捗。各提案の `request` に、書かれた依頼（`threadId`・`name`）と着手時の Bot の要約 `botSummary`（未着手なら `null`）を付ける。`threadId` を付けるとその依頼の提案だけを返し、`request` にその依頼も返す |
+| `GET /api/botreq/link-candidates` | タスクに紐づけられる依頼の一覧（`{{リンク修正依頼/改名}}` の有無を問わない。`threadId`・`name`・`status`・`statusLabel`・`botSummary`・`logTitle`） |
 | `GET /api/botreq/account-check` | 保存に使うアカウントの確認。`accounts` に用途（`role`）ごとの結果（`loginName`・`userName`・`groups`・`rights`（`edit`/`createpage`）・`pages`（ページごとの `allowed` と `reasons`）） |
 | `GET /api/botreq/requests` | Bot作業依頼の依頼の一覧（`threadId`・`name`・`sectionIndex`・`status`・`requester`・`requestedAt`・`logTitle`・`logState`・紐づけたタスク `tasks` など） |
 | `POST /api/botreq/prepare` | 着手・完了・解決で保存する内容を作る（`{"kind": "start"/"complete"/"resolve", "threadId": "h-…"}`）。ウィキは編集しない。返す本文は `before + text + after`。完了では `workSummary.breakdown`（タスクごとの編集数。`taskId: null` はツール以外）も返す。`saveAccount`（保存するアカウント）・`commentAccount`（返信するアカウント）も返す |

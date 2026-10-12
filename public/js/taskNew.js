@@ -546,15 +546,74 @@
   // 着手時に botreq.js（または Bot作業依頼の画面）が作業記録に書いた Bot の要約。紐づけている間は、アカウントを切り替えても要約欄に残す
   let botreqSummary = null;
   const $botreqLinkBox = $('<div>');
+  const linkBtn = new OO.ui.ButtonWidget({ label: '依頼に紐づける', icon: 'link', title: 'Bot作業依頼の依頼を選んでタスクに紐づけ、要約欄に作業記録の要約を入れます' });
+  linkBtn.on('click', () => openBotreqPicker());
 
   /**
    * タスクを依頼に紐づける（null で外す）。link.botSummary があれば要約欄に入れる。
    * link.botSummary が undefined（複製元のタスクの紐づけ等）のときは、要約欄には触れない。
    */
+  /**
+   * 依頼を選んでタスクに紐づける（{{リンク修正依頼/改名}} の無い依頼も選べる）。選ぶと、着手時の Bot の要約を要約欄に入れる。
+   */
+  async function openBotreqPicker() {
+    linkBtn.setDisabled(true);
+    $botreqLinkBox.empty().append(C.loading('Bot作業依頼の一覧を読み込み中…'));
+    let requests;
+    try {
+      requests = (await C.fetchJson('/api/botreq/link-candidates')).requests || [];
+    } catch (e) {
+      C.toast('依頼の一覧を読み込めませんでした: ' + e.message, 'error');
+      renderBotreqLinkBox(); // 元の表示に戻す
+      linkBtn.setDisabled(false);
+      return;
+    }
+    linkBtn.setDisabled(false);
+    if (!requests.length) {
+      $botreqLinkBox.empty().append(C.emptyState('紐づけられる依頼がありません。'));
+      return;
+    }
+    const statusText = (r) =>
+      r.status === 'resolved' ? '閉じられた依頼' : r.status === 'open' ? '未着手' : r.statusLabel || r.status;
+    const dropdown = new OO.ui.DropdownInputWidget({
+      options: requests.map((r) => ({
+        data: r.threadId,
+        label: r.name + '（' + statusText(r) + (r.botSummary ? '' : '・作業記録なし') + '）',
+      })),
+      value: botreqLink && requests.some((r) => r.threadId === botreqLink.threadId) ? botreqLink.threadId : requests[0].threadId,
+    });
+    const okBtn = new OO.ui.ButtonWidget({ label: '紐づける', flags: ['primary', 'progressive'] });
+    const cancelBtn = new OO.ui.ButtonWidget({ label: 'キャンセル', framed: false });
+    okBtn.on('click', () => {
+      const picked = requests.find((r) => r.threadId === dropdown.getValue());
+      setBotreqLink(picked);
+      C.toast('依頼「' + picked.name + '」に紐づけました。');
+    });
+    cancelBtn.on('click', () => renderBotreqLinkBox());
+    $botreqLinkBox.empty().append(
+      new OO.ui.ActionFieldLayout(dropdown, okBtn, {
+        label: '紐づける依頼',
+        align: 'top',
+        help: '作業記録（着手済み）のある依頼は、その要約（Bot:[[…#botreq-n-N|作業依頼]] - 依頼名）を要約欄に入れます。',
+        helpInline: true,
+      }).$element,
+      cancelBtn.$element
+    );
+  }
+
+  // 紐づけ時の要約の扱い（undefined: 触れていない／null: 作業記録が無く変えていない／文字列: 入れた要約）
+  let botreqSummaryShown;
+
   function setBotreqLink(link) {
     botreqLink = link && link.threadId ? { threadId: link.threadId, name: link.name || '' } : null;
     botreqSummary = botreqLink && link.botSummary ? link.botSummary : null;
+    botreqSummaryShown = botreqLink && link.botSummary !== undefined ? botreqSummary : undefined;
     if (botreqSummary) editSummaryWidget.setValue(botreqSummary);
+    renderBotreqLinkBox();
+  }
+
+  /** 紐づけの表示（状態は変えない。依頼の選択をやめたときにも使う）。 */
+  function renderBotreqLinkBox() {
     $botreqLinkBox.empty();
     if (!botreqLink) return;
     const unlinkBtn = new OO.ui.ButtonWidget({ label: '紐づけない', framed: false, flags: ['destructive'] });
@@ -568,15 +627,17 @@
         '」のタスクとして作成します（Bot作業依頼の画面に表示され、完了時の編集の内訳の確認に使います）。 '
       ),
     });
-    message.$label.append(unlinkBtn.$element);
+    const changeBtn = new OO.ui.ButtonWidget({ label: '別の依頼に変更', framed: false });
+    changeBtn.on('click', openBotreqPicker);
+    message.$label.append(changeBtn.$element, unlinkBtn.$element);
     $botreqLinkBox.append(message.$element);
-    if (link.botSummary !== undefined) {
+    if (botreqSummaryShown !== undefined) {
       $botreqLinkBox.append(
         new OO.ui.MessageWidget({
-          type: botreqSummary ? 'success' : 'warning',
+          type: botreqSummaryShown ? 'success' : 'warning',
           inline: true,
-          label: botreqSummary
-            ? $('<span>').append('要約欄に、作業記録の要約を入れました: ', $('<code>').text(botreqSummary))
+          label: botreqSummaryShown
+            ? $('<span>').append('要約欄に、作業記録の要約を入れました: ', $('<code>').text(botreqSummaryShown))
             : $('<span>').append(
                 'この依頼はまだ着手の記録が無いため、要約欄は変えていません（',
                 $('<a>').attr({ href: '/botreq', target: '_blank' }).text('Bot作業依頼の画面'),
@@ -586,6 +647,7 @@
       );
     }
   }
+
 
   function renderBotreqProposals(proposals, topicProgress) {
     $botreqPanel.empty();
@@ -909,7 +971,7 @@
   const rulesSection = C.section({
     title: '置換ルール',
     hint: '上から順にルールを適用します。同じページに複数ルールが該当する場合はまとめて準備します。',
-    actions: [botreqBtn],
+    actions: [linkBtn, botreqBtn],
   });
   rulesSection.$body.append($botreqLinkBox, $botreqPanel, $rulesContainer, $('<div>').addClass('nb-form-actions').append(addRuleBtn.$element));
 
