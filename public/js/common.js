@@ -65,8 +65,8 @@
   const RULE_TYPE_LABELS = {
     custom: 'カスタム',
     linkRename: 'リンク置換',
-    linkRename2: 'リンク置換2（表示保持）',
-    linkRenameExact: 'リンク置換（節・表示名指定）',
+    linkRename2: 'リンク置換（表示を保持）',
+    linkRenameExact: 'リンク置換（節・表示名を指定）',
     categoryRename: 'Category置換',
     categoryRemove: 'Category除去',
     templateRename: 'テンプレート置換',

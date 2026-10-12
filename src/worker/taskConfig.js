@@ -143,6 +143,13 @@ function validateRule(rule, i, errors) {
   if (rule.fixCategoryLinks !== undefined && typeof rule.fixCategoryLinks !== 'boolean') {
     errors.push(`${prefix}.fixCategoryLinks: 真偽値である必要があります`);
   }
+  if (rule.searchNarrowing !== undefined) {
+    if (typeof rule.searchNarrowing !== 'boolean') {
+      errors.push(`${prefix}.searchNarrowing: 真偽値である必要があります`);
+    } else if (rule.searchNarrowing && !['linkRename', 'linkRename2', 'linkRenameExact'].includes(type)) {
+      errors.push(`${prefix}.searchNarrowing: 検索での絞り込みはリンク置換だけで使えます`);
+    }
+  }
 }
 
 /**

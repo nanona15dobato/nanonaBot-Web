@@ -29,11 +29,12 @@
   });
 
   // フェーズ4〜6: 8種類すべてのtemplateTypeが実際に機能する（仕様書6章・10章、フェーズ6でunlinkPage/templateSubstを追加）。
+  // リンク置換・リンク置換2・リンク置換（節・表示名指定）は、画面では「リンク置換」の1種類にまとめる。
+  // 保存するときは、カードの選択（表示を保持・節や表示名の指定）から従来の templateType を決める（既存のタスク・複製と互換）
+  const LINK_RENAME_TYPES = ['linkRename', 'linkRename2', 'linkRenameExact'];
   const RULE_TYPES = [
     { data: 'custom', label: 'カスタム' },
     { data: 'linkRename', label: 'リンク置換' },
-    { data: 'linkRename2', label: 'リンク置換2（表示保持）' },
-    { data: 'linkRenameExact', label: 'リンク置換（節・表示名指定）' },
     { data: 'categoryRename', label: 'Category置換' },
     { data: 'categoryRemove', label: 'Category除去' },
     { data: 'templateRename', label: 'テンプレート置換' },
@@ -186,11 +187,94 @@
   }
 
   /**
+   * リンク置換のカード（リンク置換・リンク置換2・節・表示名指定を1つにまとめたもの）。
+   * - 「表示を保持する」: [[旧]] を [[新|旧]] にする（linkRename2）
+   * - 「節・表示名を指定する」: 指定した節・表示名のリンクだけを付け替える（linkRenameExact）
+   * - どちらも無し: すべての [[旧…]] のリンク先を変える（linkRename）
+   * BOTREQ の取り込み・複製では、元の templateType に合わせて選択を復元する。
+   */
+  function buildLinkRenameFields(rule, $body, fromWidget, toWidget, prefill) {
+    const prefillType = prefill && prefill.templateType;
+    const textField = (value, placeholder) => new OO.ui.TextInputWidget({ value: value || '', placeholder });
+    const fromAnchorWidget = textField(prefill && prefill.fromAnchor, '未入力=節なしのリンクだけが対象');
+    const toAnchorWidget = textField(prefill && prefill.toAnchor, '未入力=節なし');
+    const fromLabelWidget = textField(prefill && prefill.fromLabel, '未入力=表示名を問わない（表示名は残す）');
+    const toLabelWidget = textField(prefill && prefill.toLabel, '未入力=元の表示名のまま');
+    const hasExactFields = Boolean(prefill && (prefill.fromAnchor || prefill.toAnchor || prefill.fromLabel || prefill.toLabel));
+
+    const keepDisplayWidget = new OO.ui.CheckboxInputWidget({ selected: prefillType === 'linkRename2' });
+    const exactWidget = new OO.ui.CheckboxInputWidget({ selected: prefillType === 'linkRenameExact' || hasExactFields });
+    const searchWidget = new OO.ui.CheckboxInputWidget({ selected: Boolean(prefill && prefill.searchNarrowing) });
+    const keepDisplayField = new OO.ui.FieldLayout(keepDisplayWidget, {
+      label: '表示を保持する（[[旧]] を [[新|旧]] にして、見た目を変えない）',
+      align: 'inline',
+      help: '改名元に無い括弧（曖昧さ回避など）が改名先に付く場合に使います（従来の「リンク置換2」）。表示名付きのリンクは表示名をそのまま残します。',
+      helpInline: true,
+    });
+    const $exactFields = $('<div>').addClass('nb-link-exact').append(
+      new OO.ui.FieldLayout(fromAnchorWidget, { label: '改名元の節', align: 'top' }).$element,
+      new OO.ui.FieldLayout(fromLabelWidget, { label: '改名元の表示名', align: 'top' }).$element,
+      new OO.ui.FieldLayout(toAnchorWidget, { label: '改名先の節', align: 'top' }).$element,
+      new OO.ui.FieldLayout(toLabelWidget, { label: '改名先の表示名', align: 'top' }).$element,
+      $('<p>').addClass('nb-hint').text(
+        '[[改名元#節|表示名]] の形のリンクだけを [[改名先#節|表示名]] に付け替えます（BOTREQの「改名元#節{{!}}ラベル」形式）。' +
+          '改名元の節を空にすると、節なしのリンクだけが対象になります（節付きのリンクは変えません）。ハットノートのテンプレートは直しません。'
+      )
+    );
+    const ns = buildNamespaceField([0], 'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。');
+
+    function syncExact() {
+      const exact = exactWidget.isSelected();
+      $exactFields.toggle(exact);
+      // 節・表示名を指定するときは、表示名は「改名先の表示名」で決めるため「表示を保持」は使わない
+      keepDisplayWidget.setDisabled(exact);
+    }
+    exactWidget.on('change', syncExact);
+
+    $body.append(
+      keepDisplayField.$element,
+      new OO.ui.FieldLayout(exactWidget, { label: '節・表示名を指定する', align: 'inline' }).$element,
+      $exactFields,
+      $('<p>').addClass('nb-hint').text(
+        'このルールは2ウェーブ構成で処理されます: ウェーブ1でTemplate名前空間を先に編集→対象を再取得→ウェーブ2でその他ページを編集。'
+      ),
+      ns.$element,
+      new OO.ui.FieldLayout(searchWidget, {
+        label: '検索で絞り込む（リンク元が多いとき）',
+        align: 'inline',
+        help:
+          'ウェーブ2の対象を、リンク元のうち本文に旧リンクの記述がある（全文検索 linksto: + insource: に一致する）ページだけにして、変更不要（スキップ）のページを減らします。' +
+          '検索が時間切れ・1万件超・エラーのときや、標準名前空間以外のページ名・リンク元が50件未満のときは絞り込まず、リンク元のすべてを対象にします（実行ログに表示）。' +
+          '検索の索引に未反映の最近の編集は拾えないことがあるため、取りこぼしが心配なときはオフのままにしてください。',
+        helpInline: true,
+      }).$element
+    );
+    syncExact();
+
+    const orNull = (widget) => widget.getValue().trim() || null;
+    rule.getConfig = () => {
+      const base = { from: fromWidget.getValue(), to: toWidget.getValue(), namespaces: namespacesOrNull(ns.widget) };
+      if (searchWidget.isSelected()) base.searchNarrowing = true;
+      if (exactWidget.isSelected()) {
+        return Object.assign(base, {
+          templateType: 'linkRenameExact',
+          fromAnchor: orNull(fromAnchorWidget),
+          toAnchor: orNull(toAnchorWidget),
+          fromLabel: orNull(fromLabelWidget),
+          toLabel: orNull(toLabelWidget),
+        });
+      }
+      return Object.assign(base, { templateType: keepDisplayWidget.isSelected() ? 'linkRename2' : 'linkRename' });
+    };
+  }
+
+  /**
    * @param {{templateType?:string, from?:string, to?:string}} [prefill] - BOTREQ取り込み時の初期値
    */
   function addRuleCard(prefill) {
     const id = ++ruleSeq;
-    const initialType = (prefill && prefill.templateType) || 'custom';
+    const prefillType = (prefill && prefill.templateType) || 'custom';
+    const initialType = LINK_RENAME_TYPES.includes(prefillType) ? 'linkRename' : prefillType;
     const typeWidget = new OO.ui.DropdownInputWidget({ options: RULE_TYPES, value: initialType });
     const removeRuleBtn = new OO.ui.ButtonWidget({ icon: 'trash', flags: ['destructive'], framed: false, title: 'このルールを削除', label: '削除' });
     const moveUpBtn = new OO.ui.ButtonWidget({ icon: 'arrowUp', framed: false, invisibleLabel: true, label: '上へ移動', title: '上へ移動' });
@@ -262,38 +346,8 @@
         $body.append(new OO.ui.FieldLayout(toWidget, { label: '改名先（to）', align: 'top' }).$element);
       }
 
-      if (type === 'linkRenameExact') {
-        const textField = (value, placeholder) => new OO.ui.TextInputWidget({ value: value || '', placeholder });
-        const fromAnchorWidget = textField(prefill && prefill.fromAnchor, '未入力=節なしのリンクだけが対象');
-        const toAnchorWidget = textField(prefill && prefill.toAnchor, '未入力=節なし');
-        const fromLabelWidget = textField(prefill && prefill.fromLabel, '未入力=表示名を問わない（表示名は残す）');
-        const toLabelWidget = textField(prefill && prefill.toLabel, '未入力=元の表示名のまま');
-        const ns = buildNamespaceField(
-          [0],
-          'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。'
-        );
-        $body.append(
-          new OO.ui.FieldLayout(fromAnchorWidget, { label: '改名元の節', align: 'top' }).$element,
-          new OO.ui.FieldLayout(fromLabelWidget, { label: '改名元の表示名', align: 'top' }).$element,
-          new OO.ui.FieldLayout(toAnchorWidget, { label: '改名先の節', align: 'top' }).$element,
-          new OO.ui.FieldLayout(toLabelWidget, { label: '改名先の表示名', align: 'top' }).$element,
-          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
-            '[[改名元#節|表示名]] の形のリンクだけを [[改名先#節|表示名]] に付け替えます（BOTREQの「改名元#節{{!}}ラベル」形式）。' +
-              'リンク置換と同じく2ウェーブ構成で処理されます。'
-          ),
-          ns.$element
-        );
-        const orNull = (widget) => widget.getValue().trim() || null;
-        rule.getConfig = () => ({
-          templateType: 'linkRenameExact',
-          from: fromWidget.getValue(),
-          to: toWidget.getValue(),
-          fromAnchor: orNull(fromAnchorWidget),
-          toAnchor: orNull(toAnchorWidget),
-          fromLabel: orNull(fromLabelWidget),
-          toLabel: orNull(toLabelWidget),
-          namespaces: namespacesOrNull(ns.widget),
-        });
+      if (type === 'linkRename') {
+        buildLinkRenameFields(rule, $body, fromWidget, toWidget, prefill);
       } else if (type === 'urlRename') {
         fromWidget.$input.attr('placeholder', '例: http://old.example.org/path');
         toWidget.$input.attr('placeholder', '例: https://new.example.org/path');
@@ -326,23 +380,6 @@
           to: toWidget.getValue().trim(),
           namespaces: namespacesOrNull(ns.widget),
           bothSchemes: bothSchemesWidget.isSelected(),
-        });
-      } else if (type === 'linkRename' || type === 'linkRename2') {
-        const ns = buildNamespaceField(
-          [0],
-          'ウェーブ2（その他ページ）の対象名前空間。ウェーブ1はTemplate名前空間固定で自動的に処理されます。'
-        );
-        $body.append(
-          $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
-            'このルールは2ウェーブ構成で処理されます: ウェーブ1でTemplate名前空間を先に編集→対象を再取得→ウェーブ2でその他ページを編集。'
-          ),
-          ns.$element
-        );
-        rule.getConfig = () => ({
-          templateType: type,
-          from: fromWidget.getValue(),
-          to: toWidget.getValue(),
-          namespaces: namespacesOrNull(ns.widget),
         });
       } else if (type === 'categoryRename' || type === 'categoryRemove') {
         const ns = buildNamespaceField(null, '既定は全名前空間（原則すべてのカテゴリ呼び出し先が対象）。');
@@ -477,7 +514,10 @@
     anchor_or_label: 'Category/Template・同一ページ内の節を含むアンカー/パイプラベル付き指定',
     namespace_mismatch: '改名元・改名先の名前空間が噛み合っていない',
   };
-  const RULE_TYPE_LABEL_MAP = Object.fromEntries(RULE_TYPES.map((t) => [t.data, t.label]));
+  const RULE_TYPE_LABEL_MAP = Object.assign(Object.fromEntries(RULE_TYPES.map((t) => [t.data, t.label])), {
+    linkRename2: 'リンク置換（表示を保持）',
+    linkRenameExact: 'リンク置換（節・表示名を指定）',
+  });
 
   const botreqBtn = new OO.ui.ButtonWidget({ label: 'Bot作業依頼から取り込む', icon: 'download', title: 'Wikipedia:Bot作業依頼 の {{リンク修正依頼/改名}} を読み込みます' });
   const $botreqPanel = $('<div>');
