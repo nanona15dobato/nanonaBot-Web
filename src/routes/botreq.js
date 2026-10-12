@@ -74,7 +74,7 @@ function describeWikiError(err) {
   if (permission && ['edit', 'discussiontoolsedit'].includes(err.apiAction)) {
     message +=
       ' — 「このセッションの権限」に edit が無い場合は、ツールに設定した BotPassword（上のログイン名）の権限（Special:BotPasswords）が足りません。' +
-      'タスクで使っている BotPassword と同じか、画面右上の「運用者アカウントを確認」で確かめてください。';
+      '画面右上の「保存に使うアカウントを確認」でも確かめられます。';
   }
   return message;
 }
@@ -103,7 +103,7 @@ function sendDeskError(res, next, err) {
 // 運用者アカウントの確認（ログインした名前・権限・編集するページで編集が許されるか）
 router.get('/api/botreq/account-check', requireRole('owner'), async (req, res, next) => {
   try {
-    res.json(await botreqDesk.checkAccount());
+    res.json({ accounts: await botreqDesk.checkAccounts() });
   } catch (err) {
     sendDeskError(res, next, err);
   }

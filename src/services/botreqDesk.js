@@ -17,12 +17,39 @@ const MAX_CONTRIBS = 100000; // 完了時に数える投稿の上限（記録の
 
 const REVID_CHUNK = 500; // edit_log を revid で引くときの1回の IN の件数
 
-async function defaultClient() {
+/** MediaWiki の利用者名の比較用（先頭の文字の大小・空白と下線を区別しない）。 */
+function normalizeUser(name) {
+  const s = String(name || '').replace(/_/g, ' ').trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * 作業記録の編集に使うアカウント。BOTREQ_LOG_ACCOUNT が無ければ、作業記録の利用者空間の持ち主（ツールに設定したアカウントの中から）。
+ * jawiki は $wgRestrictUserPageEditing が有効で、他人の利用者ページの編集には editalluserpages が要るが、
+ * この権限はどの BotPassword の権限（grant）にも無いため、運用者の BotPassword では作業記録を編集できない。
+ */
+function logAccount() {
+  if (config.botreq.logAccount) return config.botreq.logAccount;
+  const owner = (config.botreq.logPrefix.match(/^(?:利用者|User)\s*:\s*([^/]+)\//i) || [])[1];
+  if (owner) {
+    const { ACCOUNT_ENV_MAP } = require('../bot/accountNames');
+    const found = Object.keys(ACCOUNT_ENV_MAP).find((name) => normalizeUser(name) === normalizeUser(owner));
+    if (found) return found;
+  }
+  return config.botreq.account;
+}
+
+/** 編集するページに応じたアカウント（作業記録は持ち主のアカウント、依頼ページは運用者のアカウント）。 */
+function accountFor(title) {
+  return isLogTitle(title) ? logAccount() : config.botreq.account;
+}
+
+async function defaultClient(account = config.botreq.account) {
   try {
-    return await require('../bot/accounts').getClient(config.botreq.account);
+    return await require('../bot/accounts').getClient(account);
   } catch (err) {
     // 認証情報が未設定・BotPassword の失効など。画面に理由を出せるようにする
-    throw Object.assign(new Error(`${config.botreq.account} でウィキにログインできません: ${err.message}`), { status: 502 });
+    throw Object.assign(new Error(`${account} でウィキにログインできません: ${err.message}`), { status: 502 });
   }
 }
 
@@ -226,6 +253,10 @@ async function prepareStart(client, threadId) {
   const editCount = await getEditCount(client, config.botreq.botUser);
   const log = await client.getPage(logTitle);
   const notes = [];
+  // 作業記録を Bot 自身のアカウントで編集する場合、この着手の保存でも Bot の編集回数が1つ増える。
+  // その1編集を作業に数えないよう、記録する編集回数に足しておく
+  const selfLog = normalizeUser(logAccount()) === normalizeUser(config.botreq.botUser);
+  const recordedCount = editCount + (selfLog ? 1 : 0);
   const current = log.exists ? log.wikitext : L.newLogPage(L.jstYear(req.requestedAt), config.botreq.operator);
   if (!log.exists) notes.push({ type: 'notice', text: `${logTitle} はまだありません。保存すると、このページを作成します。` });
   const counted = L.incrementHeadCount(current);
@@ -238,7 +269,7 @@ async function prepareStart(client, threadId) {
     num: counted.num,
     name: req.name,
     threadId,
-    editCount,
+    editCount: recordedCount,
     logTitle,
     discussion: links.length ? links[0].wikitext : '',
     requester: req.requester,
@@ -366,7 +397,11 @@ async function prepare(kind, threadId, { client, query } = {}) {
   if (typeof threadId !== 'string' || !L.REQUEST_THREAD_ID_RE.test(threadId)) {
     throw Object.assign(new Error('依頼の節の ID が正しくありません'), { status: 400 });
   }
-  return PREPARE[kind](client || defaultReader(), threadId, query || defaultQuery);
+  const plan = await PREPARE[kind](client || defaultReader(), threadId, query || defaultQuery);
+  // 保存するアカウント（作業記録は利用者空間の持ち主、依頼ページと返信は運用者）を画面に出す
+  plan.saveAccount = accountFor(plan.title);
+  if (plan.comment) plan.commentAccount = config.botreq.account;
+  return plan;
 }
 
 /** 保存の入力を確かめる。誤りがあれば理由の配列を返す。 */
@@ -399,11 +434,11 @@ const CHECK_RIGHTS = ['edit', 'createpage'];
  * @param {object} [options]
  * @param {string[]} [options.titles] - 確かめるページ（既定: Bot作業依頼と今年の作業記録）
  */
-async function checkAccount({ client, titles } = {}) {
-  client = client || (await defaultClient());
+async function checkAccount({ client, titles, account = config.botreq.account } = {}) {
+  client = client || (await defaultClient(account));
   const pages = titles && titles.length ? titles : [BOTREQ_PAGE_TITLE, `${config.botreq.logPrefix}${L.jstYear(Date.now())}年`];
   const { ACCOUNT_ENV_MAP } = require('../bot/accountNames');
-  const env = ACCOUNT_ENV_MAP[config.botreq.account];
+  const env = ACCOUNT_ENV_MAP[account];
   const info = await client.request({ action: 'query', meta: 'userinfo', uiprop: 'groups|rights' });
   const user = info.query.userinfo;
   const tested = await client.request({
@@ -416,7 +451,7 @@ async function checkAccount({ client, titles } = {}) {
   });
   const reasons = (list) => (Array.isArray(list) ? list.map((m) => `${m.text || m.html || ''}${m.code ? `（${m.code}）` : ''}`.trim()) : []);
   return {
-    account: config.botreq.account,
+    account,
     loginName: env ? process.env[env.user] || null : null, // BotPassword のログイン名（例: 利用者名@Bot名）。パスワードは返さない
     userName: user.anon !== undefined ? null : user.name,
     groups: user.groups || [],
@@ -430,6 +465,25 @@ async function checkAccount({ client, titles } = {}) {
   };
 }
 
+/**
+ * 保存に使う2つのアカウント（作業記録用・依頼ページ用）を、それぞれ編集するページで確かめる。同じアカウントなら1つにまとめる。
+ * @returns {Promise<Array<object>>} checkAccount の結果に role（用途）を足したもの
+ */
+async function checkAccounts() {
+  const logTitle = `${config.botreq.logPrefix}${L.jstYear(Date.now())}年`;
+  const roles = [
+    { role: '作業記録', account: logAccount(), title: logTitle },
+    { role: '依頼ページ・返信', account: config.botreq.account, title: BOTREQ_PAGE_TITLE },
+  ];
+  const results = [];
+  for (const account of [...new Set(roles.map((r) => r.account))]) {
+    const mine = roles.filter((r) => r.account === account);
+    const check = await checkAccount({ account, titles: mine.map((r) => r.title) });
+    results.push({ ...check, role: mine.map((r) => r.role).join('・') });
+  }
+  return results;
+}
+
 /** checkAccount の結果を、エラーに添える1行の説明にする。 */
 function describeAccountCheck(check, title) {
   const page = check.pages.find((p) => p.title === title) || check.pages[0];
@@ -439,18 +493,27 @@ function describeAccountCheck(check, title) {
     `このセッションの権限: ${missing.length ? `${missing.join('・')} が無い` : 'edit・createpage あり'}`,
   ];
   if (page) parts.push(`「${page.title}」の${page.action === 'create' ? '作成' : '編集'}: ${page.allowed ? '可' : `不可（${page.reasons.join(' / ') || '理由不明'}）`}`);
+  // 権限はあるのに他人の利用者ページを編集できない: jawiki の $wgRestrictUserPageEditing（editalluserpages は BotPassword に付けられない）
+  const owner = page && (page.title.match(/^(?:利用者|User)\s*:\s*([^/]+)/i) || [])[1];
+  if (page && !page.allowed && !missing.length && owner && check.userName && normalizeUser(owner) !== normalizeUser(check.userName)) {
+    parts.push(
+      `他人（${owner}）の利用者ページは、jawiki では editalluserpages の権限が無いと編集できず、この権限は BotPassword では付けられません。` +
+        `持ち主のアカウントで編集するよう、BOTREQ_LOG_ACCOUNT=${owner} を設定してください`
+    );
+  }
   return parts.join('。');
 }
 
 async function save(body, { client } = {}) {
-  client = client || (await defaultClient());
+  const account = accountFor(body.title);
+  client = client || (await defaultClient(account));
   try {
     return await saveWith(client, body);
   } catch (err) {
     // 権限エラーなら、ログインしたアカウント・権限・そのページでの判定を添える（原因の切り分け用）
     if (err.mwCode === 'permissiondenied' && err.apiAction === 'edit') {
       try {
-        err.diagnosis = describeAccountCheck(await checkAccount({ client, titles: [body.title] }), body.title);
+        err.diagnosis = describeAccountCheck(await checkAccount({ client, account, titles: [body.title] }), body.title);
       } catch (diagErr) {
         err.diagnosis = `アカウントの確認にも失敗しました: ${diagErr.message}`;
       }
@@ -582,4 +645,4 @@ async function requestSections({ client, threadId } = {}) {
   });
 }
 
-module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections, checkAccount, describeAccountCheck };
+module.exports = { listRequests, prepare, validateSave, save, renderPreview, renderDiff, isLogTitle, requestSections, checkAccount, checkAccounts, describeAccountCheck, logAccount, accountFor };
