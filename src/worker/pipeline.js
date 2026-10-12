@@ -515,7 +515,8 @@ async function editOnePage(prepared, ctx) {
 }
 
 /**
- * 1ステージ分のtask_pagesを、1ページ先読みパイプラインで処理する（仕様書9.2節）。
+ * 1ステージ分のtask_pagesを、先読みパイプラインで処理する（仕様書9.2節）。
+ * 先読みは、変更不要（スキップ）のページを飛ばして、次に編集が要るページまで進めておく。
  *
  * @param {object} ctx
  * @param {number} ctx.taskId
@@ -573,12 +574,31 @@ async function runStagePipeline(ctx) {
     return { completed: false, emergencyStopped: true, hadFailures: false };
   }
 
+  // 先読み: 今のページの確認・編集・編集間隔の待ちの間に、次に編集するページを準備しておく。
+  // 準備した結果が「変更不要（スキップ）」なら、その場で確定させてさらに次を準備し、
+  // 編集が要るページ（または失敗したページ）が見つかるまで進む（＝次に編集するものを待機させておく）。
+  const ahead = { stopped: false };
+  async function prepareAhead(from) {
+    for (let j = from; j < rows.length; j++) {
+      if (ahead.stopped || (await isEmergencyStopped())) return null;
+      const result = await prepareOnePage(rows[j], ctx);
+      if (result.status === 'skipped') {
+        await updateProgress(ctx.taskId);
+        continue;
+      }
+      return { index: j, result };
+    }
+    return null;
+  }
+
   let hadFailures = false;
-  let current = await prepareOnePage(rows[0], ctx);
-  let nextPromise = rows[1] ? prepareOnePage(rows[1], ctx) : null;
+  let nextPromise = null;
+  let current = await prepareAhead(0);
 
   try {
-    for (let i = 0; i < rows.length; i++) {
+    while (current) {
+      nextPromise = prepareAhead(current.index + 1);
+
       if (await isEmergencyStopped()) {
         return { completed: false, emergencyStopped: true, hadFailures };
       }
@@ -587,17 +607,18 @@ async function runStagePipeline(ctx) {
         return { completed: false, cancelled: true, hadFailures };
       }
 
-      if (current.status === 'failed') {
+      let editedAt = null; // 実際に編集した時刻（次の編集までの間隔をこの時刻から数える）
+      if (current.result.status === 'failed') {
         hadFailures = true;
         if (ctx.onFailure === 'pause') {
           await pauseTask(ctx.taskId);
           return { completed: false, paused: true, hadFailures };
         }
         // skipAndContinue: 何もせず次へ
-      } else if (current.status === 'prepared') {
+      } else if (current.result.status === 'prepared') {
         // 手動確認モードで編集競合が起きたときは、最新版で作り直した差分を改めて確認するため
         // 確認待ちに戻る（editOnePage が needsReview を返す）。それ以外は1回で抜ける。
-        let target = current;
+        let target = current.result;
         for (;;) {
           const approved = await waitForApproval({
             taskId: ctx.taskId,
@@ -653,25 +674,28 @@ async function runStagePipeline(ctx) {
             }
           }
           // 実際に編集しなかった（競合後に変更不要と分かった）ときは編集間隔をあけない
-          if (!editResult.skipped && i < rows.length - 1) {
-            await sleep(Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000);
-          }
+          if (!editResult.skipped) editedAt = Date.now();
           break;
         }
       }
-      // status === 'skipped' の場合は何もせず次へ
 
       await updateProgress(ctx.taskId);
 
-      if (nextPromise) {
-        current = await nextPromise;
-        const after = rows[i + 2];
-        nextPromise = after ? prepareOnePage(after, ctx) : null;
+      // 次に編集するページ（先読みがスキップを飛ばして見つけたもの）。見つからなければこのステージは終わり
+      const next = await nextPromise;
+      nextPromise = null;
+      // 編集間隔は、編集した時刻から数える（その間に先読みが進むため、待ち時間が増えない）。
+      // 次に編集するページが無いとき（残りがすべてスキップ・終わり）は待たない
+      if (editedAt !== null && next) {
+        const remaining = Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000 - (Date.now() - editedAt);
+        if (remaining > 0) await sleep(remaining);
       }
+      current = next;
     }
   } finally {
-    // 途中で抜けた場合も、裏で走っている先読みの完了を待ってから戻る
+    // 途中で抜けた場合も、裏で走っている先読みを止め、完了を待ってから戻る
     // （放置するとワーカーの次の処理と並行してDBを書き換えてしまうため）。
+    ahead.stopped = true;
     if (nextPromise) await nextPromise.catch(() => {});
   }
 
