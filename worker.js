@@ -40,17 +40,11 @@ async function cleanupIfDue() {
  * 前提（仕様書1章）なので、起動時点で running のものは前回の実行の取り残しとして
  * キューに戻す（途中だったページはpipeline側で再処理できる状態に戻される）。
  */
-async function requeueInterruptedTasks() {
-  const [rows] = await pool.query(`SELECT id FROM tasks WHERE status = 'running'`);
-  for (const { id } of rows) {
-    await pool.query(`UPDATE tasks SET status = 'queued', updated_at = NOW() WHERE id = ? AND status = 'running'`, [id]);
-    await writeTaskLogSafely({
-      taskId: id,
-      level: 'warning',
-      message: 'ワーカーの再起動により中断されていたため、キューに戻しました。',
-    });
-    console.warn(`[worker] 中断されていたタスク ${id} をキューに戻しました`);
-  }
+const { requeueInterruptedTasks: requeueTasks } = require('./src/worker/recovery');
+
+/** 実行中のまま残ったタスクをキューに戻す（再起動が続いているタスクは失敗にする。src/worker/recovery.js）。 */
+function requeueInterruptedTasks() {
+  return requeueTasks({ pool, writeTaskLog: writeTaskLogSafely, notifyTaskStatus });
 }
 
 // ===== 稼働状況（ハートビート） =====

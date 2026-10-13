@@ -19,8 +19,14 @@ function validateStep(step, prefix, errors) {
     errors.push(`${prefix}: patternは空でない文字列である必要があります`);
   } else {
     try {
-      // eslint-disable-next-line no-new
-      new RegExp(step.pattern, step.flags || 'g');
+      const re = new RegExp(step.pattern, (step.flags || 'g').replace(/[gy]/g, ''));
+      // 空の文字列に一致する正規表現（a* など）で文字を挿入すると、本文の全ての位置に挿入されて膨れ上がる。
+      // 置換先が空（空白の削除など）なら害が無いので、置換先があるときだけ止める
+      if (typeof step.replacement === 'string' && step.replacement !== '' && re.test('')) {
+        errors.push(
+          `${prefix}: patternが空の文字列に一致します（「a*」「\\s*」だけ等）。このままでは本文の全ての位置に置換先が挿入されるため、何かに必ず一致するパターンにしてください`
+        );
+      }
     } catch (e) {
       errors.push(`${prefix}: patternが不正な正規表現です (${e.message})`);
     }

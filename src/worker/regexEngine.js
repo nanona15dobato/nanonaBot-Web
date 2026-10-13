@@ -3,6 +3,20 @@
 const WikitextParser = require('../../lib/WikitextParser');
 
 const DEFAULT_MAX_LOOP = 50;
+// 置換の結果の上限（文字数）。MediaWiki のページの上限（2MB）を超える本文はどのみち保存できない。
+// 空の文字列に一致する正規表現（a* など）が全ての位置に挿入して本文が膨れ続け、ワーカーがメモリ不足で落ちるのを防ぐ
+const MAX_RESULT_LENGTH = 2200000;
+
+class ReplacementTooLargeError extends Error {}
+
+function checkSize(text, original, step) {
+  if (text.length > MAX_RESULT_LENGTH && text.length > original.length) {
+    throw new ReplacementTooLargeError(
+      `置換の結果が大きくなりすぎたため中止しました（${text.length}文字。パターン: ${String(step.pattern).slice(0, 80)}）。` +
+        '空の文字列に一致する正規表現（a* など）で、全ての位置に文字を挿入していないか確認してください'
+    );
+  }
+}
 
 /**
  * 1つの置換ステップ定義。
@@ -37,14 +51,16 @@ function applyReplacementSteps(wikitext, steps, options = {}) {
       do {
         prev = text;
         text = text.replace(re, step.replacement);
+        checkSize(text, masked, step);
         iterations++;
       } while (text !== prev && iterations < DEFAULT_MAX_LOOP);
     } else {
       text = text.replace(re, step.replacement);
+      checkSize(text, masked, step);
     }
   }
 
   return restore(text);
 }
 
-module.exports = { applyReplacementSteps };
+module.exports = { applyReplacementSteps, ReplacementTooLargeError, MAX_RESULT_LENGTH };
