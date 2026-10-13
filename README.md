@@ -579,7 +579,7 @@ public/js/taskDetail.js      タスク詳細/Diff確認画面ロジック（ス�
 public/js/editLog.js         編集ログ画面ロジック（検索・フィルタ・差分リンク。フェーズ6）
 public/js/botreq.js          Bot作業依頼画面ロジック（一覧・確認ダイアログ。フェーズ13）
 userscripts/botreq.js        ウィキ上で同じ操作を行う利用者スクリプト（利用者:Nanona15dobato/script/botreq.js の元。フェーズ13）
-lib/WikitextParser.js        Wikitext解析共有ライブラリ
+lib/WikitextParser.js        Wikitext解析共有ライブラリ（nanonaBot2 の parse2 を移植。括弧を1回だけ走査して入れ子の木を作るため、大きなページでも速い）
 scripts/check-redirect-category-template.js
                               Template:リダイレクトの所属カテゴリ 書式確認スクリプト
 db/schema.sql                DBスキーマ（tasks/task_pages/edit_log/task_logs/system_status/task_warnings）
