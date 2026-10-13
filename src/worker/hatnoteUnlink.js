@@ -32,6 +32,12 @@ function refersTo(value, page) {
  * @returns {{wikitext: string, changed: boolean, count: number}}
  */
 function removePageFromHatnotes(wikitext, page) {
+  // 解除対象のページ名（先頭1文字は大小を問わないので除き、空白と下線は両方の書き方）が本文に無ければ、参照も無い。
+  // WikitextParser はページ全体だと本文の大きさの2乗程度の時間・メモリがかかるため、関係の無いページでは解析しない
+  const rest = normalizeTitle(page).slice(1);
+  if (rest.length > 0 && !wikitext.includes(rest) && !wikitext.includes(rest.replace(/ /g, '_'))) {
+    return { wikitext, changed: false, count: 0 };
+  }
   const parser = new WikitextParser();
   const calls = parser.parse(wikitext, { templates: LIST_HATNOTE_TEMPLATES }).templates.filter((t) =>
     LIST_HATNOTE_TEMPLATES.includes(t.name)

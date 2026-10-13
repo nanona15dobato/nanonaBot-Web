@@ -28,3 +28,11 @@ test('removePageFromHatnotes: 名前付き引数を含む呼び出し・役割�
     assert.equal(result.changed, false);
   }
 });
+
+test('removePageFromHatnotes: 解除対象のページ名が本文に無ければ解析せずにそのまま返す', () => {
+  const { removePageFromHatnotes: remove } = require('../src/worker/hatnoteUnlink');
+  const text = '{{See also|別の記事}} 本文';
+  assert.deepEqual(remove(text, '消すページ'), { wikitext: text, changed: false, count: 0 });
+  // 下線で書かれていても見つける
+  assert.equal(remove('{{See also|Foo_bar}}本文', 'Foo bar').changed, true);
+});
