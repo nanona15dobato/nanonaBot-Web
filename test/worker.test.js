@@ -271,3 +271,28 @@ test('validateTaskConfig: fromAnchorAny は真偽値で、改名元の節と同�
   assert.match(validateTaskConfig({ ...base, replacements: [{ ...rule, fromAnchorAny: true, fromAnchor: '節' }] }).errors.join(), /同時|節を問わない/);
   assert.match(validateTaskConfig({ ...base, replacements: [{ ...rule, fromAnchorAny: 'yes' }] }).errors.join(), /fromAnchorAny: 真偽値/);
 });
+
+test('applyReplacementSteps: 置換の結果が大きくなりすぎたら、ワーカーを落とさずエラーにする', () => {
+  const { ReplacementTooLargeError } = require('../src/worker/regexEngine');
+  const text = 'あ'.repeat(30000);
+  // 空の文字列に一致するパターンで、全ての位置に100文字を挿入する（約300万文字になる）
+  assert.throws(() => applyReplacementSteps(text, [{ pattern: 'x*', flags: 'g', replacement: 'い'.repeat(100) }]), ReplacementTooLargeError);
+  // 繰り返しで倍々に増えるステップも、上限に達した時点で止まる
+  assert.throws(
+    () => applyReplacementSteps('ab', [{ pattern: '(a)', flags: 'g', replacement: '$1$1', loopUntilStable: true }, { pattern: '(a+)', flags: 'g', replacement: '$1$1', loopUntilStable: true }]),
+    ReplacementTooLargeError
+  );
+});
+
+test('validateTaskConfig: 空の文字列に一致するパターンで文字を挿入するステップは受け付けない（置換先が空なら可）', () => {
+  const base = {
+    account: 'NanonaBot',
+    editSettings: { botFlag: true, minorEdit: true, editSummary: 'test edit', editIntervalSeconds: 10 },
+    reviewSettings: { mode: 'auto', autoWaitSeconds: 30 },
+    onFailure: 'pause',
+  };
+  const rule = (step) => ({ templateType: 'custom', steps: [step], targetSource: { type: 'manualList', titles: ['P'] } });
+  assert.match(validateTaskConfig({ ...base, replacements: [rule({ pattern: 'x*', flags: 'g', replacement: 'Y' })] }).errors.join(), /空の文字列に一致/);
+  assert.equal(validateTaskConfig({ ...base, replacements: [rule({ pattern: ' *$', flags: 'gm', replacement: '' })] }).valid, true);
+  assert.equal(validateTaskConfig({ ...base, replacements: [rule({ pattern: 'foo', flags: 'g', replacement: 'bar' })] }).valid, true);
+});

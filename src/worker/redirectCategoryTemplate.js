@@ -25,7 +25,8 @@ const WikitextParser = require('../../lib/WikitextParser');
  * 除去後は読みやすさのため各リダイレクト内で 1 から連番に詰め直す。
  */
 
-const TEMPLATE_TITLE = 'Template:リダイレクトの所属カテゴリ';
+const TEMPLATE_NAME = 'リダイレクトの所属カテゴリ';
+const TEMPLATE_TITLE = `Template:${TEMPLATE_NAME}`;
 
 /** "N-M"形式（N:1-10, M:1-20）、または1件目省略時の素の番号引数（1-20）か判定する。 */
 function isCategoryValueKey(key) {
@@ -43,9 +44,60 @@ function isCategoryValueKey(key) {
  * @returns {Array} WikitextParserのtemplates要素（argsOrdered含む）
  */
 function findCalls(wikitext) {
-  const parser = new WikitextParser();
-  const parsed = parser.parse(wikitext, { templates: [TEMPLATE_TITLE] });
-  return parsed.templates.filter((t) => t.name === TEMPLATE_TITLE);
+  const text = String(wikitext || '');
+  // テンプレート名が本文に無ければ呼び出しも無い（リダイレクトも無いことを確認済み）
+  if (!text.includes(TEMPLATE_NAME)) return [];
+
+  // WikitextParser はページ全体だと本文の大きさの2乗程度の時間・メモリがかかる（5万文字で数秒・数十MB）。
+  // Category置換では対象の全ページで呼ぶため、大きなページでワーカーがメモリ不足で落ちていた。
+  // そこで、呼び出しの部分だけを切り出して解析し、位置を本文全体の位置に直す。
+  // コメント・nowiki 等の中の呼び出しは、ページ全体の解析と同じく対象外にする（同じ長さの空白に置き換えて探す）
+  const blanked = text.replace(BLANK_REGIONS_RE, (m) => ' '.repeat(m.length));
+  const calls = [];
+  CALL_START_RE.lastIndex = 0;
+  let m;
+  while ((m = CALL_START_RE.exec(blanked)) !== null) {
+    const start = m.index;
+    const end = matchingBraceEnd(blanked, start);
+    if (end === -1) continue; // 閉じていない呼び出しは、ページ全体の解析でも認識されない
+    const region = text.slice(start, end);
+    const parsed = new WikitextParser().parse(region, { templates: [TEMPLATE_TITLE] });
+    const call = parsed.templates.find((t) => t.name === TEMPLATE_TITLE && t.position.start === 0);
+    if (call) calls.push(shiftPositions(call, start));
+    CALL_START_RE.lastIndex = end;
+  }
+  return calls;
+}
+
+// 呼び出しの始まり（{{リダイレクトの所属カテゴリ| や {{Template:リダイレクトの所属カテゴリ}} など）
+const CALL_START_RE = new RegExp(`\\{\\{\\s*(?:(?:Template|template|テンプレート)\\s*:\\s*)?${TEMPLATE_NAME}\\s*[|}]`, 'g');
+// 呼び出しを探すときに除く範囲（コメント・nowiki・pre 等）
+const BLANK_REGIONS_RE = /<!--[\s\S]*?(?:-->|$)|<(nowiki|pre|math|syntaxhighlight|source)(?:\s[^>]*?)?(?:\/>|>[\s\S]*?<\/\1\s*>)/gi;
+
+/** start の "{{" に対応する "}}" の直後の位置（無ければ -1）。 */
+function matchingBraceEnd(text, start) {
+  let depth = 0;
+  for (let i = start; i < text.length - 1; i++) {
+    if (text[i] === '{' && text[i + 1] === '{') {
+      depth++;
+      i++;
+    } else if (text[i] === '}' && text[i + 1] === '}') {
+      depth--;
+      i++;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** 切り出した部分で解析した呼び出しの位置を、本文全体の位置に直す。 */
+function shiftPositions(call, offset) {
+  const shift = (p) => (p ? { ...p, start: p.start + offset, end: p.end + offset } : p);
+  return {
+    ...call,
+    position: shift(call.position),
+    argsOrdered: call.argsOrdered.map((a) => ({ ...a, position: shift(a.position) })),
+  };
 }
 
 /**

@@ -187,3 +187,33 @@ test('findCandidatePages: backlinksのうち構造的に一致するページだ
     global.fetch = originalFetch;
   }
 });
+
+test('findCalls: 呼び出しの部分だけを解析しても、ページ全体を解析したときと同じ結果（位置も本文全体の位置）になる', () => {
+  const WikitextParser = require('../lib/WikitextParser');
+  const { findCalls: find, TEMPLATE_TITLE: TITLE } = require('../src/worker/redirectCategoryTemplate');
+  const full = (t) => new WikitextParser().parse(t, { templates: [TITLE] }).templates.filter((x) => x.name === TITLE);
+  const strip = (arr) =>
+    arr.map((x) => ({ name: x.name, position: x.position, original: x.original, argsOrdered: x.argsOrdered.map((g) => ({ key: g.key, value: g.value, position: g.position })) }));
+  const text = [
+    '前置き {{Infobox|名前=X}} [[リンク]]',
+    '{{リダイレクトの所属カテゴリ',
+    '|redirect1 = 旧名{{要出典}}',
+    '|1-1 = 日本の橋',
+    '|1-2 = {{PAGENAME}}の作品',
+    '}}',
+    '<!-- {{リダイレクトの所属カテゴリ|redirect1=コメント内|1-1=日本の橋}} -->',
+    '本文 {{Template:リダイレクトの所属カテゴリ|redirect1=別|1-1=日本の川}} 末尾',
+  ].join('\n');
+  const got = find(text);
+  assert.equal(got.length, 2); // コメント内の呼び出しは数えない
+  assert.deepEqual(strip(got), strip(full(text)));
+  // 位置は本文全体の位置
+  const arg = got[0].argsOrdered.find((a) => a.key === '1-1');
+  assert.equal(text.slice(arg.position.start, arg.position.end).trim(), '1-1 = 日本の橋');
+});
+
+test('findCalls: テンプレート名の無いページ・閉じていない呼び出しは空', () => {
+  const { findCalls: find } = require('../src/worker/redirectCategoryTemplate');
+  assert.deepEqual(find('{{Infobox}} 本文'), []);
+  assert.deepEqual(find('{{リダイレクトの所属カテゴリ|redirect1=X|1-1=A'), []);
+});
