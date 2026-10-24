@@ -22,14 +22,19 @@ async function getUserGroups(username) {
 
   const res = await fetch(url, {
     headers: { 'User-Agent': config.userAgent },
+    signal: AbortSignal.timeout(5000),
   });
   if (!res.ok) {
     throw new Error(`MediaWiki APIエラー (${res.status}): ユーザー情報を取得できませんでした`);
   }
   const data = await res.json();
+  if (data && data.error) throw new Error('MediaWiki APIがユーザー情報の取得を拒否しました');
   const user = data && data.query && data.query.users && data.query.users[0];
-  if (!user || user.missing) return [];
-  return user.groups || [];
+  if (user && user.missing) return [];
+  if (!user || !Array.isArray(user.groups) || user.groups.some((group) => typeof group !== 'string')) {
+    throw new Error('MediaWiki APIのユーザーグループ応答が不正です');
+  }
+  return user.groups;
 }
 
 /**

@@ -5,9 +5,7 @@ const crypto = require('crypto');
 const router = express.Router();
 
 const oauthService = require('../services/oauth');
-const mediawiki = require('../services/mediawiki');
-const config = require('../config');
-const { determineRole, normalizeUsername } = require('../permissions');
+const { resolveRole } = require('../services/authorization');
 const { escapeHtml } = require('../views/shell');
 
 router.get('/oauth/login', (req, res) => {
@@ -38,21 +36,7 @@ router.get('/oauth/callback', async (req, res) => {
       throw new Error('OAuthプロフィールにusernameが含まれていませんでした。');
     }
 
-    const normalizedUsername = normalizeUsername(username);
-    const isOwner = config.permissions.ownerUsernames.some(
-      (configuredUsername) => normalizeUsername(configuredUsername) === normalizedUsername
-    );
-    const isEmergencyStopUser = config.permissions.emergencyStopUsernames.some(
-      (configuredUsername) => normalizeUsername(configuredUsername) === normalizedUsername
-    );
-    const groups = isOwner || isEmergencyStopUser ? [] : await mediawiki.getUserGroups(username);
-    const role = determineRole({
-      username,
-      ownerUsername: config.permissions.ownerUsername,
-      ownerUsernames: config.permissions.ownerUsernames,
-      emergencyStopUsernames: config.permissions.emergencyStopUsernames,
-      groups,
-    });
+    const role = await resolveRole(username);
 
     // ログイン前のセッションIDを使い回さない（セッション固定攻撃対策）。
     await new Promise((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
