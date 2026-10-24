@@ -24,6 +24,14 @@ function createApp() {
   // secure cookieを正しく判定するためにtrust proxyを設定する。
   app.set('trust proxy', 1);
 
+  // 操作画面をiframe等へ埋め込ませない。通常表示やPWAの独立ウィンドウは対象外。
+  // 静的配信・認証拒否・エラーも含め、すべての応答に付ける。
+  app.use((req, res, next) => {
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+    res.setHeader('X-Frame-Options', 'DENY');
+    next();
+  });
+
   // OOUI本体（jQuery/OOjs/OOUI）・自作のCSS/JSは認証不要の静的ファイルとして配信する
   // （公式の「標準的な組み込み方法」に準拠。npmjs.com/package/oojs-ui 参照）。
   // session/body-parserより前に置き、静的ファイル配信のたびにDBへセッション照会が
