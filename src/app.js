@@ -41,6 +41,22 @@ function createApp() {
   app.use('/vendor/oojs-ui', express.static(path.join(__dirname, '..', 'node_modules', 'oojs-ui', 'dist')));
   app.use('/static', express.static(path.join(__dirname, '..', 'public')));
 
+  // ルートscopeのService Workerとmanifestは、セッション処理より先に公開する。
+  app.get('/sw.js', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('application/javascript').sendFile(path.join(__dirname, '..', 'public', 'sw.js'));
+  });
+  app.get('/manifest.webmanifest', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('application/manifest+json').sendFile(path.join(__dirname, '..', 'public', 'manifest.webmanifest'));
+  });
+
+  // 認証済みHTMLやAPI応答をHTTPキャッシュにも残さない。
+  app.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   const MySQLStore = MySQLStoreFactory(session);
   const sessionStore = new MySQLStore({}, pool);
 

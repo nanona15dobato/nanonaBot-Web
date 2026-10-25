@@ -33,6 +33,12 @@ function headLinks() {
     (pack) => `<link rel="stylesheet" href="/vendor/oojs-ui/oojs-ui-wikimediaui-icons-${pack}.min.css">`
   );
   return [
+    '<link rel="manifest" href="/manifest.webmanifest">',
+    '<meta name="theme-color" content="#3366cc">',
+    '<meta name="application-name" content="nanonaBot Web">',
+    '<meta name="apple-mobile-web-app-title" content="nanonaBot">',
+    '<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">',
+    '<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">',
     '<link rel="stylesheet" href="/vendor/oojs-ui/oojs-ui-wikimediaui.min.css">',
     ...iconLinks,
     '<link rel="stylesheet" href="/static/css/app.css">',
@@ -60,13 +66,14 @@ function renderShell({ title, script, initialData = {} }) {
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${safeTitle} - NanonaBot Tool</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${safeTitle} - nanonaBot Web</title>
 ${headLinks()}
 </head>
 <body>
 <div id="app"></div>
 <script>window.NANONA_BOT = ${initialDataJson};</script>
+<script src="/static/js/pwa.js"></script>
 <script src="/vendor/jquery/jquery.min.js"></script>
 <script src="/vendor/oojs/oojs.min.js"></script>
 <script src="/vendor/oojs-ui/oojs-ui.min.js"></script>
@@ -89,15 +96,17 @@ function renderStaticPage({ title, bodyHtml }) {
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} - NanonaBot Tool</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${escapeHtml(title)} - nanonaBot Web</title>
 ${headLinks()}
 </head>
 <body>
 <main class="nb-login">
-  <h1 class="nb-login__title">NanonaBot Tool</h1>
+  <h1 class="nb-login__title">nanonaBot Web</h1>
   ${bodyHtml}
+  <div data-pwa-install></div>
 </main>
+<script src="/static/js/pwa.js"></script>
 </body>
 </html>`;
 }

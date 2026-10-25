@@ -19,7 +19,7 @@ test('renderShell: OOUIの日本語メッセージとウィキのホスト名を
 test('renderShell: 初期データ・タイトルの </script> や HTML をエスケープする', () => {
   const html = renderShell({ title: '<b>x</b>', script: 'dashboard.js', initialData: { username: '</script><script>alert(1)</script>' } });
   assert.ok(!html.includes('</script><script>alert(1)'));
-  assert.ok(html.includes('<title>&lt;b&gt;x&lt;/b&gt; - NanonaBot Tool</title>'));
+  assert.ok(html.includes('<title>&lt;b&gt;x&lt;/b&gt; - nanonaBot Web</title>'));
 });
 
 test('renderStaticPage/staticButtonHtml: OOUIのボタンの見た目のリンクと送信ボタンを作る', () => {

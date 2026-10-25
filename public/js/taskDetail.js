@@ -48,12 +48,20 @@
   /** action=compareが返すHTMLはMediaWiki本体の差分テーブルそのもの（信頼できる自ウィキAPIの出力）。仕様書9章の設計どおり埋め込む。 */
   function diffTable(html) {
     if (!html) return C.emptyState('変更点がありません。');
-    return $('<table>')
+    const $table = $('<table>')
       .addClass('diff')
       .append(
         '<colgroup><col class="diff-marker"><col class="diff-content"><col class="diff-marker"><col class="diff-content"></colgroup>',
         $('<tbody>').html(html)
       );
+    const $view = $('<div>').addClass('nb-diff-view');
+    const $toggle = $('<button>').attr({ type: 'button', 'aria-pressed': 'false' }).addClass('nb-pwa-button').text('縦に表示');
+    $toggle.on('click', () => {
+      const stacked = !$view.hasClass('nb-diff-view--stacked');
+      $view.toggleClass('nb-diff-view--stacked', stacked);
+      $toggle.attr('aria-pressed', String(stacked)).text(stacked ? '左右に表示' : '縦に表示');
+    });
+    return $view.append($toggle, $table);
   }
 
   // ===== 差分ダイアログ（ページ一覧から開く） =====
@@ -904,6 +912,7 @@
     if (!document.hidden) refreshNow();
     else clearTimeout(timer);
   });
+  window.addEventListener('nb:reconnect', () => refreshNow());
   const poller = { refresh: refreshNow };
   refreshNow();
   refreshBtn.on('click', () => refreshNow());

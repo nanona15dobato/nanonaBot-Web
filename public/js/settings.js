@@ -11,6 +11,10 @@
     return;
   }
 
+  const appSection = C.section({ title: 'アプリ', hint: 'ホーム画面やデスクトップから起動できます。操作には通信が必要です。' });
+  if (window.NanonaPwa) appSection.$body.append(window.NanonaPwa.createInstallPanel());
+  page.$main.append(appSection.$element);
+
   const EVENT_LABELS = {
     emergency_stop: '緊急停止が実行された',
     emergency_clear: '緊急停止が解除された',
