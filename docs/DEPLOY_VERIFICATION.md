@@ -1,10 +1,10 @@
 # 実環境デプロイ・動作確認 手順書
 
-`nanonaBot-Web.zip`（フェーズ1〜3）を実際のToolforgeで動かし、確認するまでの通し手順。
+現在のリポジトリをToolforgeへ初回配備し、Bot操作・PWA・端末通知を確認する通し手順。
 上から順に実行すれば、ログイン→タスク作成→実編集→Diff確認まで一通り確認できる。
 各コマンドの背景・詳細はREADME.mdの該当節も参照。
 
-チェックボックスはそのまま進捗管理に使ってよい。
+チェックボックスはそのまま進捗管理に使ってよい。稼働中の更新は [運用手順](operations.md) を使う。以下の `node20` は現在の配備のイメージ名。利用可能なランタイムはToolforgeの現行ヘルプで確認する。
 
 ---
 
@@ -13,67 +13,38 @@
 - [ ] Toolforgeのツールアカウントを作成済み（未作成なら https://toolsadmin.wikimedia.org/ から作成。以下`<toolname>`はそのツール名に読み替え）
 - [ ] SSH公開鍵をToolforgeアカウントに登録済み（同じくtoolsadmin.wikimedia.orgから登録）
 - [ ] `Nanona15dobato`と、緊急停止確認用に管理者(sysop)アカウントでもログインできる状態にしておく
-- [ ] 手元に`nanonaBot-Web.zip`を展開したフォルダがある
+- [ ] 配備する変更をGitのmainへマージ済み
 
 ---
 
-## 1. コードをToolforgeへ転送する
-
-ローカル環境（自分のPC）で:
+## 1. bastionにログインする
 
 ```bash
-unzip nanonaBot-Web.zip
-# フォルダ nanonaBot-Web/ ができる
-
-# login.toolforge.org 経由でbastionへscp転送
-scp -r nanonaBot-Web <あなたのwikitech利用者名>@login.toolforge.org:
+ssh <あなたの開発者アカウント名>@login.toolforge.org
 ```
 
-うまくいかない場合、bastion側のディレクトリ書き込み権限が原因のことが多い。
-一度bastionにログインして権限を確認・修正する:
+## 2. ツールアカウントになる
 
 ```bash
-ssh <あなたのwikitech利用者名>@login.toolforge.org
-become <toolname>
-# ↓ もし転送先ディレクトリで書き込み権限エラーが出る場合
-chmod -R g+w /data/project/<toolname>
-exit  # becomeを抜ける
-exit  # bastionからログアウト
-```
-
-再度 `scp -r nanonaBot-Web ...` を実行する。
-
----
-
-## 2. bastionにログインし、ツールになる
-
-```bash
-ssh <あなたのwikitech利用者名>@login.toolforge.org
 become <toolname>
 ```
 
-以降のコマンドはすべて`become`した状態（`$HOME`が`/data/project/<toolname>`）で実行する。
-
----
+以降はツールアカウントの `$HOME`（`/data/project/<toolname>`）で作業する。
 
 ## 3. コードを配置し、www/jsをシンボリックリンクにする
 
+まだ配置していない環境で実行する。既存環境は [通常更新](operations.md#通常更新) を使う。
+
 ```bash
-# scpで送った中身を正式な場所へ（scpの実行結果に応じてパスを調整）
-mv ~/nanonaBot-Web ~/nanonaBot-Web.tmp 2>/dev/null  # 既に何か置いてあれば退避
-mv ~/nanonaBot-Web.tmp/* ~/ 2>/dev/null              # scpの階層によっては調整が必要
-ls ~/nanonaBot-Web   # package.json 等が見えることを確認
-
+cd ~
+git clone https://github.com/nanona15dobato/nanonaBot-Web.git nanonaBot-Web
 mkdir -p ~/www
-# 既にwww/jsがあれば退避
-[ -e ~/www/js ] && mv ~/www/js ~/www/js.bak
-
 ln -s ~/nanonaBot-Web ~/www/js
-
-# 確認
-ls -la ~/www/js
-cat ~/www/js/package.json | head -3
+readlink -f ~/www/js
+ls ~/www/js/package.json
 ```
+
+`~/www/js` が既にある場合は、その実体と利用中のサービスを確認してから扱う。既存コードの移動やホーム全体の再帰的な権限変更は、この導入手順では行わない。
 
 ---
 
@@ -82,16 +53,16 @@ cat ~/www/js/package.json | head -3
 1. `Nanona15dobato`で`https://meta.wikimedia.org/wiki/Special:OAuthConsumerRegistration/propose`にアクセス。
 2. 種別「OAuth 2.0」、グラントタイプ「Authorization code」を選択。
 3. コールバックURLに `https://<toolname>.toolforge.org/oauth/callback` を入力。
-4. 申請すると即座に**Client ID**と**Client Secret**が発行される（自分専用コンシューマの場合、承認待ちなしで使える）。この2つを控えておく。
+4. 利用者識別専用・機密クライアントとして登録し、発行された **Client ID** と **Client Secret** を保管する。追加の編集権限は要求しない。登録したコールバックと `OAUTH_CALLBACK_URL` を完全一致させる。Botの編集には別途BotPasswordを使う。
 
 - [ ] Client ID を控えた
 - [ ] Client Secret を控えた
 
 ---
 
-## 5. Botパスワードを3アカウント分発行する
+## 5. 使用するBotアカウントのパスワードを発行する
 
-`Nanona15dobato` / `NanonaBot` / `NanonaBot3` それぞれで、`https://ja.wikipedia.org/wiki/特別:BotPasswords` にアクセスし、新しいBotパスワードを作成する。
+`Nanona15dobato` / `NanonaBot` / `NanonaBot3` のうち実際に使うアカウントで、`https://ja.wikipedia.org/wiki/特別:BotPasswords` にアクセスし、新しいBotパスワードを作成する。
 
 - 権限（グラント）は最低限「ページの編集」「高頻度自動化編集」を付与する。
 - 発行されると `ユーザー名@ボット名` の形式のログイン名と、パスワードが表示される（**表示は1回だけ**なので必ず控える）。
@@ -105,9 +76,9 @@ cat ~/www/js/package.json | head -3
 ## 6. 依存パッケージをインストールする
 
 ```bash
-webservice node20 shell
+toolforge webservice node20 shell
 cd ~/nanonaBot-Web
-npm install
+npm install --ignore-scripts --omit=dev --no-audit --no-fund
 # oojs-ui/oojs/jquery/express/mysql2等が node_modules に入る
 
 # OOUIの本体ファイルが実際に存在することを確認しておく
@@ -153,12 +124,12 @@ mysql --defaults-file=$HOME/replica.my.cnf \
   <credentialUser>__nanona_bot -e "SHOW TABLES;"
 ```
 
-`tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `system_status` の6つが表示されればOK
+`system_status` / `bot_account_defaults` / `tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `app_settings` / `push_subscriptions` の9テーブルを確認する
 （`sessions`は`express-mysql-session`が初回起動時に自動作成するので、この時点では無くてよい）。
 
 - [ ] DB作成済み
 - [ ] `db/schema.sql`流し込み済み
-- [ ] `SHOW TABLES`で4テーブルを確認した
+- [ ] `SHOW TABLES`で上記9テーブルを確認した
 
 ---
 
@@ -169,7 +140,9 @@ toolforge envvars create OAUTH_CLIENT_ID
 toolforge envvars create OAUTH_CLIENT_SECRET
 toolforge envvars create OAUTH_CALLBACK_URL       # https://<toolname>.toolforge.org/oauth/callback
 toolforge envvars create OAUTH_WIKI_HOST          # meta.wikimedia.org
-toolforge envvars create OWNER_USERNAME           # Nanona15dobato
+toolforge envvars create OWNER_USERNAMES          # Nanona15dobato,なのな
+toolforge envvars create EMERGENCY_STOP_USERNAMES  # nanona15
+toolforge envvars create NODE_ENV                 # production
 toolforge envvars create ADMIN_CHECK_WIKI_HOST    # ja.wikipedia.org
 toolforge envvars create SESSION_SECRET           # openssl rand -hex 32 の結果などランダムな文字列
 toolforge envvars create TOOL_BASE_URL            # https://<toolname>.toolforge.org
@@ -188,13 +161,13 @@ toolforge envvars create WIKI_API_URL             # https://ja.wikipedia.org/w/a
 
 `openssl rand -hex 32` はbastion上でそのまま実行してその場でコピーしてよい。
 
-登録内容の確認（値は伏字表示）:
+登録名を確認する（出力は秘密情報を含むものとして扱い、チャット等へ貼り付けない）:
 
 ```bash
 toolforge envvars list
 ```
 
-- [ ] 上記すべての環境変数を登録した
+- [ ] 必須変数と実際に使用するBotアカウントの変数を登録した
 - [ ] `toolforge envvars list` で登録済み一覧に全項目があることを確認した
 
 ---
@@ -380,6 +353,20 @@ toolforge jobs logs nanona-bot-worker
 
 ---
 
+### 11.12 PWA・端末通知
+
+- [ ] ログイン画面・設定画面の案内からインストール／ホーム画面追加ができる
+- [ ] 狭い画面で文字付き→アイコンのみ→必要時のみメニューへ切り替わり、緊急停止が操作できる
+- [ ] オフラインでは操作できないことを案内し、変更操作を自動再送しない
+- [ ] 更新案内から利用者の操作で更新できる
+- [ ] [Web Pushの初回設定](web-push.md#本番反映) に沿ってVAPIDを設定し、Webとワーカーを再起動した
+- [ ] 端末の通知は初回表示時に無断で許可要求せず、有効化ボタンから許可を求める
+- [ ] 「この端末へテスト通知」を押し、実際に「テスト通知」を受信した
+- [ ] 選択したイベントが起きたときにイベント別文面を受信し、通知から対象画面へ移動できる
+- [ ] ログアウト・再ログイン後、端末通知を明示的に有効化し直せる
+
+端末・OS・ブラウザ名と確認日を記録する。詳細は [PWAの実機確認](pwa.md#検証) を参照。
+
 ## 12. トラブルシューティング
 
 | 症状 | 確認ポイント |
@@ -387,7 +374,7 @@ toolforge jobs logs nanona-bot-worker
 | `webservice node20 start`後もアクセスできない | `toolforge webservice logs`でスタックトレースを確認。多くは環境変数の設定漏れ（`SESSION_SECRET`必須等）か`npm install`未実施 |
 | OAuthログインで`state`不一致エラー | `OAUTH_CALLBACK_URL`とMeta側に登録したコールバックURLが完全一致しているか確認（末尾スラッシュの有無等） |
 | ログイン後403（denied） | ログインしたアカウント名が`OWNER_USERNAMES`（または`EMERGENCY_STOP_USERNAMES`）に含まれるか、対象アカウントが`ja.wikipedia.org`で管理者・拡張承認された利用者か確認 |
-| 通知が届かない | 設定画面の「テスト送信」の結果を確認。メールは送信元が`ツール名.任意@toolforge.org`形式か、宛先の開発者アカウントのメールアドレスが登録されているかを確認（[通知](notifications.md)） |
+| メール／Webhook通知が届かない | 設定画面の「テスト送信」の結果を確認。メールは送信元が`ツール名.任意@toolforge.org`形式か、宛先の開発者アカウントのメールアドレスが登録されているかを確認（[通知](notifications.md)） |
 | 編集が「再試行待ち」のまま進まない | 再試行は10秒・20秒・40秒と間隔を延ばす。実行ログの理由を確認し、サーバー側の障害なら待つ（[編集の失敗と再試行](task-lifecycle.md#編集の失敗と再試行)） |
 | 再開したら一部のページが「失敗」になった | 編集API呼び出し中に止まったページは、二重編集を避けて失敗扱いにする。ページ履歴を確認し、必要なら「失敗ページのみ再試行」 |
 | ワーカーログに`JavaScript heap out of memory`が繰り返し出て、同じタスクが「キューに戻しました」を繰り返し、後のタスクが実行されない | そのタスクの処理中にワーカーがメモリ不足で落ちている。同じタスクで1時間に3回目の停止になると、そのタスクは自動で失敗になり、後のタスクに進む（それより前に進めたいときは、タスク詳細でそのタスクを中止する）。置換ルール（空の文字列に一致する正規表現で文字を挿入していないか等）と対象ページを確認する。置換の結果が2.2M文字を超える場合は、そのページだけ失敗になる。正当に大きなページを扱う場合は `toolforge jobs run` に `--mem 2G` と `node --max-old-space-size=1536` を付けて起動し直す（`--max-old-space-size` はJSのヒープだけの上限なので、コンテナの上限より少し小さくする） |
@@ -395,7 +382,9 @@ toolforge jobs logs nanona-bot-worker
 | ワーカーログに`ログインに失敗しました` | 該当アカウントの`BOT_*_USER`/`BOT_*_PASS`の値、Special:BotPasswordsで付与した権限（グラント）を確認 |
 | Diffパネルが表示されない/エラーになる | `/api/tasks/:id/pages/:pageId/compare`をブラウザで直接叩いてエラー内容を確認。`base_revid`が入っていない（準備未完了）ことが多い |
 | 画面が真っ白・OOUIウィジェットが表示されない | ブラウザの開発者ツールのNetworkタブで`/vendor/oojs-ui/oojs-ui-wikimediaui.min.js`等が404になっていないか確認。404なら6章の`npm install`をやり直す |
-| アイコンが表示されない（機能には影響しない） | `node_modules/oojs-ui/dist/`内の実際のアイコンパックファイル名を確認し、`src/views/shell.js`の`<link>`を調整する（README 6章参照） |
+| PWA通知が汎用文面のまま | Webとワーカーの再起動、端末のアプリ更新を確認する（[通知の確認](operations.md#pwa通知の確認)） |
+| 端末通知が届かない | 設定画面の「この端末への通知」で状態・選択イベントと専用テスト通知を確認する。通常の完了は既定では通知しない（[Web Push](web-push.md)） |
+| アイコンが表示されない（機能には影響しない） | `node_modules/oojs-ui/dist/`内の実際のアイコンパックファイル名を確認し、`src/views/shell.js`の`<link>`を調整する。PWAのアイコンは `public/icons`、ヘッダーのロゴは `public/branding` も確認 |
 | `sql tools`でテーブルが無い | 7章のDB名（`<credentialUser>__nanona_bot`）とスキーマ流し込みをやり直す |
 
 ---

@@ -19,15 +19,15 @@
 | `X` → `REDIRECT_TARGET` | 解決先に応じたルール | 下の「REDIRECT_TARGET」を参照 |
 | `Template:X` → `subst:` | [テンプレートのsubst化](rule-types.md#テンプレートのsubst化-templatesubst) | `Template:` の無い改名元は未対応 |
 | `http(s)://…` → `http(s)://…` | [外部リンクの付け替え](rule-types.md#外部リンクの付け替え-urlrename) | 片方だけURLのペアは未対応 |
-| `X#節{{!}}表示` などを含む | [リンク置換（節・表示名指定）](rule-types.md#リンク置換節表示名指定-linkrenameexact) | Category/Template・ページ名が空（同じページ内の節）のものは未対応 |
+| `X#節{{!}}表示` などを含む | [リンク置換（節・表示名指定）](rule-types.md#節表示名を指定するlinkrenameexact) | Category/Template・ページ名が空（同じページ内の節）のものは未対応 |
 | `Category:X` → `Category:Y` | [Category置換](rule-types.md#category置換-categoryrename) | |
 | `Template:X` → `Template:Y` | [テンプレート置換](rule-types.md#テンプレート置換-templaterename) | |
 | 片方だけ `Category:`／`Template:` | 未対応（名前空間が合わない） | |
-| それ以外（通常の記事どうし） | [リンク置換](rule-types.md#リンク置換-linkrename) または [リンク置換2](rule-types.md#リンク置換2表示保持-linkrename2) | 改名元に全角括弧「（」が無く改名先にある場合はリンク置換2（表示を残す） |
+| それ以外（通常の記事どうし） | [リンク置換](rule-types.md#どちらも選ばないlinkrename) または [リンク置換2](rule-types.md#表示を保持するlinkrename2) | 改名元に全角括弧「（」が無く改名先にある場合はリンク置換2（表示を残す） |
 
 未対応のペアは「[未対応: 理由]」として表示し、取り込みません。
 
-リンク置換・リンク置換2・リンク置換（節・表示名指定）は、タスク作成画面では1種類の「リンク置換」のカードになります。取り込んだカードには、この分類に合わせて「表示を保持する」（リンク置換2）・「節・表示名を指定する」（節・表示名指定）とその内容が入ります → [リンク置換](rule-types.md#リンク置換-linkrename--linkrename2--linkrenameexact)必要ならタスク作成画面で手動でルールを追加してください。
+リンク置換・リンク置換2・リンク置換（節・表示名指定）は、タスク作成画面では1種類の「リンク置換」のカードになります。取り込んだカードには、この分類に合わせて「表示を保持する」（リンク置換2）・「節・表示名を指定する」（節・表示名指定）とその内容が入ります → [リンク置換](rule-types.md#リンク置換-linkrename--linkrename2--linkrenameexact)。必要ならタスク作成画面で手動でルールを追加してください。
 
 ## REDIRECT_TARGET
 

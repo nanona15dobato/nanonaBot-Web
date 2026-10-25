@@ -1,6 +1,15 @@
-# NanonaBot Tool（フェーズ1-13）
+# nanonaBot Web
 
-Jawp編集支援Bot「NanonaBot Tool」のフェーズ1〜13実装です。
+日本語版ウィキペディアの編集支援Botを操作するWebアプリです。Wikimedia OAuthでログインし、タスクの作成・差分確認・承認・緊急停止・Bot作業依頼の管理を行います。
+
+PWAとしてのインストールと端末ごとのWeb Push通知に対応しています。通知はイベント種別を表示し、ページ名・利用者名・エラー詳細は表示しません。操作にはオンライン接続が必要です。Wikimedia自身の通知・ウォッチリスト管理は未実装です。
+
+- 初回導入: [実環境デプロイ・動作確認](docs/DEPLOY_VERIFICATION.md)
+- 稼働中の更新・再起動・権限変更: [運用手順](docs/operations.md)
+- 画面の操作: [使い方ガイド](docs/user-guide.md)
+- インストールと更新: [PWA](docs/pwa.md)／[端末通知](docs/web-push.md)
+
+以下のフェーズ番号はBot機能の実装履歴です。PWAの第1・第2段階とは別の番号です。
 
 **各画面の使い方・各動作の詳しい説明**は [`docs/`](docs/README.md) にまとめている
 （[使い方ガイド](docs/user-guide.md)・[置換ルールの種類](docs/rule-types.md)・[タスクの流れと各動作](docs/task-lifecycle.md)・
@@ -263,7 +272,7 @@ cp .env.example .env
 npm test   # ユニットテスト（権限判定・replica.my.cnfパーサー等）
 ```
 
-OAuthクライアントを作らなくても `npm test` は通ります（純粋関数のみをテストしているため）。
+OAuthクライアントや本番の認証情報は `npm test` に不要です。純粋関数に加え、模擬DB・HTTP応答・Service Workerを使ってルートや通知も検証します。外部サービスへの実配送や実機のインストール可否は別に確認します。
 実際にログインを試す場合のみ、後述のOAuth登録が必要です。
 
 ## 2. Wikimedia OAuth 2.0 コンシューマの登録
@@ -318,9 +327,9 @@ Node.jsのビルド環境が必要なコマンドは `webservice ... shell` の�
 シェルに入った直後のカレントディレクトリは`$HOME`なので、`cd`してから実行する。
 
 ```bash
-webservice node20 shell
+toolforge webservice node20 shell
 cd ~/nanonaBot-Web   # または cd www/js でも同じ実体
-npm install
+npm install --ignore-scripts --omit=dev --no-audit --no-fund
 exit
 ```
 
@@ -358,7 +367,9 @@ toolforge envvars create OAUTH_CLIENT_ID
 toolforge envvars create OAUTH_CLIENT_SECRET
 toolforge envvars create OAUTH_CALLBACK_URL   # 例: https://<toolname>.toolforge.org/oauth/callback
 toolforge envvars create OAUTH_WIKI_HOST      # meta.wikimedia.org
-toolforge envvars create OWNER_USERNAME       # Nanona15dobato
+toolforge envvars create OWNER_USERNAMES      # Nanona15dobato,なのな
+toolforge envvars create EMERGENCY_STOP_USERNAMES  # nanona15
+toolforge envvars create NODE_ENV             # production
 toolforge envvars create ADMIN_CHECK_WIKI_HOST  # ja.wikipedia.org
 toolforge envvars create SESSION_SECRET       # openssl rand -hex 32 等で生成
 toolforge envvars create TOOL_BASE_URL        # 例: https://<toolname>.toolforge.org
@@ -366,7 +377,7 @@ toolforge envvars create TOOLSDB_DATABASE_SUFFIX  # nanona_bot
 toolforge envvars create TASK_PAGES_RETENTION_DAYS  # 14
 ```
 
-`toolforge envvars list` で登録済みの一覧を確認できる（値は伏字表示）。
+`toolforge envvars list` で登録済みの名前を確認できる。出力は秘密情報を含むものとして扱い、共有しない。値の変更後はWebとワーカーを再起動する。
 
 ### 3.4 Webサービスの起動
 
@@ -424,9 +435,7 @@ toolforge jobs logs nanona-bot-worker
 toolforge jobs delete nanona-bot-worker
 ```
 
-Toolforgeのcontinuous job枠（webservice含めて既定3つまで）を消費する点に注意。
-Webサービス1 + ワーカー1で2つ使う。将来のクリーンアップジョブ（9.4節）は
-`--schedule`指定のcronジョブとして別枠で動かすため、continuous枠は消費しない。
+ワーカーは1レプリカで運用する。作業データのクリーンアップは現在このワーカーがタスクの合間に実行するため、専用cronジョブは不要。利用できるジョブ数やランタイムはToolforge側の現行設定を確認する。通常更新ではジョブを削除せず、[運用手順](docs/operations.md)に沿って再起動する。
 
 ### 3.7 動作確認（ブラウザから）
 
