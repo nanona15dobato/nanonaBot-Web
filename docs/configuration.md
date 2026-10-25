@@ -124,3 +124,8 @@ Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` �
 | `bot_account_defaults` | Botアカウントごとの編集設定・実行モードの既定値 |
 | `app_settings` | 画面から変更した運用設定（通知先・ワーカーの動作）と、ワーカーの稼働状況（`worker.heartbeat`） |
 | `sessions` | ログインセッション（`express-mysql-session` が自動で作る） |
+
+
+## PWAの端末通知
+
+`VAPID_SUBJECT`・`VAPID_PUBLIC_KEY`・`VAPID_PRIVATE_KEY` をWebとワーカーに設定します。秘密鍵は公開しません。設定手順、追加テーブル、端末での有効化は [端末へのWeb Push](web-push.md) を参照してください。既存のメール／Webhookとは独立して通知対象を選びます。

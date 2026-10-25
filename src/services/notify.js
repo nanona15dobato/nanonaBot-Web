@@ -2,6 +2,7 @@
 
 const config = require('../config');
 const { getNotifySettings } = require('./settings');
+const push = require('./push');
 
 /**
  * 運用上の重要な出来事（緊急停止・タスクの停止/失敗/完了）を外部へ通知する（フェーズ9）。
@@ -145,8 +146,14 @@ async function notifyDetailed({ event, title, message, path, settings, fetchFn =
 /** 通知を送る。いずれかの通知先へ送れたらtrue（例外は投げない）。 */
 async function notify(params) {
   try {
-    const result = await notifyDetailed(params);
-    return Boolean(result.webhook || result.mail);
+    // メール/Webhookの設定・絞り込みと端末ごとの設定は独立させる。
+    const [external, devices] = await Promise.allSettled([
+      notifyDetailed(params), push.sendEvent(params.event, params.path),
+    ]);
+    if (external.status === 'rejected') console.error('[notify] メール/Webhook通知を処理できませんでした。');
+    if (devices.status === 'rejected') console.error('[push] 端末通知を処理できませんでした。');
+    return Boolean((external.status === 'fulfilled' && (external.value.webhook || external.value.mail)) ||
+      (devices.status === 'fulfilled' && devices.value.sent > 0));
   } catch (err) {
     console.error('[notify] 通知の送信に失敗しました:', (err && err.message) || err);
     return false;

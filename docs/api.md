@@ -103,3 +103,19 @@
 | `GET /api/system/worker` | ワーカーの稼働状況（`{"known", "alive", "ageSeconds", "state", "taskId"}`） |
 
 権限はすべてオーナーです。
+
+
+## 端末へのWeb Push
+
+以下はすべてowner専用・現在のログインセッションに限定。状態変更には既存の同一オリジン検査を適用します。レスポンスはHTTPキャッシュに保存しません。
+
+| メソッド | パス | 内容 |
+|---|---|---|
+| GET | `/api/push/config` | 設定済みか、VAPID公開鍵、イベント一覧・既定値。秘密鍵は返さない |
+| GET | `/api/push/subscription?endpointHash=...` | この端末・セッションの有効状態、選択イベント、期限 |
+| POST | `/api/push/subscription` | `{subscription, events, publicKey}` で購読を登録。ユーザーとセッションはサーバー側から取得 |
+| PUT | `/api/push/subscription` | `{endpointHash, events}` で通知対象を変更。空配列は通知なし |
+| DELETE | `/api/push/subscription` | `{endpointHash}` でこのセッションの購読を削除 |
+| POST | `/api/push/test` | `{endpointHash}` のこの端末だけへテスト通知。`accepted` はサービスの受付結果 |
+
+`endpointHash` はブラウザ購読URLのSHA-256（小文字16進64文字）。購読URLそのものをクエリーへ入れません。他セッションの識別子をbodyに指定しても採用しません。未設定・未移行時は端末通知だけを無効化または503にし、既存通知の設定は維持します。詳しくは [端末通知](web-push.md) を参照。

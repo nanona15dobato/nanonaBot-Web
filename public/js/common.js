@@ -418,7 +418,7 @@
     if (user.username) {
       const logoutForm = $('<form>').attr({ method: 'post', action: '/oauth/logout' });
       const logoutBtn = new OO.ui.ButtonWidget({ label: 'ログアウト', icon: 'logOut', framed: false });
-      logoutBtn.on('click', () => logoutForm.trigger('submit'));
+      logoutBtn.on('click', () => logoutForm[0].requestSubmit());
       logoutForm.append(logoutBtn.$element);
       const roleLabel = isOwner ? 'オーナー（全操作）' : user.role === 'admin_emergency_only' ? '管理者（緊急停止のみ）' : user.role;
       userMenu = new OO.ui.PopupButtonWidget({

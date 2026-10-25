@@ -80,6 +80,7 @@ ${headLinks()}
 <script src="/vendor/oojs-ui/oojs-ui-wikimediaui.min.js"></script>
 <script>Object.assign(OO.ui.msg.messages, ${OOUI_JA_MESSAGES_JSON});</script>
 <script src="/static/js/common.js"></script>
+<script src="/static/js/push.js"></script>
 <script src="/static/js/${script}"></script>
 </body>
 </html>`;
@@ -107,6 +108,7 @@ ${headLinks()}
   <div data-pwa-install></div>
 </main>
 <script src="/static/js/pwa.js"></script>
+<script src="/static/js/push.js"></script>
 </body>
 </html>`;
 }

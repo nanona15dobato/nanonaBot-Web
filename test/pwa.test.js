@@ -231,7 +231,7 @@ function worker() {
   };
   const caches = {
     open: async () => cache,
-    keys: async () => ['nanonabot-pwa-v0', 'nanonabot-pwa-v1', 'other-application'],
+    keys: async () => ['nanonabot-pwa-v1', 'nanonabot-pwa-v2', 'other-application'],
     delete: async (key) => deleted.push(key),
   };
   class RelativeRequest extends Request {
@@ -265,7 +265,7 @@ test('Service Worker: precaches only public files without credentials and cleans
   ].sort());
   assert.equal(w.skipped(), 0);
   await w.lifecycle('activate');
-  assert.deepEqual(w.deleted, ['nanonabot-pwa-v0']);
+  assert.deepEqual(w.deleted, ['nanonabot-pwa-v1']);
 });
 
 test('Service Worker: API, OAuth, writes, external requests and application JS/CSS bypass interception', async () => {

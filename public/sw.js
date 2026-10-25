@@ -2,7 +2,7 @@
 
 // この一覧だけを保存する。認証済みHTML・API・OAuth・JS/CSSは保存しない。
 const CACHE_PREFIX = 'nanonabot-pwa-';
-const CACHE_NAME = CACHE_PREFIX + 'v1';
+const CACHE_NAME = CACHE_PREFIX + 'v2';
 const OFFLINE_URL = '/static/offline.html';
 const PUBLIC_FILES = [
   OFFLINE_URL,
@@ -30,6 +30,40 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   // UIで更新を選択したときにだけ待機中の版を有効にする。
   if (event.data && event.data.type === 'ACTIVATE_UPDATE') self.skipWaiting();
+  if (event.data && event.data.type === 'PUSH_CAPABILITIES' && event.ports && event.ports[0]) {
+    event.ports[0].postMessage({ version: 2 });
+  }
+});
+
+function notificationPath(value) {
+  return typeof value === 'string' && (value === '/settings' || /^\/tasks\/[1-9]\d*$/.test(value)) ? value : '/';
+}
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { /* 汎用通知へフォールバック */ }
+  if (!data || typeof data !== 'object') data = {};
+  // ページ名・利用者名・エラー本文をロック画面に出さない。
+  event.waitUntil(self.registration.showNotification('nanonaBot Web', {
+    body: '確認が必要なイベントがあります。アプリを開いて確認してください。',
+    icon: '/static/icons/icon-192.png', badge: '/static/icons/icon-192.png',
+    tag: typeof data.tag === 'string' && /^nanona-[a-f0-9]{24}$/.test(data.tag) ? data.tag : 'nanona-event',
+    data: { url: notificationPath(data.url) },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = notificationPath(event.notification.data && event.notification.data.url);
+  // 既存タブの未保存入力を書き換えず、通常の認証付き画面へ移動する。
+  event.waitUntil(self.clients.openWindow(new URL(target, self.location.origin).href));
+});
+
+self.addEventListener('pushsubscriptionchange', (event) => {
+  // ログイン状態が不明なバックグラウンドでは自動再購読しない。
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    for (const client of clients) client.postMessage({ type: 'PUSH_SUBSCRIPTION_CHANGED' });
+  }));
 });
 
 self.addEventListener('fetch', (event) => {

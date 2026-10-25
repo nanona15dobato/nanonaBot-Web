@@ -7,6 +7,7 @@ const router = express.Router();
 const oauthService = require('../services/oauth');
 const { resolveRole } = require('../services/authorization');
 const { escapeHtml } = require('../views/shell');
+const push = require('../services/push');
 
 router.get('/oauth/login', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
@@ -58,8 +59,12 @@ router.get('/oauth/callback', async (req, res) => {
   }
 });
 
-router.post('/oauth/logout', (req, res) => {
-  req.session.destroy(() => {
+router.post('/oauth/logout', async (req, res, next) => {
+  try { await push.revokeSession(req.sessionID); }
+  catch { console.warn('[push] 購読を削除できませんでした。ログアウト後は送信対象から除外されます。'); }
+  req.session.destroy((error) => {
+    if (error) return next(new Error('ログアウトを完了できませんでした。'));
+    res.clearCookie('nanona_bot_sid', { path: '/', httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
     res.redirect('/');
   });
 });

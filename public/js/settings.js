@@ -15,6 +15,10 @@
   if (window.NanonaPwa) appSection.$body.append(window.NanonaPwa.createInstallPanel());
   page.$main.append(appSection.$element);
 
+  const pushSection = C.section({ title: 'この端末への通知', hint: 'ログアウトまたはログイン期限切れで停止します。通知にはページ名やエラー詳細を表示しません。' });
+  if (window.NanonaPush) window.NanonaPush.mount(pushSection.$body[0]);
+  page.$main.append(pushSection.$element);
+
   const EVENT_LABELS = {
     emergency_stop: '緊急停止が実行された',
     emergency_clear: '緊急停止が解除された',
