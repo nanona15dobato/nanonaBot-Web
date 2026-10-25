@@ -183,7 +183,7 @@ function createPushService({ db = { query: (...args) => require('../db').pool.qu
         const row = candidates[cursor++];
         try {
           const subscription = validateSubscription({ endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } });
-          const code = await send(subscription, { version: 2, url: safePath(path), tag: 'nanona-' + hash(event + safePath(path)).slice(0, 24) }, vapid, signal);
+          const code = await send(subscription, { version: 2, event, url: safePath(path), tag: 'nanona-' + hash(event + safePath(path)).slice(0, 24) }, vapid, signal);
           if (code >= 200 && code < 300) result.sent++;
           else {
             result.failed++;

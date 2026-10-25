@@ -24,12 +24,13 @@ function fixture() {
   } };
 }
 
-test('push worker: always shows generic text, even if payload supplies sensitive details or malformed JSON', async () => {
+test('push worker: old, unknown and malformed payloads use generic text without echoing sensitive details', async () => {
   const f = fixture();
   await f.emit('push', { data: { json: () => ({ title: 'secret page', body: 'secret failure', url: '/tasks/12', tag: 'nanona-' + 'a'.repeat(24) }) } });
   await f.emit('push', { data: { json: () => { throw new Error('bad json'); } } });
   await f.emit('push', { data: { json: () => ({ url: { toString: null } }) } });
-  assert.equal(f.notices.length, 3);
+  await f.emit('push', { data: { json: () => ({ event: 'constructor', title: 'secret page' }) } });
+  assert.equal(f.notices.length, 4);
   for (const [title, options] of f.notices) {
     assert.equal(title, 'nanonaBot Web');
     assert.ok(!options.body.includes('secret'));
@@ -37,6 +38,27 @@ test('push worker: always shows generic text, even if payload supplies sensitive
   }
   assert.equal(f.notices[0][1].data.url, '/tasks/12');
   assert.equal(f.notices[1][1].data.url, '/');
+});
+
+test('push worker: all event types have distinct copy while private details remain hidden', async () => {
+  const f = fixture();
+  const events = [
+    ['emergency_stop', /緊急停止/], ['emergency_clear', /解除/], ['paused', /一時停止/],
+    ['failed', /失敗/], ['expired', /期限切れ/], ['emergency_stopped', /中断/],
+    ['completed_with_failures', /一部失敗/], ['completed', /完了/], ['test', /テスト/],
+  ];
+  for (const [event, label] of events) {
+    await f.emit('push', { data: { json: () => ({ event, title: 'secret page', body: 'secret failure', url: '/tasks/12' }) } });
+    const [title, options] = f.notices.at(-1);
+    assert.match(title, label, event);
+    assert.ok(!title.includes('secret'));
+    assert.ok(!options.body.includes('secret'));
+    assert.ok(!options.body.includes('確認が必要なイベントがあります'));
+    assert.equal(options.data.url, '/tasks/12');
+    assert.equal(options.actions, undefined);
+  }
+  assert.equal(new Set(f.notices.map(([title]) => title)).size, events.length);
+  assert.equal(new Set(f.notices.map(([, options]) => options.body)).size, events.length);
 });
 
 test('push worker: notification clicks open only an allowed same-origin page and never execute an action', async () => {

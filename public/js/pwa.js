@@ -151,7 +151,7 @@
       catch (error) { help.textContent = 'ブラウザのメニューからインストールしてください。'; }
     });
     const version = document.createElement('small');
-    version.textContent = 'アプリ版: 0.1.0-pwa.3';
+    version.textContent = 'アプリ版: 0.1.0-pwa.4';
     panel.append(help, install, version);
     $install = panel;
     renderInstall();
