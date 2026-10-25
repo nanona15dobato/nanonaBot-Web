@@ -1142,11 +1142,36 @@ table.diff th {
   cursor: pointer;
 }
 .nb-pwa-button:disabled { opacity: .6; cursor: default; }
-.nb-pwa-button:focus-visible, .nb-nav-more summary:focus-visible { outline: 2px solid var(--nb-color-progressive); outline-offset: 2px; }
+.nb-pwa-button:focus-visible, .nb-appbar__menu-button:focus-visible { outline: 2px solid var(--nb-color-progressive); outline-offset: 2px; }
 .nb-pwa-install small { display: block; margin-top: 10px; color: var(--nb-color-subtle); }
-.nb-nav-more { display: contents; }
-.nb-nav-more summary { display: none; }
-.nb-nav-more__items { display: flex; gap: 2px; }
+.nb-appbar__brand { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.nb-appbar__brand-icon { display: block; flex: none; border-radius: 6px; }
+.nb-appbar__user-menu.oo-ui-labelElement > .oo-ui-buttonElement-button > .oo-ui-labelElement-label {
+  display: inline-block;
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.nb-user-menu__name { overflow-wrap: anywhere; }
+
+.nb-appbar__menu-button {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--nb-color-base);
+  cursor: pointer;
+}
+.nb-appbar__menu-button:hover { background: var(--nb-bg-muted); }
+.nb-appbar__menu-icon { width: 20px; height: 16px; background: repeating-linear-gradient(to bottom, currentColor 0 2px, transparent 2px 7px); }
 .nb-diff-view > button { margin: 8px; }
 .nb-diff-view--stacked table.diff { display: block; width: 100%; }
 .nb-diff-view--stacked colgroup { display: none; }
@@ -1158,16 +1183,34 @@ table.diff th {
 .nb-diff-view--stacked td[colspan='2'], .nb-diff-view--stacked th[colspan='2'] { grid-column: span 2; }
 .nb-diff-view--stacked .diff-deletedline::before { content: '変更前'; display: block; font-weight: bold; }
 .nb-diff-view--stacked .diff-addedline::before { content: '変更後'; display: block; font-weight: bold; }
+@media (max-width: 1100px) {
+  .nb-appbar__inner { flex-wrap: nowrap; gap: 8px; padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  .nb-appbar__menu-button { display: inline-flex; }
+  .nb-appbar__brand { flex: 0 0 44px; width: 44px; justify-content: center; }
+  .nb-appbar__brand-label { display: none; }
+  .nb-appbar__tools { flex: none; gap: 4px; margin-left: auto; }
+  .nb-appbar__nav {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    max-height: calc(100dvh - 64px);
+    overflow-y: auto;
+    padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    background: var(--nb-bg-surface);
+    border-top: 1px solid var(--nb-border-subtle);
+    border-bottom: 1px solid var(--nb-border);
+    box-shadow: 0 4px 8px #0002;
+  }
+  .nb-appbar__nav > .oo-ui-buttonWidget { display: block; margin: 0; }
+  .nb-appbar__nav .oo-ui-buttonElement-button { display: block; width: 100%; text-align: left; }
+  .nb-appbar .oo-ui-buttonElement > .oo-ui-buttonElement-button { min-width: 44px; min-height: 44px; }
+  .nb-appbar__tools .oo-ui-buttonElement > .oo-ui-buttonElement-button > .oo-ui-iconElement-icon { left: 50%; transform: translateX(-50%); }
+}
 @media (max-width: 720px) {
-  .nb-appbar__inner { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
-  .nb-appbar__brand { font-size: 1em; }
-  .nb-appbar__tools { margin-left: auto; }
-  .nb-appbar__nav { align-items: center; }
-  .nb-nav-more { display: block; position: relative; }
-  .nb-nav-more summary { display: block; padding: 10px 12px; min-height: 44px; cursor: pointer; color: var(--nb-color-progressive); }
-  .nb-nav-more--active summary { font-weight: bold; }
-  .nb-nav-more:not([open]) > .nb-nav-more__items { display: none; }
-  .nb-nav-more__items { position: absolute; right: 0; min-width: 160px; flex-direction: column; padding: 6px; background: white; border: 1px solid var(--nb-border); box-shadow: 0 2px 6px #0002; }
   .nb-task-row { min-width: 0; flex-wrap: wrap; }
   .nb-task-row__main, .nb-page-title__text, .nb-section__body { min-width: 0; overflow-wrap: anywhere; }
   .nb-form-actions { flex-wrap: wrap; }
@@ -1176,5 +1219,5 @@ table.diff th {
   .nb-container { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
   .nb-submit-bar__inner { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
   .nb-main input, .nb-main textarea, .nb-main select { font-size: 16px; }
-  .nb-appbar .oo-ui-buttonElement-button { min-height: 44px; }
+
 }

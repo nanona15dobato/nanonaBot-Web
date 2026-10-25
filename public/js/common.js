@@ -353,13 +353,34 @@
 
     // ---- 上部バー ----
     const $bar = $('<header>').addClass('nb-appbar');
-    const $brand = $('<a>').addClass('nb-appbar__brand').attr('href', '/').text('nanonaBot Web');
-    const $nav = $('<nav>').addClass('nb-appbar__nav').attr('aria-label', 'メインメニュー');
+    const $brand = $('<a>').addClass('nb-appbar__brand').attr({ href: '/', 'aria-label': 'nanonaBot Web ホーム' }).append(
+      $('<img>').addClass('nb-appbar__brand-icon').attr({ src: '/static/icons/icon-192.png', alt: '', width: 32, height: 32 }),
+      $('<span>').addClass('nb-appbar__brand-label').text('nanonaBot Web')
+    );
+    const narrow = window.matchMedia('(max-width: 1100px)');
+    const $nav = $('<nav>').addClass('nb-appbar__nav').attr({ id: 'nb-primary-nav', 'aria-label': 'メインメニュー' });
+    const $menuButton = $('<button>').addClass('nb-appbar__menu-button').attr({
+      type: 'button', 'aria-label': 'メニューを開く', 'aria-controls': 'nb-primary-nav', 'aria-expanded': 'false',
+    }).append($('<span>').addClass('nb-appbar__menu-icon').attr('aria-hidden', 'true'));
+    let menuOpen = false;
+    function setMenu(open) {
+      menuOpen = narrow.matches && isOwner && open;
+      $nav.prop('hidden', !isOwner || (narrow.matches && !menuOpen));
+      $menuButton.attr({ 'aria-expanded': String(menuOpen), 'aria-label': menuOpen ? 'メニューを閉じる' : 'メニューを開く' });
+      $bar.toggleClass('nb-appbar--menu-open', menuOpen);
+    }
+    $menuButton.on('click', () => setMenu(!menuOpen));
+    $nav.on('click', 'a', () => setMenu(false));
+    document.addEventListener('click', (event) => {
+      if (menuOpen && !$nav[0].contains(event.target) && !$menuButton[0].contains(event.target)) setMenu(false);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && menuOpen) {
+        setMenu(false);
+        $menuButton.trigger('focus');
+      }
+    });
     if (isOwner) {
-      const $more = $('<details>').addClass('nb-nav-more');
-      $more.append($('<summary>').text('その他'));
-      const $moreItems = $('<div>').addClass('nb-nav-more__items');
-      $more.append($moreItems);
       [
         { key: 'dashboard', label: 'ホーム', href: '/', icon: 'home' },
         { key: 'new', label: '新規タスク', href: '/tasks/new', icon: 'add' },
@@ -378,36 +399,29 @@
           btn.$element.addClass('nb-appbar__nav-item--active');
           btn.$button.attr('aria-current', 'page');
         }
-        if (['dashboard', 'new'].includes(item.key)) $nav.append(btn.$element);
-        else {
-          // 同じリンクを使い、PCでは横並び、狭い画面では「その他」に収める。
-          $moreItems.append(btn.$element);
-          if (item.key === params.active) $more.addClass('nb-nav-more--active');
-        }
+        $nav.append(btn.$element);
       });
-      const narrow = window.matchMedia('(max-width: 720px)');
-      const syncMenu = () => $more.prop('open', !narrow.matches);
-      syncMenu();
-      narrow.addEventListener('change', syncMenu);
-      $nav.append($more);
     }
 
     const $tools = $('<div>').addClass('nb-appbar__tools');
     const emergencyBtn = new OO.ui.ButtonWidget({ label: '緊急停止', icon: 'alert', flags: ['primary', 'destructive'] });
+    emergencyBtn.$element.addClass('nb-appbar__emergency');
+    emergencyBtn.$button.attr({ title: '緊急停止', 'aria-label': '緊急停止' });
     emergencyBtn.on('click', triggerEmergencyStop);
     $tools.append(emergencyBtn.$element);
 
+    let userMenu = null;
     if (user.username) {
       const logoutForm = $('<form>').attr({ method: 'post', action: '/oauth/logout' });
       const logoutBtn = new OO.ui.ButtonWidget({ label: 'ログアウト', icon: 'logOut', framed: false });
       logoutBtn.on('click', () => logoutForm.trigger('submit'));
       logoutForm.append(logoutBtn.$element);
       const roleLabel = isOwner ? 'オーナー（全操作）' : user.role === 'admin_emergency_only' ? '管理者（緊急停止のみ）' : user.role;
-      const userMenu = new OO.ui.PopupButtonWidget({
+      userMenu = new OO.ui.PopupButtonWidget({
         label: user.username,
         icon: 'userAvatar',
         framed: false,
-        invisibleLabel: window.matchMedia('(max-width: 640px)').matches,
+        invisibleLabel: narrow.matches,
         popup: {
           $content: $('<div>').addClass('nb-user-menu').append(
             $('<div>').addClass('nb-user-menu__name').text(user.username),
@@ -418,9 +432,18 @@
           align: 'backwards',
         },
       });
+      userMenu.$element.addClass('nb-appbar__user-menu');
+      userMenu.$button.attr({ title: '利用者メニュー: ' + user.username, 'aria-label': '利用者メニュー: ' + user.username });
       $tools.append(userMenu.$element);
     }
-    $bar.append($('<div>').addClass('nb-appbar__inner').append($brand, $nav, $tools));
+    function syncHeader() {
+      setMenu(false);
+      emergencyBtn.setInvisibleLabel(narrow.matches);
+      if (userMenu) userMenu.setInvisibleLabel(narrow.matches);
+    }
+    syncHeader();
+    narrow.addEventListener('change', syncHeader);
+    $bar.append($('<div>').addClass('nb-appbar__inner').append(isOwner ? $menuButton : null, $brand, $nav, $tools));
 
     // ---- 緊急停止中の警告帯 ----
     $emergencyBanner = $('<div>').addClass('nb-banner').hide();
