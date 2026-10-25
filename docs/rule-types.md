@@ -4,7 +4,7 @@
 
 - [すべてのルールに共通すること](#すべてのルールに共通すること)
 - [一覧](#一覧)
-- 各ルール: [リンク置換](#リンク置換-linkrename) / [リンク置換2](#リンク置換2表示保持-linkrename2) / [節・表示名指定](#リンク置換節表示名指定-linkrenameexact) / [Category置換](#category置換-categoryrename) / [Category除去](#category除去-categoryremove) / [テンプレート置換](#テンプレート置換-templaterename) / [リンク解除](#リンク解除-unlinkpage) / [subst化](#テンプレートのsubst化-templatesubst) / [外部リンクの付け替え](#外部リンクの付け替え-urlrename) / [カスタム](#カスタム-custom)
+- 各ルール: [リンク置換](#どちらも選ばないlinkrename) / [リンク置換2](#表示を保持するlinkrename2) / [節・表示名指定](#節表示名を指定するlinkrenameexact) / [Category置換](#category置換-categoryrename) / [Category除去](#category除去-categoryremove) / [テンプレート置換](#テンプレート置換-templaterename) / [リンク解除](#リンク解除-unlinkpage) / [subst化](#テンプレートのsubst化-templatesubst) / [外部リンクの付け替え](#外部リンクの付け替え-urlrename) / [カスタム](#カスタム-custom)
 
 ---
 

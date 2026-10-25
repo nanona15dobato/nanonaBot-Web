@@ -1,6 +1,6 @@
 # 設定（環境変数・DB）
 
-Toolforge では `toolforge envvars create 名前 値` で登録します。ローカル開発では `.env` に書きます（`.env.example` を参照）。Webサーバーとワーカーは同じ環境変数を読みます。値を変えたら、Webサービスとワーカーのジョブを再起動してください。
+Toolforge では `toolforge envvars create 名前` を実行し、対話入力で値を登録・更新します。ローカル開発では `.env` に書きます（`.env.example` を参照）。Webサーバーとワーカーは同じ環境変数を読みます。値を変えたら、Webサービスとワーカーのジョブを再起動してください。
 
 ## 環境変数
 
@@ -36,13 +36,13 @@ Special:BotPasswords で発行したログイン名（`User@BotName` 形式）�
 | `OWNER_USERNAME` | `Nanona15dobato` | 旧設定。`OWNER_USERNAMES` が無いときに使う |
 | `EMERGENCY_STOP_USERNAMES` | `nanona15` | 緊急停止だけ許可するアカウント（カンマ区切り） |
 | `ADMIN_CHECK_WIKI_HOST` | `ja.wikipedia.org` | 管理者・拡張承認の判定に使うウィキ |
-| `NODE_ENV` | （なし） | `production` のとき、セッションCookieに `Secure` を付ける（HTTPSで運用するなら設定を推奨） |
+| `NODE_ENV` | （なし） | `production` のとき、セッションCookieに `Secure` を付ける。本番HTTPS環境では設定する |
 
 ### 既存セッションの権限失効
 
 Webアプリは、ログイン時だけでなく、ログイン済みの各API・ページ要求の前に権限を再判定します。セッションに保存された以前の `role` は、そのまま認可に使用しません。
 
-- `OWNER_USERNAMES` / `EMERGENCY_STOP_USERNAMES` を変更したら、Webサービスを再起動してください。環境変数はプロセス起動時に読み込まれるため、登録変更だけでは稼働中プロセスに反映されません。変更後の全Webプロセスで、既存セッションにも次の要求から新しい一覧を適用します。
+- `OWNER_USERNAMES` / `EMERGENCY_STOP_USERNAMES` を変更したら、Webサービスを再起動してください。owner変更時はPushの送信対象にも反映するためワーカーも再起動します。環境変数はプロセス起動時に読み込まれるため、登録変更だけでは稼働中プロセスに反映されません。変更後の全Webプロセスで、既存セッションにも次の要求から新しい一覧を適用します。
 - 明示一覧にない利用者は、`ADMIN_CHECK_WIKI_HOST` の公開グループ情報を要求ごとに取得します。`sysop` / `extendedconfirmed` の削除は、次の権限確認で反映します。権限のキャッシュは使用しません。
 - owner一覧から外れても、別の緊急停止一覧やWikiグループの条件を満たす利用者には、緊急停止専用の権限が残ります。すべての操作権限を外すには、適用される許可経路をすべて確認してください。
 - グループ照会は5秒で打ち切ります。通信失敗・不正応答の場合は、以前の権限を使わず `503 authorization_unavailable` で要求を止めます。復旧後は次の要求で再確認します。明示的に許可されたowner・緊急停止利用者はグループ照会に依存しません。
@@ -50,7 +50,7 @@ Webアプリは、ログイン時だけでなく、ログイン済みの各API�
 
 ### ブラウザーへの埋め込み制限
 
-Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` と `X-Frame-Options: DENY` を付け、同一オリジンも含むiframe等への埋め込みを禁止します。通常のトップレベル表示や、将来のPWAの独立ウィンドウ表示とは両立します。埋め込みを必要とする運用へ変更する場合は、このポリシーも見直してください。
+Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` と `X-Frame-Options: DENY` を付け、同一オリジンも含むiframe等への埋め込みを禁止します。通常のトップレベル表示や、PWAの独立ウィンドウ表示とは両立します。埋め込みを必要とする運用へ変更する場合は、このポリシーも見直してください。
 
 この強制CSPは埋め込み制限だけを指定します。Toolforge側の `Content-Security-Policy-Report-Only` と併存し、スクリプト・スタイルの読み込み元制限やPWA機能を追加するものではありません。HSTSはToolforge側の設定を使用します。
 
@@ -111,7 +111,7 @@ Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` �
 
 ## DBのテーブル
 
-`db/schema.sql` で作ります。すべて `CREATE TABLE IF NOT EXISTS` なので、新しいバージョンにしたときは同じファイルをもう一度流し込めば、足りないテーブルだけが追加されます。
+新規環境は `db/schema.sql` で作ります。`CREATE TABLE IF NOT EXISTS` は不足テーブルを追加しますが、既存テーブルの列や索引は変更しません。既存環境の更新時は、変更内容と `db/migrations/` の対象SQLを確認してください。Push追加時は `db/migrations/20261025_push.sql` を使います。
 
 | テーブル | 内容 |
 |---|---|
@@ -124,8 +124,15 @@ Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` �
 | `bot_account_defaults` | Botアカウントごとの編集設定・実行モードの既定値 |
 | `app_settings` | 画面から変更した運用設定（通知先・ワーカーの動作）と、ワーカーの稼働状況（`worker.heartbeat`） |
 | `sessions` | ログインセッション（`express-mysql-session` が自動で作る） |
+| `push_subscriptions` | 端末のPush購読・購読鍵・ユーザー・セッション・選択イベント・期限。内容を調査出力へ貼り付けない |
 
 
 ## PWAの端末通知
 
-`VAPID_SUBJECT`・`VAPID_PUBLIC_KEY`・`VAPID_PRIVATE_KEY` をWebとワーカーに設定します。秘密鍵は公開しません。設定手順、追加テーブル、端末での有効化は [端末へのWeb Push](web-push.md) を参照してください。既存のメール／Webhookとは独立して通知対象を選びます。
+| 名前 | 既定値 | 説明 |
+|---|---|---|
+| `VAPID_SUBJECT` | （なし） | 運用者の連絡先を示す `mailto:` またはHTTPS URL |
+| `VAPID_PUBLIC_KEY` | （なし） | VAPID公開鍵 |
+| `VAPID_PRIVATE_KEY` | （なし） | 同じペアの秘密鍵。共有・ログ出力しない |
+
+3つをWebとワーカーに設定します。未設定時は端末通知だけを無効にします。秘密鍵は公開しません。設定手順、追加テーブル、端末での有効化は [端末へのWeb Push](web-push.md) を参照してください。既存のメール／Webhookとは独立して通知対象を選びます。
