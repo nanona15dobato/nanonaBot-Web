@@ -2,7 +2,7 @@
 
 // この一覧だけを保存する。認証済みHTML・API・OAuth・JS/CSSは保存しない。
 const CACHE_PREFIX = 'nanonabot-pwa-';
-const CACHE_NAME = CACHE_PREFIX + 'v3';
+const CACHE_NAME = CACHE_PREFIX + 'v4';
 const OFFLINE_URL = '/static/offline.html';
 const PUBLIC_FILES = [
   OFFLINE_URL,
@@ -39,13 +39,27 @@ function notificationPath(value) {
   return typeof value === 'string' && (value === '/settings' || /^\/tasks\/[1-9]\d*$/.test(value)) ? value : '/';
 }
 
+const EVENT_NOTICES = {
+  emergency_stop: ['緊急停止', 'Botの緊急停止が実行されました。'],
+  emergency_clear: ['緊急停止解除', 'Botの緊急停止が解除されました。'],
+  paused: ['タスク一時停止', 'タスクが一時停止しました。アプリで状態を確認してください。'],
+  failed: ['タスク失敗', 'タスクがエラーで終了しました。アプリで詳細を確認してください。'],
+  expired: ['タスク期限切れ', 'タスクが無操作タイムアウトで期限切れになりました。'],
+  emergency_stopped: ['タスク中断', '緊急停止によりタスクが中断しました。'],
+  completed_with_failures: ['タスク完了（一部失敗）', 'タスクが完了しました。失敗したページがあります。'],
+  completed: ['タスク完了', 'タスクが完了しました。'],
+  test: ['テスト通知', 'これは端末通知のテストです。通知を受信できています。'],
+};
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { /* 汎用通知へフォールバック */ }
   if (!data || typeof data !== 'object') data = {};
+  const notice = typeof data.event === 'string' && Object.prototype.hasOwnProperty.call(EVENT_NOTICES, data.event)
+    ? EVENT_NOTICES[data.event] : null;
   // ページ名・利用者名・エラー本文をロック画面に出さない。
-  event.waitUntil(self.registration.showNotification('nanonaBot Web', {
-    body: '確認が必要なイベントがあります。アプリを開いて確認してください。',
+  event.waitUntil(self.registration.showNotification(notice ? 'nanonaBot Web：' + notice[0] : 'nanonaBot Web', {
+    body: notice ? notice[1] : '確認が必要なイベントがあります。アプリを開いて確認してください。',
     icon: '/static/icons/favicon-192.png', badge: '/static/icons/favicon-192.png',
     tag: typeof data.tag === 'string' && /^nanona-[a-f0-9]{24}$/.test(data.tag) ? data.tag : 'nanona-event',
     data: { url: notificationPath(data.url) },

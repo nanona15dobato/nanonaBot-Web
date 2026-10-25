@@ -120,6 +120,7 @@ test('push delivery: requires a live matching owner session and selected event',
   const payload = f.sent[0][1];
   assert.equal(payload.url, '/tasks/12');
   assert.equal(payload.version, 2);
+  assert.equal(payload.event, 'failed');
   assert.equal(payload.title, undefined);
   assert.equal(payload.message, undefined);
   assert.match(payload.tag, /^nanona-[a-f0-9]{24}$/);
