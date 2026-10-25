@@ -12,6 +12,7 @@ const { attachUser } = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const emergencyRoutes = require('./routes/emergency');
 const pagesRoutes = require('./routes/pages');
+const pushRoutes = require('./routes/push');
 const tasksRoutes = require('./routes/tasks');
 const botreqRoutes = require('./routes/botreq');
 const botAccountsRoutes = require('./routes/botAccounts');
@@ -104,6 +105,7 @@ function createApp() {
   app.use(botreqRoutes);
   app.use(botAccountsRoutes);
   app.use(settingsRoutes);
+  app.use(pushRoutes);
   app.use(pagesRoutes);
 
   app.use((req, res) => {

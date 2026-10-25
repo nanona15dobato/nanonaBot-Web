@@ -1227,3 +1227,7 @@ table.diff th {
   .nb-main input, .nb-main textarea, .nb-main select { font-size: 16px; }
 
 }
+
+.nb-push-events { border: 1px solid var(--nb-border-subtle); padding: 12px; margin: 12px 0; }
+.nb-push-events label { display: block; margin: 6px 0; }
+.nb-push-events input { vertical-align: middle; }
