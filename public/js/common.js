@@ -8,22 +8,30 @@
 
   async function fetchJson(url, options) {
     const opts = Object.assign({ headers: { 'Content-Type': 'application/json' } }, options);
-    const res = await fetch(url, opts);
-    let data = null;
-    try {
-      data = await res.json();
-    } catch (e) {
-      // ボディが無い/JSONでないレスポンス（204等）
+    async function readResponse(res) {
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        // 成功応答の本文が途中で切れた場合も、変更操作を自動で再送しない。
+        if (res.ok && res.status !== 204 && !['GET', 'HEAD'].includes((opts.method || 'GET').toUpperCase())) {
+          const err = new Error('操作結果を確認できません。再送する前に対象画面で結果を確認してください。');
+          err.resultUnknown = true;
+          throw err;
+        }
+        // ボディが無い/JSONでないレスポンス（204等）
+      }
+      if (!res.ok) {
+        const message =
+          (data && (data.message || (data.errors && data.errors.join(' / ')) || data.error)) || `HTTPエラー (${res.status})`;
+        const err = new Error(message);
+        err.status = res.status;
+        err.data = data;
+        throw err;
+      }
+      return data;
     }
-    if (!res.ok) {
-      const message =
-        (data && (data.message || (data.errors && data.errors.join(' / ')) || data.error)) || `HTTPエラー (${res.status})`;
-      const err = new Error(message);
-      err.status = res.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
+    return window.NanonaPwa ? window.NanonaPwa.request(url, opts, readResponse) : readResponse(await fetch(url, opts));
   }
 
   function postJson(url, body) {
@@ -188,7 +196,7 @@
     try {
       return await fn();
     } catch (e) {
-      toast(label + 'に失敗しました: ' + e.message, 'error');
+      toast(e.resultUnknown ? e.message : label + 'に失敗しました: ' + e.message, 'error');
       return undefined;
     } finally {
       button.setDisabled(false);
@@ -219,6 +227,7 @@
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) refresh();
     });
+    window.addEventListener('nb:reconnect', () => refresh());
     refresh();
     return { refresh };
   }
@@ -278,7 +287,7 @@
       toast('緊急停止しました。', 'warning');
       refreshEmergencyBanner();
     } catch (e) {
-      toast('緊急停止に失敗しました: ' + e.message, 'error');
+      toast(e.resultUnknown ? e.message : '緊急停止に失敗しました: ' + e.message, 'error');
     }
   }
 
@@ -344,11 +353,15 @@
 
     // ---- 上部バー ----
     const $bar = $('<header>').addClass('nb-appbar');
-    const $brand = $('<a>').addClass('nb-appbar__brand').attr('href', '/').text('NanonaBot Tool');
+    const $brand = $('<a>').addClass('nb-appbar__brand').attr('href', '/').text('nanonaBot Web');
     const $nav = $('<nav>').addClass('nb-appbar__nav').attr('aria-label', 'メインメニュー');
     if (isOwner) {
+      const $more = $('<details>').addClass('nb-nav-more');
+      $more.append($('<summary>').text('その他'));
+      const $moreItems = $('<div>').addClass('nb-nav-more__items');
+      $more.append($moreItems);
       [
-        { key: 'dashboard', label: 'ダッシュボード', href: '/', icon: 'home' },
+        { key: 'dashboard', label: 'ホーム', href: '/', icon: 'home' },
         { key: 'new', label: '新規タスク', href: '/tasks/new', icon: 'add' },
         { key: 'editLog', label: '編集ログ', href: '/edit-log', icon: 'history' },
         { key: 'botreq', label: 'Bot作業依頼', href: '/botreq', icon: 'speechBubbles' },
@@ -365,8 +378,18 @@
           btn.$element.addClass('nb-appbar__nav-item--active');
           btn.$button.attr('aria-current', 'page');
         }
-        $nav.append(btn.$element);
+        if (['dashboard', 'new'].includes(item.key)) $nav.append(btn.$element);
+        else {
+          // 同じリンクを使い、PCでは横並び、狭い画面では「その他」に収める。
+          $moreItems.append(btn.$element);
+          if (item.key === params.active) $more.addClass('nb-nav-more--active');
+        }
       });
+      const narrow = window.matchMedia('(max-width: 720px)');
+      const syncMenu = () => $more.prop('open', !narrow.matches);
+      syncMenu();
+      narrow.addEventListener('change', syncMenu);
+      $nav.append($more);
     }
 
     const $tools = $('<div>').addClass('nb-appbar__tools');
@@ -435,6 +458,7 @@
           ' さんは管理者権限のため、このツールでは緊急停止のみ操作できます。Botの編集を止める必要がある場合は、画面上部の「緊急停止」を押してください。'
       )
     );
+    if (window.NanonaPwa) s.$body.append(window.NanonaPwa.createInstallPanel());
     return s.$element;
   }
 

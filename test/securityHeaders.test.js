@@ -15,7 +15,9 @@ function createTestApp() {
   const appPath = require.resolve('../src/app');
   const previous = [dbPath, storePath, appPath].map((file) => require.cache[file]);
   const previousSecret = process.env.SESSION_SECRET;
+  const previousClientId = process.env.OAUTH_CLIENT_ID;
   process.env.SESSION_SECRET = 'dummy-security-header-test-only';
+  process.env.OAUTH_CLIENT_ID = 'dummy-security-header-client';
   let storeReads = 0;
   require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
     pool: { query: async () => { throw new Error('unexpected database access'); } },
@@ -46,6 +48,8 @@ function createTestApp() {
       });
       if (previousSecret === undefined) delete process.env.SESSION_SECRET;
       else process.env.SESSION_SECRET = previousSecret;
+      if (previousClientId === undefined) delete process.env.OAUTH_CLIENT_ID;
+      else process.env.OAUTH_CLIENT_ID = previousClientId;
     },
   };
 }
@@ -125,5 +129,38 @@ test('framing policy: static files receive headers before session-store access',
     assertProtected(result);
     assert.equal(fixture.storeReads(), 0);
     assert.match(result.headers['content-type'], /text\/css/);
+  } finally { fixture.restore(); }
+});
+
+test('PWA: root worker, manifest and public offline assets work without session-store reads', { timeout: 10000 }, async () => {
+  const fixture = createTestApp();
+  try {
+    for (const [path, mime] of [
+      ['/sw.js', /javascript/], ['/manifest.webmanifest', /manifest\+json/],
+      ['/static/offline.html', /text\/html/], ['/static/icons/icon-192.png', /image\/png/],
+    ]) {
+      const result = await request(fixture.app, path, { headers: { cookie: fixture.ownerCookie } });
+      assert.equal(result.status, 200, path);
+      assert.match(result.headers['content-type'], mime);
+      assertProtected(result);
+      assert.equal(result.headers['set-cookie'], undefined);
+      if (path === '/sw.js' || path === '/manifest.webmanifest') assert.equal(result.headers['cache-control'], 'no-cache');
+    }
+    assert.equal(fixture.storeReads(), 0);
+  } finally { fixture.restore(); }
+});
+
+test('PWA: login, authenticated HTML/API and authentication redirects prohibit HTTP caching', { timeout: 10000 }, async () => {
+  const fixture = createTestApp();
+  try {
+    for (const [path, headers, status] of [
+      ['/', {}, 200], ['/', { cookie: fixture.ownerCookie }, 200],
+      ['/api/whoami', { cookie: fixture.ownerCookie }, 200], ['/api/tasks', {}, 403], ['/oauth/login', {}, 302],
+    ]) {
+      const result = await request(fixture.app, path, { headers });
+      assert.equal(result.status, status, path);
+      assert.equal(result.headers['cache-control'], 'no-store', path);
+      assertProtected(result);
+    }
   } finally { fixture.restore(); }
 });

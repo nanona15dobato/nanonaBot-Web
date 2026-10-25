@@ -959,12 +959,15 @@
       C.toast('タスク #' + result.id + ' を作成しました。');
       location.href = '/tasks/' + result.id;
     } catch (e) {
-      showErrors(e.data && e.data.errors ? e.data.errors : ['タスクの作成に失敗しました: ' + e.message]);
-      submitBtn.setDisabled(false);
+      showErrors(e.data && e.data.errors ? e.data.errors : [e.resultUnknown ? e.message : 'タスクの作成に失敗しました: ' + e.message]);
+      // 送信できたか不明なときは、連続クリックによる重複作成を防ぐ。
+      submitBtn.setDisabled(e.resultUnknown === true);
+      if (e.resultUnknown) $notice.append($('<p>').append($('<a>').attr('href', '/').text('タスク一覧で作成結果を確認する')));
     }
   });
 
   // ---- 組み立て ----
+  page.$main.append($('<p>').addClass('nb-hint').text('この画面やアプリを閉じても、投入済みのタスクはサーバー上で処理されます。'));
   const accountSection = C.section({ title: 'Botアカウント', hint: '編集に使用するBotアカウントを選択してください。選ぶと、そのアカウントのデフォルト設定が読み込まれます。' });
   accountSection.$body.append(new OO.ui.FieldLayout(accountWidget, { label: 'アカウント', align: 'top' }).$element);
 
