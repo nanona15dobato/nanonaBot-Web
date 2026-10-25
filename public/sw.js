@@ -2,14 +2,14 @@
 
 // この一覧だけを保存する。認証済みHTML・API・OAuth・JS/CSSは保存しない。
 const CACHE_PREFIX = 'nanonabot-pwa-';
-const CACHE_NAME = CACHE_PREFIX + 'v2';
+const CACHE_NAME = CACHE_PREFIX + 'v3';
 const OFFLINE_URL = '/static/offline.html';
 const PUBLIC_FILES = [
   OFFLINE_URL,
-  '/static/icons/icon-192.png',
-  '/static/icons/icon-512.png',
+  '/static/icons/favicon-192.png',
+  '/static/icons/bot-favicon.png',
   '/static/icons/icon-maskable-512.png',
-  '/static/icons/apple-touch-icon.png',
+  '/static/icons/favicon-180.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -46,7 +46,7 @@ self.addEventListener('push', (event) => {
   // ページ名・利用者名・エラー本文をロック画面に出さない。
   event.waitUntil(self.registration.showNotification('nanonaBot Web', {
     body: '確認が必要なイベントがあります。アプリを開いて確認してください。',
-    icon: '/static/icons/icon-192.png', badge: '/static/icons/icon-192.png',
+    icon: '/static/icons/favicon-192.png', badge: '/static/icons/favicon-192.png',
     tag: typeof data.tag === 'string' && /^nanona-[a-f0-9]{24}$/.test(data.tag) ? data.tag : 'nanona-event',
     data: { url: notificationPath(data.url) },
   }));

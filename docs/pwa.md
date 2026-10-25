@@ -50,7 +50,7 @@ Service Worker `/sw.js` はルートから配信する。公開manifest・worker
 - Service WorkerはPWAをインストールしていない通常のブラウザ利用にも登録される。
 - オフライン画面・アイコンを更新する際は `public/sw.js` の `CACHE_NAME` 末尾を変更する。古い同ツール用キャッシュだけを有効化時に削除する。
 - アプリ版表示を変える場合は `public/js/pwa.js` の版番号も変更する。
-- アイコンの原本は `scripts/generate-pwa-icons.py`。Python 3標準ライブラリのみで再生成でき、本番起動時の実行は不要。
+- アイコンとロゴは提供された `bot-logo-kit` を使用する。元のSVG/PNGは `public/icons` と `public/branding` に保管する。`scripts/generate-pwa-icons.js /path/to/bot-logo-kit` でキットを反映し、maskable PNGだけ余白付きSVGから再生成する（検証用Playwrightが必要。本番起動時の実行は不要）。旧URLのPNGも同じ素材へ揃え、キャッシュはv3へ更新している。
 - 不具合時にファイルを削除するだけでは登録済みworkerは解除されない。既存利用者への復旧には `/sw.js` からキャッシュ整理・登録解除を行うworkerを配信する必要がある。
 
 既存の `frame-ancestors 'none'`・`X-Frame-Options: DENY` は継続する。

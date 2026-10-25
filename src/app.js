@@ -43,6 +43,9 @@ function createApp() {
   app.use('/static', express.static(path.join(__dirname, '..', 'public')));
 
   // ルートscopeのService Workerとmanifestは、セッション処理より先に公開する。
+  app.get('/favicon.ico', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'public', 'icons', 'favicon.ico'));
+  });
   app.get('/sw.js', (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.type('application/javascript').sendFile(path.join(__dirname, '..', 'public', 'sw.js'));

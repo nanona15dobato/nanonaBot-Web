@@ -1231,3 +1231,5 @@ table.diff th {
 .nb-push-events { border: 1px solid var(--nb-border-subtle); padding: 12px; margin: 12px 0; }
 .nb-push-events label { display: block; margin: 6px 0; }
 .nb-push-events input { vertical-align: middle; }
+
+.nb-login__logo { display: block; margin: 0 auto 16px; border-radius: 8px; }

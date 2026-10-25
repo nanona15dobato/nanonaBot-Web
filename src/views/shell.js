@@ -37,8 +37,12 @@ function headLinks() {
     '<meta name="theme-color" content="#3366cc">',
     '<meta name="application-name" content="nanonaBot Web">',
     '<meta name="apple-mobile-web-app-title" content="nanonaBot">',
-    '<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">',
-    '<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">',
+    '<link rel="icon" type="image/x-icon" href="/favicon.ico">',
+    '<link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16.png">',
+    '<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">',
+    '<link rel="icon" type="image/png" sizes="48x48" href="/static/icons/favicon-48.png">',
+    '<link rel="icon" type="image/svg+xml" sizes="any" href="/static/icons/bot-favicon.svg">',
+    '<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/favicon-180.png">',
     '<link rel="stylesheet" href="/vendor/oojs-ui/oojs-ui-wikimediaui.min.css">',
     ...iconLinks,
     '<link rel="stylesheet" href="/static/css/app.css">',
@@ -103,6 +107,7 @@ ${headLinks()}
 </head>
 <body>
 <main class="nb-login">
+  <img class="nb-login__logo" src="/static/branding/bot-logo.svg" alt="" width="128" height="128">
   <h1 class="nb-login__title">nanonaBot Web</h1>
   ${bodyHtml}
   <div data-pwa-install></div>
