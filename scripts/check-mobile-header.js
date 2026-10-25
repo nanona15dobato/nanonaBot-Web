@@ -65,55 +65,68 @@ async function main() {
       await page.locator('.nb-appbar').waitFor({ timeout: 10000 }).catch((error) => { throw new Error(error.message + ' JavaScript: ' + errors.join('; ')); });
       const menu = page.locator('.nb-appbar__menu-button');
       const nav = page.locator('#nb-primary-nav');
-      for (const width of [320, 360, 390, 640, 720, 721, 844, 1024, 1100, 1101, 1280, 1440]) {
+      for (const width of [280, 320, 350, 360, 390, 430, 640, 720, 721, 844, 1024, 1100, 1101, 1280, 1440]) {
         await page.setViewportSize({ width, height: 844 });
-        await page.waitForFunction((mobile) => document.querySelector('#nb-primary-nav').hidden ===
-          (window.NANONA_BOT.role !== 'owner' || mobile), width <= 1100);
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const measurements = await page.locator('.nb-appbar').evaluate((header) => {
           const box = (element) => {
             const r = element.getBoundingClientRect();
             return { x: r.x, right: r.right, width: r.width, height: r.height };
           };
+          const icons = [...header.querySelectorAll('.nb-appbar__tools > .oo-ui-buttonElement > .oo-ui-buttonElement-button > .oo-ui-iconElement-icon, .nb-appbar__nav > .oo-ui-buttonElement > .oo-ui-buttonElement-button > .oo-ui-iconElement-icon')];
           return {
-            viewport: window.innerWidth, header: box(header),
-            controls: [...header.querySelectorAll('.nb-appbar__brand, .nb-appbar__tools .oo-ui-buttonElement-button, .nb-appbar__menu-button')]
+            layout: header.dataset.layout, header: box(header),
+            controls: [...header.querySelectorAll('.nb-appbar__brand, .nb-appbar__tools > .oo-ui-buttonElement > .oo-ui-buttonElement-button, .nb-appbar__nav .oo-ui-buttonElement-button, .nb-appbar__menu-button')]
               .filter((element) => element.getBoundingClientRect().width > 0).map(box),
-            emergencyLabelHidden: header.querySelector('.nb-appbar__emergency .oo-ui-labelElement-label').classList.contains('oo-ui-labelElement-invisible'),
+            iconOffsets: icons.filter((icon) => icon.getBoundingClientRect().width > 0).map((icon) => {
+              const r = icon.getBoundingClientRect();
+              const b = icon.parentElement.getBoundingClientRect();
+              return { x: r.x + r.width / 2 - b.x - b.width / 2, y: r.y + r.height / 2 - b.y - b.height / 2 };
+            }),
           };
         });
+        const mode = measurements.layout;
+        assert.ok(['labels', 'icons', 'menu'].includes(mode));
         assert.ok(measurements.controls.every((box) => box.x >= -1 && box.right <= width + 1), `${role} ${width}: horizontal overflow`);
         assert.ok(measurements.header.height <= 64, `${role} ${width}: header wrapped`);
-        if (width <= 1100) {
-          assert.ok(measurements.controls.every((box) => box.width >= 44 && box.height >= 44), `${role} ${width}: touch target too small: ${JSON.stringify(measurements.controls)}`);
-          assert.equal(measurements.emergencyLabelHidden, true);
+        const controls = [...measurements.controls].sort((a, b) => a.x - b.x);
+        assert.ok(controls.every((box, i) => i === 0 || box.x >= controls[i - 1].right - 1), `${role} ${width} ${mode}: controls overlap: ${JSON.stringify(controls)}`);
+        if (mode !== 'labels') {
+          assert.ok(measurements.controls.every((box) => box.width >= 44 && box.height >= 44), `${role} ${width}: touch target too small`);
+          assert.ok(measurements.iconOffsets.every((offset) => Math.abs(offset.x) <= .5 && Math.abs(offset.y) <= .5),
+            `${role} ${width}: icon is not centered: ${JSON.stringify(measurements.iconOffsets)}`);
+        }
+        if (role === 'owner' && width === 320) assert.equal(mode, 'menu');
+        if (role === 'owner' && width === 390) assert.equal(mode, 'icons');
+        if (role === 'owner' && width === 1440) assert.equal(mode, 'labels');
+        if (mode === 'menu') {
           assert.equal(await nav.isVisible(), false);
-          assert.equal(await menu.count(), role === 'owner' ? 1 : 0);
-          if (role === 'owner') {
-            assert.equal(await menu.isVisible(), true);
-            await menu.click();
-            assert.equal(await menu.getAttribute('aria-expanded'), 'true');
-            assert.equal(await nav.isVisible(), true);
-            assert.equal(await nav.locator('a').count(), 5);
-            for (const link of await nav.locator('a').all()) assert.equal(await link.isVisible(), true);
-            const navBox = await nav.boundingBox();
-            assert.ok(navBox.x >= 0 && navBox.x + navBox.width <= width + 1);
-            if (width === 390 && process.env.HEADER_SCREENSHOTS_BASE64 === '1') {
-              screenshots.mobileOpen = (await page.screenshot()).toString('base64');
-            }
-            await page.keyboard.press('Escape');
-            assert.equal(await menu.getAttribute('aria-expanded'), 'false');
-            assert.equal(await menu.evaluate((element) => element === document.activeElement), true);
-            await menu.click();
-            await page.mouse.click(12, 800);
-            assert.equal(await nav.isVisible(), false);
-          }
+          assert.equal(await menu.isVisible(), true);
+          await menu.click();
+          assert.equal(await menu.getAttribute('aria-expanded'), 'true');
+          assert.equal(await nav.isVisible(), true);
+          assert.equal(await nav.locator('a').count(), 5);
+          for (const link of await nav.locator('a').all()) assert.equal(await link.isVisible(), true);
+          const navBox = await nav.boundingBox();
+          assert.ok(navBox.x >= 0 && navBox.x + navBox.width <= width + 1);
+          if (width === 320 && process.env.HEADER_SCREENSHOTS_BASE64 === '1') screenshots.mobileMenu = (await page.screenshot()).toString('base64');
+          await page.keyboard.press('Escape');
+          assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+          assert.equal(await menu.evaluate((element) => element === document.activeElement), true);
+          await menu.click();
+          await page.mouse.click(12, 800);
+          assert.equal(await nav.isVisible(), false);
         } else {
-          assert.equal(measurements.emergencyLabelHidden, false);
           assert.equal(await menu.isVisible(), false);
           assert.equal(await nav.isVisible(), role === 'owner');
+          if (role === 'owner') {
+            const links = await nav.locator('a').all();
+            const visible = await Promise.all(links.map((link) => link.isVisible()));
+            assert.equal(visible.filter(Boolean).length, mode === 'icons' ? 4 : 5);
+          }
         }
         if (role === 'owner' && process.env.HEADER_SCREENSHOTS_BASE64 === '1' && [390, 1440].includes(width)) {
-          screenshots[width === 390 ? 'mobileClosed' : 'desktop'] = (await page.screenshot()).toString('base64');
+          screenshots[width === 390 ? 'mobileInline' : 'desktop'] = (await page.screenshot()).toString('base64');
         }
         if (width === 390) {
           const account = page.getByRole('button', { name: '利用者メニュー: ' + username, exact: true });
@@ -123,15 +136,15 @@ async function main() {
           assert.ok(popup.x >= -1 && popup.x + popup.width <= width + 1, role + ': user menu overflow');
           await page.mouse.click(12, 800);
         }
-        results.push({ role, width, headerHeight: measurements.header.height, passed: true });
+        results.push({ role, width, layout: mode, headerHeight: measurements.header.height, passed: true });
       }
-      // 狭い画面で開いたメニューをPC幅に変更し、再び狭くすると閉じている。
+      // 開いたメニューからアイコン列へ切り替わった後、再び狭くすると閉じている。
       if (role === 'owner') {
-        await page.setViewportSize({ width: 390, height: 844 });
+        await page.setViewportSize({ width: 320, height: 844 });
         await menu.click();
-        await page.setViewportSize({ width: 1280, height: 844 });
-        await page.waitForFunction(() => !document.querySelector('#nb-primary-nav').hidden);
         await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForFunction(() => document.querySelector('.nb-appbar').dataset.layout === 'icons');
+        await page.setViewportSize({ width: 320, height: 844 });
         await page.waitForFunction(() => document.querySelector('#nb-primary-nav').hidden);
         assert.equal(await menu.getAttribute('aria-expanded'), 'false');
       }

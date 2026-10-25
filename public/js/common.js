@@ -357,15 +357,16 @@
       $('<img>').addClass('nb-appbar__brand-icon').attr({ src: '/static/icons/icon-192.png', alt: '', width: 32, height: 32 }),
       $('<span>').addClass('nb-appbar__brand-label').text('nanonaBot Web')
     );
-    const narrow = window.matchMedia('(max-width: 1100px)');
+    const navButtons = [];
+    let collapsed = false;
     const $nav = $('<nav>').addClass('nb-appbar__nav').attr({ id: 'nb-primary-nav', 'aria-label': 'メインメニュー' });
     const $menuButton = $('<button>').addClass('nb-appbar__menu-button').attr({
       type: 'button', 'aria-label': 'メニューを開く', 'aria-controls': 'nb-primary-nav', 'aria-expanded': 'false',
     }).append($('<span>').addClass('nb-appbar__menu-icon').attr('aria-hidden', 'true'));
     let menuOpen = false;
     function setMenu(open) {
-      menuOpen = narrow.matches && isOwner && open;
-      $nav.prop('hidden', !isOwner || (narrow.matches && !menuOpen));
+      menuOpen = collapsed && isOwner && open;
+      $nav.prop('hidden', !isOwner || (collapsed && !menuOpen));
       $menuButton.attr({ 'aria-expanded': String(menuOpen), 'aria-label': menuOpen ? 'メニューを閉じる' : 'メニューを開く' });
       $bar.toggleClass('nb-appbar--menu-open', menuOpen);
     }
@@ -399,6 +400,9 @@
           btn.$element.addClass('nb-appbar__nav-item--active');
           btn.$button.attr('aria-current', 'page');
         }
+        if (item.key === 'dashboard') btn.$element.addClass('nb-appbar__home-link');
+        btn.$button.attr('title', item.label);
+        navButtons.push(btn);
         $nav.append(btn.$element);
       });
     }
@@ -421,7 +425,7 @@
         label: user.username,
         icon: 'userAvatar',
         framed: false,
-        invisibleLabel: narrow.matches,
+        invisibleLabel: false,
         popup: {
           $content: $('<div>').addClass('nb-user-menu').append(
             $('<div>').addClass('nb-user-menu__name').text(user.username),
@@ -436,14 +440,56 @@
       userMenu.$button.attr({ title: '利用者メニュー: ' + user.username, 'aria-label': '利用者メニュー: ' + user.username });
       $tools.append(userMenu.$element);
     }
-    function syncHeader() {
-      setMenu(false);
-      emergencyBtn.setInvisibleLabel(narrow.matches);
-      if (userMenu) userMenu.setInvisibleLabel(narrow.matches);
+    const $inner = $('<div>').addClass('nb-appbar__inner').append(isOwner ? $menuButton : null, $brand, $nav, $tools);
+    $bar.append($inner);
+    if (params.active === 'dashboard') $brand.attr('aria-current', 'page');
+    function setCompact(compact) {
+      $bar.toggleClass('nb-appbar--compact', compact);
+      emergencyBtn.setInvisibleLabel(compact);
+      if (userMenu) userMenu.setInvisibleLabel(compact);
+      navButtons.forEach((btn) => btn.setInvisibleLabel(compact));
     }
-    syncHeader();
-    narrow.addEventListener('change', syncHeader);
-    $bar.append($('<div>').addClass('nb-appbar__inner').append(isOwner ? $menuButton : null, $brand, $nav, $tools));
+    function fitsHeader() {
+      const style = window.getComputedStyle($inner[0]);
+      const available = $inner[0].clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const widths = [$brand[0].getBoundingClientRect().width, $tools[0].getBoundingClientRect().width];
+      if (isOwner) widths.push($nav[0].scrollWidth);
+      const required = widths.reduce((sum, width) => sum + width, 0) + (parseFloat(style.columnGap) || 0) * (widths.length - 1);
+      return required <= available + 0.5;
+    }
+    function syncHeader() {
+      if (!$inner[0].isConnected) return;
+      collapsed = false;
+      $bar.removeClass('nb-appbar--collapsed');
+      $menuButton.prop('hidden', true);
+      setMenu(false);
+      setCompact(false);
+      if (!fitsHeader()) setCompact(true);
+      if (isOwner && !fitsHeader()) {
+        collapsed = true;
+        $bar.addClass('nb-appbar--collapsed');
+        $menuButton.prop('hidden', false);
+        navButtons.forEach((btn) => btn.setInvisibleLabel(false));
+        setMenu(false);
+      }
+      $bar.attr('data-layout', collapsed ? 'menu' : $bar.hasClass('nb-appbar--compact') ? 'icons' : 'labels');
+    }
+    let layoutFrame = null;
+    function scheduleHeader() {
+      if (layoutFrame !== null) window.cancelAnimationFrame(layoutFrame);
+      layoutFrame = window.requestAnimationFrame(() => { layoutFrame = null; syncHeader(); });
+    }
+    window.addEventListener('resize', scheduleHeader);
+    if (window.ResizeObserver) {
+      let lastWidth = null;
+      const observer = new window.ResizeObserver((entries) => {
+        const width = entries[0].contentRect.width;
+        if (width !== lastWidth) { lastWidth = width; scheduleHeader(); }
+      });
+      observer.observe($inner[0]);
+    }
+    if (document.fonts) document.fonts.ready.then(scheduleHeader);
+
 
     // ---- 緊急停止中の警告帯 ----
     $emergencyBanner = $('<div>').addClass('nb-banner').hide();
@@ -462,6 +508,7 @@
     $main.append($titleLine);
 
     $app.empty().append($bar, $('<div>').addClass('nb-container').append($emergencyBanner, $main));
+    syncHeader();
 
     if (user.role === 'owner' || user.role === 'admin_emergency_only') {
       refreshEmergencyBanner();
