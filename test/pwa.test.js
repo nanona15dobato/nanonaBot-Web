@@ -82,7 +82,7 @@ test('PWA metadata: both shells expose the same manifest, icons and client', () 
   assert.equal(manifest.start_url, '/');
   assert.equal(manifest.display, 'standalone');
   assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'));
-  for (const icon of [...manifest.icons, { src: '/static/icons/apple-touch-icon.png', sizes: '180x180' }]) {
+  for (const icon of [...manifest.icons, { src: '/static/icons/favicon-180.png', sizes: '180x180' }]) {
     const data = fs.readFileSync(path.join(publicDir, icon.src.replace('/static/', '')));
     const size = Number(icon.sizes.split('x')[0]);
     assert.equal(data.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
@@ -95,7 +95,10 @@ test('PWA metadata: both shells expose the same manifest, icons and client', () 
       if (data.toString('ascii', offset + 4, offset + 8) === 'IDAT') compressed.push(data.subarray(offset + 8, offset + 8 + length));
       offset += length + 12;
     }
-    assert.equal(zlib.inflateSync(Buffer.concat(compressed)).length, size * (1 + size * 3));
+    assert.ok([2, 6].includes(data[25]), 'RGB or RGBA PNG');
+    assert.equal(data[24], 8, '8-bit PNG');
+    const channels = data[25] === 6 ? 4 : 3;
+    assert.equal(zlib.inflateSync(Buffer.concat(compressed)).length, size * (1 + size * channels));
   }
 });
 
@@ -231,7 +234,7 @@ function worker() {
   };
   const caches = {
     open: async () => cache,
-    keys: async () => ['nanonabot-pwa-v1', 'nanonabot-pwa-v2', 'other-application'],
+    keys: async () => ['nanonabot-pwa-v2', 'nanonabot-pwa-v3', 'other-application'],
     delete: async (key) => deleted.push(key),
   };
   class RelativeRequest extends Request {
@@ -260,12 +263,12 @@ test('Service Worker: precaches only public files without credentials and cleans
   assert.equal(w.requests.length, 5);
   assert.ok(w.requests.every((request) => request.credentials === 'omit'));
   assert.deepEqual([...w.stored.keys()].sort(), [
-    '/static/offline.html', '/static/icons/icon-192.png', '/static/icons/icon-512.png',
-    '/static/icons/icon-maskable-512.png', '/static/icons/apple-touch-icon.png',
+    '/static/offline.html', '/static/icons/favicon-192.png', '/static/icons/bot-favicon.png',
+    '/static/icons/icon-maskable-512.png', '/static/icons/favicon-180.png',
   ].sort());
   assert.equal(w.skipped(), 0);
   await w.lifecycle('activate');
-  assert.deepEqual(w.deleted, ['nanonabot-pwa-v1']);
+  assert.deepEqual(w.deleted, ['nanonabot-pwa-v2']);
 });
 
 test('Service Worker: API, OAuth, writes, external requests and application JS/CSS bypass interception', async () => {

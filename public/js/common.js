@@ -354,7 +354,7 @@
     // ---- 上部バー ----
     const $bar = $('<header>').addClass('nb-appbar');
     const $brand = $('<a>').addClass('nb-appbar__brand').attr({ href: '/', 'aria-label': 'nanonaBot Web ホーム' }).append(
-      $('<img>').addClass('nb-appbar__brand-icon').attr({ src: '/static/icons/icon-192.png', alt: '', width: 32, height: 32 }),
+      $('<img>').addClass('nb-appbar__brand-icon').attr({ src: '/static/branding/bot-logo.svg', alt: '', width: 32, height: 32 }),
       $('<span>').addClass('nb-appbar__brand-label').text('nanonaBot Web')
     );
     const navButtons = [];

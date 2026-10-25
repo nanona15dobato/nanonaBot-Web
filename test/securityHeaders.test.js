@@ -137,7 +137,8 @@ test('PWA: root worker, manifest and public offline assets work without session-
   try {
     for (const [path, mime] of [
       ['/sw.js', /javascript/], ['/manifest.webmanifest', /manifest\+json/],
-      ['/static/offline.html', /text\/html/], ['/static/icons/icon-192.png', /image\/png/],
+      ['/static/offline.html', /text\/html/], ['/static/icons/favicon-192.png', /image\/png/],
+      ['/favicon.ico', /image\//], ['/static/branding/bot-logo.svg', /image\/svg\+xml/],
     ]) {
       const result = await request(fixture.app, path, { headers: { cookie: fixture.ownerCookie } });
       assert.equal(result.status, 200, path);

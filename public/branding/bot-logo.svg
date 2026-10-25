@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="1280" viewBox="0 0 1280 1280" role="img" aria-labelledby="title desc">
+  <title id="title">花とロボット鳩のロゴ</title>
+  <desc id="desc">淡い黄色の背景に、四枚の花びらの花、枝にとまるアンテナ付きの黒いロボット鳩、右上の文字を配したロゴ。</desc>
+  <defs>
+    <path id="petal" d="M -44,-100 C -55,-124 -68,-154 -68,-177 C -68,-207 -42,-224 0,-224 C 42,-224 68,-207 68,-177 C 68,-154 55,-124 44,-100"/>
+    <path id="ring" fill-rule="evenodd" d="M 0,-49 A 49,49 0 1 1 0,49 A 49,49 0 1 1 0,-49 Z M 0,-23 A 23,23 0 1 0 0,23 A 23,23 0 1 0 0,-23 Z"/>
+  </defs>
+  <rect id="background" width="1280" height="1280" fill="#ffff7f"/>
+  <g id="stem" fill="none" stroke="#000" stroke-width="23" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 333,769 V 850 A 160,160 0 0 0 493,1010 H 1054" stroke-linecap="butt"/>
+    <circle cx="1054" cy="1010" r="11.5" fill="#000" stroke="none"/>
+  </g>
+  <g id="flower" transform="translate(333 545)" fill="none" stroke="#000" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <circle r="73" stroke-width="10"/>
+    <use xlink:href="#petal"/>
+    <use xlink:href="#petal" transform="rotate(90)"/>
+    <use xlink:href="#petal" transform="rotate(180)"/>
+    <use xlink:href="#petal" transform="rotate(270)"/>
+  </g>
+  <g id="lettering" transform="translate(690 333)">
+    <g id="lettering-top">
+      <rect x="194" y="0" width="22" height="98" rx="11" fill="#5c5c1d"/>
+      <path fill="#000" d="M 10,3 H 28 Q 33,3 33,8 V 15 C 41,5 51,0 63,0 C 82,0 93,15 93,39 V 91 Q 93,96 88,96 H 70 Q 65,96 65,91 V 45 C 65,31 60,24 51,24 C 40,24 33,35 33,49 V 91 Q 33,96 28,96 H 10 Q 5,96 5,91 V 8 Q 5,3 10,3 Z"/>
+      <use xlink:href="#ring" transform="translate(167 49)" fill="#000"/>
+    </g>
+    <g id="lettering-bottom" transform="translate(0 170)">
+      <g fill="#5c5c1d">
+        <rect x="0" y="0" width="22" height="151" rx="11"/>
+        <rect x="76" y="0" width="22" height="151" rx="11"/>
+        <rect x="194" y="53" width="22" height="98" rx="11"/>
+      </g>
+      <g fill="#000">
+        <use xlink:href="#ring" transform="translate(49 102)"/>
+        <use xlink:href="#ring" transform="translate(167 102)"/>
+      </g>
+    </g>
+  </g>
+<g id="bird" fill="#000" stroke-linejoin="round">
+<path d="M 680,849 V 890 Q 680,973 785,978 Q 850,985 887,947 L 933,963 L 974,934 L 876,886 Q 841,860 766,846 Z"/>
+<rect x="655" y="754" width="100" height="98" rx="28"/>
+<path d="M 660,798 L 632,816 L 665,825 Z"/>
+<path d="M 705,754 V 728" fill="none" stroke="#000" stroke-width="13" stroke-linecap="round"/>
+<circle cx="705" cy="718" r="13"/>
+<rect x="673" y="786" width="36" height="13" rx="6.5" fill="#ffff7f"/>
+<path d="M 763,878 H 805 L 848,908 L 820,925 H 778" fill="none" stroke="#ffff7f" stroke-width="11" stroke-linecap="round"/>
+<path d="M 777,975 V 1010 M 816,976 V 1010" fill="none" stroke="#000" stroke-width="13" stroke-linecap="round"/>
+</g>
+</svg>
