@@ -234,3 +234,18 @@ test('restart between candidate insertion and replan checkpoint does not duplica
   await runTask(f.task);
   assert.equal(f.db.taskPages.size,1);assert.deepEqual(f.events.filter(e=>e.startsWith('edit:')),['edit:記事']);assert.equal(f.task.progress_total,1);assert.ok(JSON.parse(f.task.target_titles_json).enumeratedStages.includes(2));
 });
+
+test('namespace exclusions apply to discovery, explicit additions and caller refresh',async()=>{
+ const f=fixture({rules:[{templateType:'linkRename',from:'A',to:'B',namespaces:[0,10]}],pages:{'Template:T':{namespace:10,text:'[[A]]'},記事:{namespace:0,text:'[[A]]'}},discover:q=>q.list==='backlinks'?(q.blnamespace==='10'?[{title:'Template:T',ns:10}]:[{title:'記事',ns:0}]):[]});
+ f.task.control_revision=1;const cfg=JSON.parse(f.task.config_json);cfg.targetExcludedNamespaces=[10];f.task.config_json=JSON.stringify(cfg);f.task.target_titles_json=JSON.stringify({replan:true,enumeratedStages:[]});
+ const base=f.db.pool.query;f.db.pool.query=async(sql,p)=>{
+  if(sql.startsWith('SELECT page_title, namespace, added, excluded'))return [[{page_title:'Template:T',namespace:10,added:1,excluded:0}]];
+  if(sql.includes("status IN ('edited','skipped','rejected','failed')"))return [[]];
+  return base(sql,p);
+ };
+ await runTask(f.task);assert.deepEqual(f.events.filter(e=>e.startsWith('edit:')),['edit:記事']);assert.equal(f.pages['Template:T'].text,'[[A]]');
+ f.wiki.request=async()=>({query:{pages:[{title:'Template:T',ns:10},{title:'記事',ns:0}]}});
+ f.task.target_titles_json='{}';
+ await refresh.refresh(f.task,f.wiki,{key:'testFilter',stage:2,method:'purge',label:'test',discover:async()=>['Template:T','記事']});
+ assert.ok(f.events.includes('purge:記事'));assert.ok(!f.events.includes('purge:Template:T'));
+});

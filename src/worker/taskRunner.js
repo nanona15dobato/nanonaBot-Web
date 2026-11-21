@@ -21,6 +21,7 @@ const { narrowBySearch } = require('./searchNarrowing');
 const globalWaves = require('./globalWaves');
 const taskControl = require('./taskControl');
 const targetOverrides = require('./targetOverrides');
+const configExcludedNamespaces = config => !!config?.targetExcludedNamespaces?.length;
 const linkRefresh = require('./linkRefresh');
 const { isEmergencyStopped } = require('./emergencyStop');
 
@@ -347,7 +348,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
     }
   }
 
-  if (task.control_revision) await targetOverrides.augmentTargets(task, replacements, stage, titleToInfo, options.stageCount, options.config);
+  if (task.control_revision || configExcludedNamespaces(options.config)) await targetOverrides.augmentTargets(task, replacements, stage, titleToInfo, options.stageCount, options.config);
   const titles = [...titleToInfo.keys()];
 
   if (stageErrors.length > 0) {
@@ -528,7 +529,9 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
     }
 
     const originalBatch = titles.slice(i, i + batchSize);
-    const batch = await targetOverrides.filterExcluded(task, originalBatch);
+    const batch = await targetOverrides.filterExcluded(task, originalBatch, mwClient);
+    const stoppedAfterLookup = await taskControl.stopReason(task.id);
+    if (stoppedAfterLookup) { await saveProgress(i); return { stopped: stoppedAfterLookup }; }
     try {
       const failedTitles = !batch.length ? [] : usePurge ? await purgeBatch(mwClient, batch) : await nullEditOne(mwClient, batch[0]);
       for (const title of failedTitles) {

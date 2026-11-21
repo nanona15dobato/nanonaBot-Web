@@ -84,6 +84,8 @@ ${headLinks()}
 <script src="/vendor/oojs-ui/oojs-ui-wikimediaui.min.js"></script>
 <script>Object.assign(OO.ui.msg.messages, ${OOUI_JA_MESSAGES_JSON});</script>
 <script src="/static/js/common.js"></script>
+<script src="/static/js/namespaceSelect.js"></script>
+${script === 'taskDetail.js' ? '<script src="/static/js/taskTargets.js"></script>' : ''}
 <script src="/static/js/push.js"></script>
 <script src="/static/js/${script}"></script>
 </body>

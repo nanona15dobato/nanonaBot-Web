@@ -87,6 +87,13 @@ function createTaskControls({ db = pool, lookup = lookupTitles } = {}) {
     });
   }
   async function updateTargets(id, user, body) {
+    const namespaceLists = {};
+    for (const key of ['excludeNamespaces', 'restoreNamespaces']) {
+      const value = body[key] === undefined ? [] : body[key];
+      if (!Array.isArray(value) || value.length > 100 || value.some(n => !Number.isInteger(n) || n < 0 || n > 1000000)) fail(400, 'invalid_namespaces', '名前空間の指定が不正です。');
+      namespaceLists[key] = [...new Set(value)];
+    }
+    if (namespaceLists.excludeNamespaces.some(n => namespaceLists.restoreNamespaces.includes(n))) fail(400, 'conflicting_namespaces', '同じ名前空間を除外・除外解除へ同時に指定できません。');
     const lists = {};
     for (const key of ['add', 'exclude', 'restore']) {
       const value = body[key] === undefined ? [] : body[key];
@@ -94,8 +101,8 @@ function createTaskControls({ db = pool, lookup = lookupTitles } = {}) {
       lists[key] = [...new Set(value.map(v => v.trim()))];
     }
     const names = [...new Set(Object.values(lists).flat())];
-    if (!names.length || names.length > 200) fail(400, 'invalid_titles', '1回の変更は1〜200ページにしてください。');
-    const resolved = await lookup(names);
+    if (names.length > 1000 || !names.length && !Object.values(namespaceLists).flat().length) fail(400, 'invalid_titles', '1回の変更は1000ページまで、または名前空間を指定してください。');
+    const resolved = names.length ? await lookup(names) : [];
     if (resolved.length !== names.length) fail(502, 'title_lookup_failed', 'ページ名の照合に失敗しました。');
     const mapping = new Map(names.map((n, i) => [n, resolved[i]]));
     for (const key of Object.keys(lists)) lists[key] = [...new Map(lists[key].map(n => [mapping.get(n).title, mapping.get(n)])).values()];
@@ -105,6 +112,11 @@ function createTaskControls({ db = pool, lookup = lookupTitles } = {}) {
     return locked(id, async (conn, task) => {
       editable(task, body.revision);
       const config = parseJsonColumn(task.config_json, {});
+      const excludedNamespaces = new Set(config.targetExcludedNamespaces || []);
+      for (const n of namespaceLists.excludeNamespaces) excludedNamespaces.add(n);
+      for (const n of namespaceLists.restoreNamespaces) excludedNamespaces.delete(n);
+      config.targetExcludedNamespaces = [...excludedNamespaces];
+      if (lists.add.some(p => excludedNamespaces.has(p.namespace))) fail(400, 'namespace_excluded', '追加ページの名前空間が除外されています。名前空間の除外を解除してください。');
       if (lists.add.length && config.replacements.some(r => r.templateType === 'revertEdits')) fail(400, 'fixed_revert_targets', '一括取り消しに、元の編集情報がないページは追加できません。');
       if (lists.add.length) {
         const [edited] = await conn.query("SELECT page_title FROM task_pages WHERE task_id = ? AND status = 'edited' AND page_title COLLATE utf8mb4_bin IN (?) UNION SELECT page_title FROM edit_log WHERE task_id = ? AND status = 'edited' AND page_title COLLATE utf8mb4_bin IN (?)", [id, lists.add.map(p => p.title), id, lists.add.map(p => p.title)]);
@@ -119,8 +131,8 @@ function createTaskControls({ db = pool, lookup = lookupTitles } = {}) {
         ON DUPLICATE KEY UPDATE excluded=1, updated_by=VALUES(updated_by)`, [id,p.title,p.namespace,user]);
       for (const p of lists.restore) await conn.query('UPDATE task_target_overrides SET excluded=0, updated_by=? WHERE task_id=? AND page_title=?', [user,id,p.title]);
       const result = await replan(conn, task, config);
-      await audit(conn, id, user, `対象を変更しました（追加${lists.add.length}件・除外${lists.exclude.length}件・除外解除${lists.restore.length}件）。追加ページには全置換ルールを適用します`);
-      return { ...result, added: lists.add.length, excluded: lists.exclude.length, restored: lists.restore.length };
+      await audit(conn, id, user, `対象を変更しました（追加${lists.add.length}件・除外${lists.exclude.length}件・除外解除${lists.restore.length}件・名前空間除外${namespaceLists.excludeNamespaces.length}件・解除${namespaceLists.restoreNamespaces.length}件）。追加ページには全置換ルールを適用します`);
+      return { ...result, added: lists.add.length, excluded: lists.exclude.length, restored: lists.restore.length, excludedNamespaces: config.targetExcludedNamespaces };
     });
   }
   return { pause, updateConfig, updateTargets };

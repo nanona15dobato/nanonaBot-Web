@@ -32,7 +32,7 @@ async function refresh(task, mwClient, { key, stage, label, method, discover }) 
       await log({ taskId: task.id, stage, level: 'error', message: `${label}の対象取得に失敗しました: ${String(error.message || error)}` });
       throw error;
     }
-    const titles = await filterExcluded(task, [...new Set(discovered)]);
+    const titles = await filterExcluded(task, [...new Set(discovered)], mwClient);
     state = { titles, done: 0, failed: 0, method };
     await saveState(task.id, key, state);
     await log({ taskId: task.id, stage, message: `${label}を開始します（${titles.length}件、${method}）。` });
@@ -44,7 +44,9 @@ async function refresh(task, mwClient, { key, stage, label, method, discover }) 
     const reason = await stopReason(task.id);
     if (reason) return { stopped: reason };
     const originalBatch = state.titles.slice(i, i + size);
-    const batch = await filterExcluded(task, originalBatch);
+    const batch = await filterExcluded(task, originalBatch, mwClient);
+    const stoppedAfterLookup = await stopReason(task.id);
+    if (stoppedAfterLookup) return { stopped: stoppedAfterLookup };
     let failed = [];
     try {
       if (!batch.length) { /* explicitly excluded after a stopped update */ } else if (usePurge) {

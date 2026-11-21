@@ -32,6 +32,7 @@ async function main() {
           if (url.pathname.startsWith('/api/')) {
             let body = {};
             if (req.method() !== 'GET') { requests.push({ path: url.pathname, body: req.postDataJSON() }); body = { id: 42, ok: true }; }
+            else if (url.pathname === '/api/wiki/namespaces') body = [{id:0,name:''},{id:10,name:'テンプレート',canonical:'Template'},{id:14,name:'カテゴリ',canonical:'Category'},{id:4,name:'Wikipedia'}];
             else if (url.pathname === '/api/whoami') body = { username: 'Nanona15dobato', role: 'owner' };
             else if (url.pathname === '/api/tasks/1') body = { config_json: copied ? { ...sample, editSettings: { ...sample.editSettings, refreshTemplateTransclusions: false, purgeRemainingTargets: true, linkUpdateMethod: 'nullEdit' } } : sample };
             else if (url.pathname === '/api/bot-accounts/defaults') body = ['NanonaBot','NanonaBot3','Nanona15dobato'].map(account => ({ account, editSettings: sample.editSettings, reviewSettings: sample.reviewSettings }));
