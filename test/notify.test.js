@@ -73,7 +73,7 @@ test('notifyTaskStatus: 通知対象の状態だけ送り、タスクへのリ�
     assert.equal(await notifyTaskStatus({ id: 7, account: 'NanonaBot' }, 'cancelled', { fetchFn }), false);
     assert.equal(await notifyTaskStatus({ id: 7, account: 'NanonaBot' }, 'paused', { fetchFn, detail: '原因' }), true);
     assert.equal(bodies.length, 1);
-    assert.match(bodies[0], /タスク #7 が失敗により一時停止しました/);
+    assert.match(bodies[0], /タスク #7 が一時停止しました/);
     assert.match(bodies[0], /原因/);
     assert.match(bodies[0], /\/tasks\/7$/);
   }));

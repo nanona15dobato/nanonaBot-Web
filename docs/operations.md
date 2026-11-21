@@ -67,6 +67,10 @@ toolforge webservice node20 restart
 
 環境変数の更新にも `create` を使用し、値はプロンプトに入力します。画面で保存した通知・ワーカー設定は環境変数より優先され、最大30秒でワーカーに反映されます。この操作には再起動は不要です。
 
+## タスク構成を変更した更新
+
+新規タスクの全体ウェーブ・呼び出し先更新・残存候補のpurgeは [全体ウェーブとpurge](global-waves.md) を参照してください。DBの変更は不要です。Webとワーカーを両方反映してから新しいタスクを作ります。既存タスクは保存済みの旧構成で再開し、新しい構成に変える場合は複製して作成します。
+
 ## PWA通知の確認
 
 1. 設定の「この端末への通知」で有効状態と対象イベントを確認します。通常の完了は既定では選択されません。
@@ -94,3 +98,7 @@ toolforge webservice node20 restart
 - iPhone/iPadのSafari実機、メール実配送、ログ再作成後の権限は確認結果をまだ記録していない。
 
 参考: [Toolforgeの環境変数](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Envvars#Updating_an_environment_variable)、[ジョブの再起動](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Running_jobs#Restarting_your_jobs)、[Webサービス](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Web)。
+
+## 一時停止・対象変更を含む更新
+
+この機能を初めて導入する場合は、通常の再起動の前に`db/migrations/20261121_task_controls.sql`の適用が必要です。[導入手順と停止中の操作](task-controls.md)を参照してください。Webとワーカーを両方更新してから操作を使います。

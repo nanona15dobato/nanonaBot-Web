@@ -23,8 +23,14 @@ const CRASH_LOOP_LIMIT = 2;
 async function requeueInterruptedTasks({ pool, writeTaskLog, notifyTaskStatus, logger = console }) {
   const requeued = [];
   const failed = [];
-  const [rows] = await pool.query(`SELECT id FROM tasks WHERE status = 'running'`);
-  for (const { id } of rows) {
+  await pool.query("UPDATE tasks SET worker_active = 0, pause_requested = 0 WHERE status <> 'running' AND worker_active = 1");
+  const [rows] = await pool.query(`SELECT id, pause_requested FROM tasks WHERE status = 'running'`);
+  for (const { id, pause_requested } of rows) {
+    if (pause_requested) {
+      await pool.query("UPDATE tasks SET status = 'paused', worker_active = 0, pause_requested = 0, updated_at = NOW() WHERE id = ? AND status = 'running'", [id]);
+      await writeTaskLog({ taskId: id, level: 'info', message: '再起動前の一時停止要求を確認し、停止状態を維持しました。' });
+      continue;
+    }
     let recentRequeues = 0;
     try {
       const [countRows] = await pool.query(
@@ -41,7 +47,7 @@ async function requeueInterruptedTasks({ pool, writeTaskLog, notifyTaskStatus, l
       const detail =
         `このタスクの実行中にワーカーが${recentRequeues + 1}回続けて停止したため（メモリ不足などが考えられます）、` +
         '後のタスクを止めないよう失敗にしました。置換ルール（空の文字列に一致する正規表現など）と対象を確認してください。';
-      await pool.query(`UPDATE tasks SET status = 'failed', updated_at = NOW() WHERE id = ? AND status = 'running'`, [id]);
+      await pool.query(`UPDATE tasks SET status = 'failed', worker_active = 0, pause_requested = 0, updated_at = NOW() WHERE id = ? AND status = 'running'`, [id]);
       await writeTaskLog({ taskId: id, level: 'error', message: detail });
       logger.error(`[worker] タスク ${id} は再起動が続いたため失敗にしました`);
       if (notifyTaskStatus) {
@@ -56,7 +62,7 @@ async function requeueInterruptedTasks({ pool, writeTaskLog, notifyTaskStatus, l
       continue;
     }
 
-    await pool.query(`UPDATE tasks SET status = 'queued', updated_at = NOW() WHERE id = ? AND status = 'running'`, [id]);
+    await pool.query(`UPDATE tasks SET status = 'queued', worker_active = 0, pause_requested = 0, updated_at = NOW() WHERE id = ? AND status = 'running'`, [id]);
     await writeTaskLog({ taskId: id, level: 'warning', message: REQUEUE_MESSAGE });
     logger.warn(`[worker] 中断されていたタスク ${id} をキューに戻しました`);
     requeued.push(id);

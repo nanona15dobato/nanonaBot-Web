@@ -6,8 +6,9 @@ const { requireRole } = require('../middleware/auth');
 const { pool } = require('../db');
 const { isKnownAccount } = require('../bot/accountNames');
 const { parseJsonColumn, toJsonColumn } = require('../dbJson');
+const { validateLinkRefreshSettings } = require('../worker/taskConfig');
 
-const DEFAULT_EDIT_SETTINGS = { botFlag: true, minorEdit: true, editSummary: 'Bot: 編集', editIntervalSeconds: 10 };
+const DEFAULT_EDIT_SETTINGS = { botFlag: true, minorEdit: true, editSummary: 'Bot: 編集', editIntervalSeconds: 10, linkUpdateMethod: 'purge', refreshTemplateTransclusions: true, purgeRemainingTargets: false };
 const DEFAULT_REVIEW_SETTINGS = { mode: 'auto', autoWaitSeconds: 300, manualTimeoutHours: 72 };
 
 function validateDefaults(body) {
@@ -33,6 +34,7 @@ function validateDefaults(body) {
   ) {
     errors.push('reviewSettingsの形式が不正です');
   }
+  if (edit && typeof edit === 'object') validateLinkRefreshSettings(edit, errors);
   return errors;
 }
 

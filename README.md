@@ -6,6 +6,8 @@ PWAとしてのインストールと端末ごとのWeb Push通知に対応して
 
 - 初回導入: [実環境デプロイ・動作確認](docs/DEPLOY_VERIFICATION.md)
 - 稼働中の更新・再起動・権限変更: [運用手順](docs/operations.md)
+- 作業の順番を詳しく読む: [Markdown](docs/bot-workflows.md)／[動くHTML解説](docs/bot-workflows.html)
+- 停止・再開と途中の対象／設定変更: [操作とDB更新手順](docs/task-controls.md)
 - 画面の操作: [使い方ガイド](docs/user-guide.md)
 - インストールと更新: [PWA](docs/pwa.md)／[端末通知](docs/web-push.md)
 

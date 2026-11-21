@@ -18,6 +18,10 @@ const { collectCategoryWarnings } = require('./categoryWarnings');
 const { findCandidatePages: findRedirectCategoryTemplatePages } = require('./redirectCategoryTemplate');
 const { writeTaskLogSafely } = require('./taskLog');
 const { narrowBySearch } = require('./searchNarrowing');
+const globalWaves = require('./globalWaves');
+const taskControl = require('./taskControl');
+const targetOverrides = require('./targetOverrides');
+const linkRefresh = require('./linkRefresh');
 const { isEmergencyStopped } = require('./emergencyStop');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -291,19 +295,41 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
     'SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ? AND stage = ?',
     [task.id, stage]
   );
-  if (existingCountRows[0].cnt > 0) {
+  const planState = task.control_revision ? await readTargetTitlesJson(task.id) : {};
+  const replanning = planState.replan === true;
+  const enumerated = (planState.enumeratedStages || []).includes(stage);
+  if (existingCountRows[0].cnt > 0 && (!replanning || enumerated)) {
     return { alreadyEnumerated: true, targetCount: existingCountRows[0].cnt, errors: [] };
   }
 
+  // A restart may occur after inserting candidates but before saving the enumeration marker.
+  // Replanning preserved terminal history, so only unfinished rows prove this phase was inserted.
+  if (replanning && !enumerated && existingCountRows[0].cnt > 0) {
+    const [unfinished] = await pool.query("SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ? AND stage = ? AND status IN ('pending','preparing','prepared','awaiting_review','approved','editing')", [task.id, stage]);
+    if (unfinished[0].cnt > 0) {
+      const [total] = await pool.query('SELECT COUNT(*) AS cnt FROM task_pages WHERE task_id = ?', [task.id]);
+      await updateTargetTitlesJson(task.id, json => { json.enumeratedStages = [...new Set([...(json.enumeratedStages || []), stage])]; });
+      await pool.query('UPDATE tasks SET progress_total = ? WHERE id = ?', [total[0].cnt, task.id]);
+      return { alreadyEnumerated: true, targetCount: existingCountRows[0].cnt, errors: [] };
+    }
+  }
+
+  if (replanning && enumerated) return { alreadyEnumerated: true, targetCount: 0, errors: [] };
+  if (options.globalWaves && !replanning) {
+    const saved = await readTargetTitlesJson(task.id);
+    if (Array.isArray(saved[String(stage)])) return { alreadyEnumerated: true, targetCount: saved[String(stage)].length, errors: [] };
+  }
   const titleToInfo = new Map(); // title -> { namespace, ruleIndices: Set }
   const stageErrors = [];
   const stageNotes = []; // 取得時のお知らせ（検索での絞り込みの結果など）
 
   for (let idx = 0; idx < replacements.length; idx++) {
     const rule = replacements[idx];
-    if (!ruleAppliesToStage(rule, stage)) continue;
+    if (!options.globalWaves && !ruleAppliesToStage(rule, stage)) continue;
 
-    const { results, error, note } = await resolveRuleTargetsForStage(rule, stage, mwClient, options);
+    const { results, error, note } = options.globalWaves
+      ? await resolveGlobalRuleTargets(rule, stage, mwClient, options)
+      : await resolveRuleTargetsForStage(rule, stage, mwClient, options);
     if (note) stageNotes.push(`replacements[${idx}]: ${note}`);
     if (error) {
       stageErrors.push(`replacements[${idx}] (${rule.templateType}): ${error}`);
@@ -321,6 +347,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
     }
   }
 
+  if (task.control_revision) await targetOverrides.augmentTargets(task, replacements, stage, titleToInfo, options.stageCount, options.config);
   const titles = [...titleToInfo.keys()];
 
   if (stageErrors.length > 0) {
@@ -328,6 +355,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
   }
 
   if (titles.length === 0) {
+    if (options.globalWaves || replanning) await updateTargetTitlesJson(task.id, (json) => { json[String(stage)] = []; if (replanning) json.enumeratedStages = [...new Set([...(json.enumeratedStages || []), stage])]; });
     // このステージの対象が0件。ウェーブ2でよくあるケース（9章: 0件でも必ず実行する。
     // 実行した結果0件だったのはウェーブ1の結果とは独立した事実であり、異常ではない）。
     return { alreadyEnumerated: false, targetCount: 0, errors: stageErrors, notes: stageNotes };
@@ -348,6 +376,7 @@ async function enumerateStageIfNeeded(task, replacements, stage, mwClient, optio
   const [taskRows] = await pool.query('SELECT target_titles_json, progress_total FROM tasks WHERE id = ?', [task.id]);
   const existingTitlesJson = parseJsonColumn(taskRows[0].target_titles_json, {});
   existingTitlesJson[String(stage)] = titles;
+  if (replanning) existingTitlesJson.enumeratedStages = [...new Set([...(existingTitlesJson.enumeratedStages || []), stage])];
   const newProgressTotal = (taskRows[0].progress_total || 0) + titles.length;
 
   await pool.query('UPDATE tasks SET target_titles_json = ?, progress_total = ?, current_stage = ? WHERE id = ?', [
@@ -483,6 +512,11 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
   let failures = 0;
   let sinceSave = 0;
   for (let i = startIndex; i < titles.length; i += batchSize) {
+    const controlStop = await taskControl.stopReason(task.id);
+    if (controlStop) {
+      await saveProgress(i);
+      return { stopped: controlStop };
+    }
     if (await isEmergencyStopped()) {
       await saveProgress(i);
       return { stopped: 'emergency' };
@@ -493,9 +527,10 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
       return { stopped: 'cancelled' };
     }
 
-    const batch = titles.slice(i, i + batchSize);
+    const originalBatch = titles.slice(i, i + batchSize);
+    const batch = await targetOverrides.filterExcluded(task, originalBatch);
     try {
-      const failedTitles = usePurge ? await purgeBatch(mwClient, batch) : await nullEditOne(mwClient, batch[0]);
+      const failedTitles = !batch.length ? [] : usePurge ? await purgeBatch(mwClient, batch) : await nullEditOne(mwClient, batch[0]);
       for (const title of failedTitles) {
         failures++;
         await writeTaskLogSafely({
@@ -516,12 +551,15 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
         message: `${methodLabel}に失敗しました（${batch.length}件）: ${String((err && (err.mwInfo || err.message)) || err)}`,
       });
     }
-    sinceSave += batch.length;
+    sinceSave += originalBatch.length;
     if (usePurge || sinceSave >= NULL_EDIT_PROGRESS_SAVE_EVERY) {
-      await saveProgress(i + batch.length);
+      await saveProgress(i + originalBatch.length);
       sinceSave = 0;
     }
-    if (i + batchSize < titles.length) await sleep(nullEditIntervalMs);
+    if (i + batchSize < titles.length) {
+      const stopped = await taskControl.wait(nullEditIntervalMs, task.id);
+      if (stopped) { await saveProgress(i + originalBatch.length); return { stopped }; }
+    }
   }
 
   if (titles.length > 0) {
@@ -545,6 +583,23 @@ async function runNullEdits(task, mwClient, method, titles, startIndex, template
   return { stopped: null };
 }
 
+async function resolveGlobalRuleTargets(rule, stage, mwClient, options) {
+  return globalWaves.resolveGlobalTargets(rule, stage, mwClient, {
+    ...options, resolveLegacy: resolveRuleTargetsForStage,
+    // Purge discovery must retain stale backlinks even when the old wikitext reference is already gone.
+    resolveMentions: options.remainingPurge
+      ? async (categoryRule) => ({ results: await resolveBacklinks({ page: `Category:${categoryRule.from}`, namespaces: [0] }), error: null })
+      : resolveCategoryMentionTargets,
+  });
+}
+
+async function handleGlobalStop(task, stage, stopped) {
+  if (!stopped) return false;
+  if (stopped === 'emergency') await pool.query("UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ? AND status = 'running'", [task.id]);
+  await writeTaskLogSafely({ taskId: task.id, stage, level: 'warning', message: stopped === 'paused' ? '一時停止の要求により編集・リンク更新を中断しました。' : stopped === 'emergency' ? '緊急停止により編集・リンク更新を中断しました。' : '中止により編集・リンク更新を中断しました。' });
+  return true;
+}
+
 /**
  * タスクを1件処理する（新規実行・一時停止からの再開いずれもこの関数を通る）。
  * ワーカーのメインループ（worker.js）から呼ばれる。
@@ -554,7 +609,10 @@ async function runTask(task) {
   const config = parseJsonColumn(task.config_json, {});
   const replacements = materializeReplacements(config.replacements);
 
-  const stageCount = computeStageCount(replacements);
+  const globalPlan = globalWaves.isGlobalConfig(config);
+  const fixedPlan = globalPlan && globalWaves.isFixedPlan(replacements);
+  const stageCount = globalPlan ? globalWaves.stageCount(replacements) : computeStageCount(replacements);
+  const namespaceCache = new Map();
   await pool.query('UPDATE tasks SET stage_count = ? WHERE id = ?', [stageCount, task.id]);
   await writeTaskLogSafely({
     taskId: task.id,
@@ -579,12 +637,16 @@ async function runTask(task) {
   const hasCategoryWaves = replacements.some((r) => ruleStageCount(r) === 3);
 
   for (let stage = 1; stage <= stageCount; stage++) {
-    const label = `ウェーブ${stage}`;
+    const label = globalPlan && !fixedPlan ? (stage === 1 ? 'ウェーブ1（Template優先・全ルールを集約）' : 'ウェーブ2（通常ページ・所属カテゴリ記述を集約）') : `ウェーブ${stage}`;
+    if (await handleGlobalStop(task, stage, await taskControl.stopReason(task.id))) return;
     await pool.query('UPDATE tasks SET current_stage = ? WHERE id = ?', [stage, task.id]);
 
     // 前のウェーブの編集完了後に対象を取り直す（前のウェーブの対象が0件でも後続ウェーブは必ず実行する）
     await writeTaskLogSafely({ taskId: task.id, stage, level: 'info', message: `${label}の対象ページを取得します。` });
-    const enumeration = await enumerateStageIfNeeded(task, replacements, stage, mwClient, { scanCache });
+    const enumeration = await enumerateStageIfNeeded(task, replacements, stage, mwClient, {
+      scanCache: globalPlan && stage === 2 ? new Map() : scanCache,
+      namespaceCache, globalWaves: globalPlan, fixedPlan, stageCount, config,
+    });
     await writeTaskLogSafely({
       taskId: task.id,
       stage,
@@ -598,6 +660,7 @@ async function runTask(task) {
         (enumeration.errors.length > 0 ? ` 注意: ${enumeration.errors.join(' / ')}` : ''),
     });
 
+    if (await handleGlobalStop(task, stage, await taskControl.stopReason(task.id))) return;
     const result = await runStagePipeline({
       taskId: task.id,
       stage,
@@ -619,7 +682,7 @@ async function runTask(task) {
         taskId: task.id,
         stage,
         level: result.expired ? 'warning' : 'error',
-        message: result.expired ? `レビュー期限切れのため、${label}を終了しました。` : `失敗により、${label}を一時停止しました。`,
+        message: result.expired ? `レビュー期限切れのため、${label}を終了しました。` : `一時停止により、${label}を中断しました。`,
       });
       return;
     }
@@ -635,9 +698,14 @@ async function runTask(task) {
     });
 
     // Category系: ウェーブ1で直したテンプレートの使用ページをnull editしてからウェーブ2を取得する
-    if (stage === 1 && hasCategoryWaves) {
+    if (globalPlan && !fixedPlan && stage === 1 && config.editSettings.refreshTemplateTransclusions !== false) {
+      const result = await linkRefresh.refreshTemplateCallers(task, mwClient, config.editSettings.linkUpdateMethod || 'purge');
+      if (await handleGlobalStop(task, stage, result.stopped)) return;
+    }
+    if (!globalPlan && stage === 1 && hasCategoryWaves) {
       const linkUpdateMethod = (config.editSettings && config.editSettings.linkUpdateMethod) || 'nullEdit';
       const { stopped } = await nullEditTemplateTransclusionsIfNeeded(task, replacements, mwClient, linkUpdateMethod);
+      if (stopped === 'paused') return;
       if (stopped === 'emergency') {
         await writeTaskLogSafely({ taskId: task.id, stage, level: 'warning', message: '緊急停止を検知したため、null editを中断しました。' });
         await pool.query(`UPDATE tasks SET status = 'emergency_stopped', updated_at = NOW() WHERE id = ?`, [task.id]);
@@ -649,6 +717,14 @@ async function runTask(task) {
       }
     }
   }
+
+  if (globalPlan && !fixedPlan && config.editSettings.purgeRemainingTargets === true) {
+    const scanCache = new Map();
+    const result = await linkRefresh.purgeRemainingTargets(task, mwClient, replacements, (rule, stage) =>
+      resolveGlobalRuleTargets(rule, stage, mwClient, { scanCache, namespaceCache, remainingPurge: true }));
+    if (await handleGlobalStop(task, stageCount, result.stopped)) return;
+  }
+  if (await handleGlobalStop(task, stageCount, await taskControl.stopReason(task.id))) return;
 
   // 最終ステータスは、実行中の一時的なhadFailuresではなく、
   // task_pages全体を見て「failedが1件でもあるか」で判定する
@@ -663,7 +739,8 @@ async function runTask(task) {
     [task.id]
   );
   const finalStatus = failureCountRows[0].cnt > 0 ? 'completed_with_failures' : 'completed';
-  await pool.query(`UPDATE tasks SET status = ?, updated_at = NOW() WHERE id = ?`, [finalStatus, task.id]);
+  const [finished] = await pool.query(`UPDATE tasks SET status = ?, updated_at = NOW() WHERE id = ? AND status = 'running' AND pause_requested = 0`, [finalStatus, task.id]);
+  if (!finished.affectedRows) return;
   await writeTaskLogSafely({
     taskId: task.id,
     level: finalStatus === 'completed' ? 'info' : 'warning',
@@ -673,6 +750,7 @@ async function runTask(task) {
 
 module.exports = {
   runTask,
+  resolveGlobalRuleTargets,
   materializeReplacements,
   computeStageCount,
   ruleAppliesToStage,

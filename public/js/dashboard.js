@@ -33,11 +33,12 @@
 
   /** 要対応一覧に出す理由（操作者が次に何をすればよいか）。 */
   function attentionReason(task) {
+    if (task.pause_requested || task.status === 'paused' && task.worker_active) return { type: 'notice', text: '一時停止処理中です。保存・先読みの終了を待っています。' };
     const awaiting = Number(task.awaiting_review_count) || 0;
     if (awaiting > 0) return { type: 'notice', text: '確認待ちのページが' + awaiting + '件あります。' };
     switch (task.status) {
       case 'paused':
-        return { type: 'error', text: '失敗により一時停止しています。原因を確認して再開してください。' };
+        return { type: 'notice', text: '一時停止しています。実行ログ・設定・対象を確認して再開してください。' };
       case 'emergency_stopped':
         return { type: 'error', text: '緊急停止で中断しています。解除後に再開できます。' };
       case 'expired':
@@ -53,6 +54,7 @@
 
   function taskRow(task, reason) {
     const $row = $('<a>').addClass('nb-task-row').attr('href', '/tasks/' + task.id);
+    if (task.pause_requested || task.status === 'paused' && task.worker_active) return { type: 'notice', text: '一時停止処理中です。保存・先読みの終了を待っています。' };
     const awaiting = Number(task.awaiting_review_count) || 0;
 
     const $main = $('<div>').addClass('nb-task-row__main');

@@ -2,6 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
+router.use(require('./taskControls'));
 
 const { requireRole } = require('../middleware/auth');
 const { pool } = require('../db');
@@ -9,6 +10,7 @@ const { validateTaskConfig } = require('../worker/taskConfig');
 const { toJsonColumn, parseJsonColumn } = require('../dbJson');
 const mediawiki = require('../services/mediawiki');
 const config = require('../config');
+const { VERSION: WORKFLOW_VERSION } = require('../worker/globalWaves');
 const { writeTaskLogSafely } = require('../worker/taskLog');
 
 /** 操作者による操作を、誰が行ったかとともにタスクログへ残す（監査用。フェーズ9）。 */
@@ -41,7 +43,7 @@ router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
     const [result] = await pool.query(
       `INSERT INTO tasks (created_by, account, mode, status, config_json)
        VALUES (?, ?, ?, 'queued', ?)`,
-      [req.session.username, taskConfig.account, taskConfig.reviewSettings.mode, toJsonColumn(taskConfig)]
+      [req.session.username, taskConfig.account, taskConfig.reviewSettings.mode, toJsonColumn({ ...taskConfig, workflowVersion: WORKFLOW_VERSION })]
     );
     await auditLog(req, result.insertId, 'タスクを作成しました');
     res.status(201).json({ id: result.insertId });
@@ -51,7 +53,7 @@ router.post('/api/tasks', requireRole('owner'), async (req, res, next) => {
 });
 
 // タスク一覧・詳細・ページ一覧はowner専用（仕様書2章: admin_emergency_onlyは緊急停止以外閲覧不可）
-const TASK_LIST_COLUMNS = `id, created_by, account, mode, status, progress_current, progress_total, created_at, updated_at,
+const TASK_LIST_COLUMNS = `id, created_by, account, mode, status, pause_requested, worker_active, control_revision, progress_current, progress_total, created_at, updated_at,
   (SELECT COUNT(*) FROM task_pages tp WHERE tp.task_id = tasks.id AND tp.status = 'awaiting_review') AS awaiting_review_count`;
 
 router.get('/api/tasks', requireRole('owner'), async (req, res, next) => {
@@ -222,10 +224,10 @@ router.post('/api/tasks/:id/review-mode', requireRole('owner'), async (req, res,
     if (mode !== 'auto' && mode !== 'manual') {
       return res.status(400).json({ error: 'invalid_mode' });
     }
-    const [rows] = await pool.query('SELECT status, config_json FROM tasks WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query('SELECT status, config_json, control_revision, pause_requested FROM tasks WHERE id = ?', [req.params.id]);
     const task = rows[0];
     if (!task) return res.status(404).json({ error: 'not_found' });
-    if (!['queued', 'running'].includes(task.status)) {
+    if (task.pause_requested || !['queued', 'running'].includes(task.status)) {
       return res.status(409).json({ error: 'not_running' });
     }
 
@@ -234,15 +236,17 @@ router.post('/api/tasks/:id/review-mode', requireRole('owner'), async (req, res,
     taskConfig.reviewSettings = reviewSettings;
     if (mode === 'manual') {
       const hours = Math.max(1, Number(reviewSettings.manualTimeoutHours) || 72);
-      await pool.query(
-        'UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = DATE_ADD(NOW(), INTERVAL ? HOUR), updated_at = NOW() WHERE id = ?',
-        [mode, toJsonColumn(taskConfig), hours, req.params.id]
+      const [updated] = await pool.query(
+        `UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = DATE_ADD(NOW(), INTERVAL ? HOUR), updated_at = NOW() WHERE id = ? AND status IN ('queued','running') AND pause_requested = 0 AND control_revision = ?`,
+        [mode, toJsonColumn(taskConfig), hours, req.params.id, task.control_revision || 0]
       );
+      if (!updated.affectedRows) return res.status(409).json({ error: 'revision_conflict', message: '状態が変更されました。画面を更新してください。' });
     } else {
-      await pool.query(
-        'UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = NULL, updated_at = NOW() WHERE id = ?',
-        [mode, toJsonColumn(taskConfig), req.params.id]
+      const [updated] = await pool.query(
+        `UPDATE tasks SET mode = ?, config_json = ?, review_timeout_at = NULL, updated_at = NOW() WHERE id = ? AND status IN ('queued','running') AND pause_requested = 0 AND control_revision = ?`,
+        [mode, toJsonColumn(taskConfig), req.params.id, task.control_revision || 0]
       );
+      if (!updated.affectedRows) return res.status(409).json({ error: 'revision_conflict', message: '状態が変更されました。画面を更新してください。' });
     }
     await auditLog(req, req.params.id, `確認モードを${mode === 'auto' ? '自動更新' : '手動確認'}に切り替えました`);
     res.json({ ok: true, mode });
@@ -275,7 +279,7 @@ router.post('/api/tasks/:id/resume', requireRole('owner'), async (req, res, next
   try {
     const [result] = await pool.query(
       `UPDATE tasks SET status = 'queued', review_timeout_at = NULL, updated_at = NOW()
-       WHERE id = ? AND status IN ('paused', 'emergency_stopped', 'expired')`,
+       WHERE id = ? AND worker_active = 0 AND pause_requested = 0 AND status IN ('paused', 'emergency_stopped', 'expired')`,
       [req.params.id]
     );
     if (result.affectedRows === 0) {
@@ -311,7 +315,7 @@ router.post('/api/tasks/:id/retry-failed', requireRole('owner'), async (req, res
 
     const originalConfig = parseJsonColumn(originalTask.config_json, {});
     const retryReplacements = (originalConfig.replacements || []).map((r) => ({ ...r, forceTargets: failedTitles }));
-    const retryConfig = { ...originalConfig, replacements: retryReplacements };
+    const retryConfig = { ...originalConfig, workflowVersion: WORKFLOW_VERSION, replacements: retryReplacements };
 
     const [result] = await pool.query(
       `INSERT INTO tasks (created_by, account, mode, status, config_json, retry_of_task_id)
@@ -479,6 +483,7 @@ router.post('/api/tasks/:id/revert', requireRole('owner'), async (req, res, next
       : `Bot: タスク #${original.id} の編集を取り消し`;
 
     const revertConfig = {
+      workflowVersion: WORKFLOW_VERSION,
       account: original.account,
       // useUndo: 後に他の人の編集があるページも、MediaWikiの取り消し（undo）と同じ方法で統合して取り消す
       replacements: [{ templateType: 'revertEdits', revertOfTaskId: original.id, targets, useUndo: body.useUndo === true }],
