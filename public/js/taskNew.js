@@ -62,24 +62,12 @@
     { data: 'regexSearch', label: '正規表現検索（insource:）' },
   ];
 
-  const NAMESPACE_OPTIONS = [
-    { data: 0, label: '標準 (0)' },
-    { data: 1, label: 'ノート (1)' },
-    { data: 2, label: '利用者 (2)' },
-    { data: 3, label: '利用者‐会話 (3)' },
-    { data: 4, label: 'Wikipedia (4)' },
-    { data: 10, label: 'Template (10)' },
-    { data: 12, label: 'Help (12)' },
-    { data: 14, label: 'Category (14)' },
-    { data: 100, label: 'Portal (100)' },
-  ];
-
   // 複製・取り込みで、カードを作るときの名前空間の初期値（addRuleCard が最初の描画の間だけ設定する）
   let namespacePrefill;
 
   function buildNamespaceField(defaultSelected, help) {
     const initial = namespacePrefill !== undefined ? namespacePrefill || [] : defaultSelected || [];
-    const widget = new OO.ui.CheckboxMultiselectInputWidget({ options: NAMESPACE_OPTIONS, value: initial });
+    const widget = C.createNamespaceSelector({ value: initial });
     const field = new OO.ui.FieldLayout(widget, {
       label: '名前空間（未選択=全名前空間）',
       align: 'top',

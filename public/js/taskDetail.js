@@ -20,6 +20,7 @@
   // ===== 状態 =====
   const state = {
     task: null,
+    selectedPages: new Set(),
     pages: [],
     logs: [],
     warnings: null,
@@ -176,22 +177,8 @@
     return ['queued', 'paused', 'emergency_stopped', 'expired'].includes(task.status) && !task.worker_active && !task.pause_requested;
   }
   async function openTargetEditor(task, excludeTitle) {
-    const overrides = await C.fetchJson('/api/tasks/' + taskId + '/targets');
-    const add = new OO.ui.MultilineTextInputWidget({ rows: 4, placeholder: '1行に1ページ名' });
-    const exclude = new OO.ui.MultilineTextInputWidget({ rows: 4, value: excludeTitle || '', placeholder: '1行に1ページ名' });
-    const restore = new OO.ui.MultilineTextInputWidget({ rows: 3, placeholder: '1行に1ページ名' });
-    const $body = $('<div>').append(
-      $('<p>').text('変更は未処理分に適用します。追加ページには全置換ルールを適用します。設定済みの名前空間外のページも明示的に追加できます。編集済みページの再追加はできません。'),
-      new OO.ui.FieldLayout(add, { label: '追加するページ', align: 'top' }).$element,
-      new OO.ui.FieldLayout(exclude, { label: '除外するページ', align: 'top' }).$element,
-      new OO.ui.FieldLayout(restore, { label: '除外を解除するページ', align: 'top' }).$element
-    );
-    if (overrides.length) $body.append($('<p>').text('保存済み: ' + overrides.map(p => p.page_title + (p.excluded ? '（除外）' : '（追加）')).join('、')));
-    if (!await C.confirm($body, { title: '対象ページの追加・除外', okLabel: '対象の変更を保存' })) return;
-    const titles = widget => widget.getValue().split(/\r?\n/).map(v => v.trim()).filter(Boolean);
-    await C.postJson('/api/tasks/' + taskId + '/targets', { revision: Number(task.control_revision || 0), add: titles(add), exclude: titles(exclude), restore: titles(restore) });
-    C.toast('対象の変更を保存しました。再開時に未処理分を取り直します。');
-    await poller.refresh();
+    const saved = await C.openTaskTargets({ task, pages:state.pages, excludeTitles:excludeTitle ? [excludeTitle] : [] });
+    if (saved) { state.selectedPages.clear(); C.toast('対象の変更を保存しました。再開時に未処理分を取り直します。'); await poller.refresh(); }
   }
 
   function renderTitleActions(task) {
@@ -701,8 +688,28 @@
       $pageList.append(C.emptyState('条件に一致するページはありません。'));
       return;
     }
+    let bulkSelectionButton = null, $selectionCount = null;
+    if (canEditTask(state.task)) {
+      const all = actionButton('絞り込み結果を全選択', [], null, () => {
+        const titles = [...new Set(filtered.filter(p => p.status !== 'edited').map(p => p.page_title))];
+        if (titles.length > 1000) return C.toast('1000件以内になるよう絞り込んでください。', 'warning');
+        state.selectedPages = new Set(titles); renderPageList();
+      });
+      const none = actionButton('ページの選択解除', [], null, () => { state.selectedPages.clear(); renderPageList(); });
+      const bulk = actionButton('選択した対象をまとめて除外', ['destructive'], null, btn => C.withBusy(btn, '一括除外', async () => {
+        if (await C.openTaskTargets({ task:state.task, pages:state.pages, excludeTitles:[...state.selectedPages] })) { state.selectedPages.clear(); await poller.refresh(); }
+      }));
+      bulk.setDisabled(!state.selectedPages.size); bulkSelectionButton = bulk; $selectionCount = $('<span>').text(state.selectedPages.size + '件選択');
+      $pageList.append($('<div>').addClass('nb-target-tools').append(all.$element, none.$element, bulk.$element, $selectionCount));
+    }
     filtered.slice(0, f.limit).forEach((p) => {
       const $row = $('<div>').addClass('nb-page-row');
+      if (canEditTask(state.task) && p.status !== 'edited') {
+        const select = new OO.ui.CheckboxInputWidget({ selected:state.selectedPages.has(p.page_title) });
+        select.$input.attr('aria-label',p.page_title+'を選択');
+        select.on('change',on => { if(on)state.selectedPages.add(p.page_title);else state.selectedPages.delete(p.page_title); if(bulkSelectionButton)bulkSelectionButton.setDisabled(!state.selectedPages.size); if($selectionCount)$selectionCount.text(state.selectedPages.size + '件選択'); });
+        $row.append(select.$element);
+      }
       const $left = $('<div>').addClass('nb-page-row__main').append(
         $('<span>').addClass('nb-page-row__stage').text('W' + p.stage),
         C.wikiLink(p.page_title),

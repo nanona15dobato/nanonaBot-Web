@@ -190,6 +190,8 @@ function validateTaskConfig(config) {
     return { valid: false, errors: ['configはオブジェクトである必要があります'] };
   }
 
+  if (config.targetExcludedNamespaces !== undefined && (!Array.isArray(config.targetExcludedNamespaces) || config.targetExcludedNamespaces.length > 100 || config.targetExcludedNamespaces.some(n => !Number.isInteger(n) || n < 0 || n > 1000000))) errors.push('targetExcludedNamespacesは名前空間番号の配列である必要があります');
+
   if (config.workflowVersion !== undefined && config.workflowVersion !== 'global-v1') errors.push('workflowVersionはglobal-v1または省略である必要があります');
 
   if (!Array.isArray(config.replacements) || config.replacements.length === 0) {

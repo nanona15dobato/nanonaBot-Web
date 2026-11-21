@@ -90,7 +90,7 @@ function request(router,method,url,session,body){
 }
 test('new control APIs require owner permission and reject malformed task IDs',async()=>{
   const router=require('../src/routes/taskControls');
-  for(const [method,url]of [['POST','/api/tasks/1/pause'],['PUT','/api/tasks/1/config'],['POST','/api/tasks/1/targets'],['GET','/api/tasks/1/targets']]){
+  for(const [method,url]of [['POST','/api/tasks/1/pause'],['PUT','/api/tasks/1/config'],['POST','/api/tasks/1/targets'],['GET','/api/tasks/1/targets'],['POST','/api/tasks/1/target-search'],['GET','/api/wiki/namespaces'],['POST','/api/wiki/page-search']]){
     for(const role of ['admin_emergency_only','denied',undefined])assert.equal((await request(router,method,url,{username:'Other',role},{})).status,403);
   }
   assert.equal((await request(router,'POST','/api/tasks/0/pause',{role:'owner'},{})).status,400);
@@ -99,4 +99,17 @@ test('API maps revision conflict and passes owner name and exact revision to ser
   const router=require('../src/routes/taskControls'),controls=require('../src/services/taskControls');const previous=controls.updateConfig;
   controls.updateConfig=async(id,user,config,revision)=>{assert.equal(id,1);assert.equal(user,'Owner');assert.equal(revision,7);throw new controls.TaskControlError(409,'revision_conflict','更新してください');};
   try{const response=await request(router,'PUT','/api/tasks/1/config',{role:'owner',username:'Owner'},{revision:7,config:sample()});assert.equal(response.status,409);assert.equal(response.body.error,'revision_conflict');}finally{controls.updateConfig=previous;}
+});
+
+test('namespace-wide exclusion and restoration are atomic and replan future discovery',async()=>{
+ const f=fixture();await f.controls.updateTargets(1,'User',{revision:0,excludeNamespaces:[10,14]});
+ assert.deepEqual(JSON.parse(f.state.task.config_json).targetExcludedNamespaces,[10,14]);assert.equal(f.state.task.control_revision,1);
+ await assert.rejects(f.controls.updateTargets(1,'User',{revision:1,add:['Template:追加']}),e=>e.code==='namespace_excluded');assert.equal(f.state.task.control_revision,1);
+ await f.controls.updateTargets(1,'User',{revision:1,restoreNamespaces:[10],add:['Template:追加']});assert.deepEqual(JSON.parse(f.state.task.config_json).targetExcludedNamespaces,[14]);
+ await assert.rejects(f.controls.updateTargets(1,'User',{revision:2,excludeNamespaces:[0],restoreNamespaces:[0]}),e=>e.code==='conflicting_namespaces');
+});
+test('bulk target mutation accepts 1000 titles in one transaction but rejects a larger list',async()=>{
+ const f=fixture();const titles=Array.from({length:1000},(_,i)=>'候補'+i);
+ await f.controls.updateTargets(1,'User',{revision:0,add:titles});assert.equal(f.state.overrides.length,1000);assert.equal(f.state.task.control_revision,1);assert.equal(f.state.logs.length,1);
+ await assert.rejects(f.controls.updateTargets(1,'User',{revision:1,add:[...titles,'超過']}),e=>e.code==='invalid_titles');assert.equal(f.state.task.control_revision,1);
 });

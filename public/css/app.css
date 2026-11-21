@@ -1233,3 +1233,23 @@ table.diff th {
 .nb-push-events input { vertical-align: middle; }
 
 .nb-login__logo { display: block; margin: 0 auto 16px; border-radius: 8px; }
+
+/* Compact namespace lookup and bulk target selection. */
+.nb-namespace-common .oo-ui-multiselectWidget-group { display:flex;flex-wrap:wrap;gap:4px 14px; }
+.nb-namespace-common .oo-ui-checkboxMultioptionWidget { margin:0;padding:3px 0; }
+.nb-namespace-select { min-width:0;max-width:100%; }
+.nb-namespace-select .oo-ui-tagMultiselectWidget { max-width:none;margin-top:6px; }
+.nb-namespace-hint { font-size:.85em;color:#72777d; }
+.nb-target-dialog .oo-ui-panelLayout { overflow-wrap:anywhere; }
+.nb-target-dialog h3 { margin:18px 0 8px; }
+.nb-target-dialog .oo-ui-buttonSelectWidget { display:flex;flex-wrap:wrap; }
+.nb-target-dialog .oo-ui-fieldLayout { max-width:none; }
+.nb-target-dialog .oo-ui-menuTagMultiselectWidget { width:100%; }
+.nb-target-results { max-height:300px;overflow:auto;border:1px solid #a2a9b1;border-radius:4px;padding:8px;margin:8px 0; }
+.nb-target-results:empty { display:none; }
+.nb-target-results .oo-ui-fieldLayout { margin:4px 0; }
+.nb-target-tools { display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:10px; }
+.nb-target-staged { max-height:180px;overflow:auto;list-style:none;padding:0; }
+.nb-target-staged li { display:flex;align-items:center;gap:6px;border-bottom:1px solid #c8ccd1; }
+.nb-target-staged li span { min-width:0;flex:1;overflow-wrap:anywhere; }
+@media(max-width:600px) { .nb-target-dialog .oo-ui-panelLayout-padded { padding:12px; } .nb-target-dialog .oo-ui-processDialog-actions-primary .oo-ui-buttonElement-button { padding-left:10px;padding-right:10px; } }

@@ -132,9 +132,25 @@
 | `POST /api/tasks/:id/pause` | 待機中なら即停止。実行中なら停止要求。`{ok:true,paused:false}`は処理終了待ち |
 | `PUT /api/tasks/:id/config` | `{revision,config}`で設定全体を保存 |
 | `GET /api/tasks/:id/targets` | 明示追加・除外一覧（`page_title,namespace,added,excluded`） |
-| `POST /api/tasks/:id/targets` | `{revision,add:[],exclude:[],restore:[]}`。ページ名の配列、合計200件まで |
+| `POST /api/tasks/:id/targets` | `{revision,add:[],exclude:[],restore:[]}`。ページ名の配列、合計1000件まで |
 | `POST /api/tasks/:id/resume` | 停止完了したタスクをqueuedへ。変更保存とは別操作 |
 
 タスク取得には`pause_requested`・`worker_active`・`control_revision`を含みます。対象・設定変更には取得時の版番号を渡します。待機中またはpaused・emergency_stopped・expiredで、worker_active=0かつpause_requested=0の場合だけ変更可能です。停止処理中は409 `task_busy`、版競合は409 `revision_conflict`。入力不正は400、編集済みの再追加は409 `already_edited`。設定変更後も元のworkflowVersionを保持します。
 
 変更はトランザクションで対象指定・設定・版番号・操作ログに反映します。未処理分を再計画し、既存承認は無効にします。追加ページには全ルールを適用し、名前空間の自動取得範囲より優先します。詳しい適用範囲は[一時停止・途中変更](task-controls.md)を参照してください。
+
+## 対象の検索と名前空間
+
+owner専用。検索は読み取りだけを行い、対象の追加・除外は別の保存操作です。
+
+| API | 入出力 |
+|---|---|
+| `GET /api/wiki/namespaces` | 接続先の非負の名前空間一覧 `{id,name,canonical,aliases}`。サーバーで10分キャッシュ |
+| `POST /api/wiki/page-search` | `{query,namespaces}`。ページ名の前方一致候補を返す（prefixsearch） |
+| `POST /api/tasks/:id/target-search` | `{method,query,namespaces,continue?}`。methodはbacklinks / embeddedin / category / prefix / search |
+
+検索結果は`{results:[{title,namespace,alreadyEdited?}],continue}`。1回100件で、続きがある場合は返されたcontinueを同じ条件で渡します。`namespaces:null`または空配列は全名前空間です。namespaceの有効値は接続先のsiteinfoで確認します。編集済み候補はタスク検索で`alreadyEdited:true`を付けます。検索元のテンプレート・カテゴリ名は接続先の正規名・別名で補完します。
+
+`POST /api/tasks/:id/targets`は追加で`excludeNamespaces:[]`・`restoreNamespaces:[]`を受け付けます。ページ操作がなくても名前空間の変更だけを保存できます。各配列は非負の整数100個まで、同じ名前空間を両方へ指定することはできません。`config_json.targetExcludedNamespaces`を更新し、未処理分を再計画します。除外した名前空間のページを追加すると400 `namespace_excluded`。同時にその名前空間を解除すれば追加できます。
+
+ページ名候補のAPI仕様: [MediaWiki API:Prefixsearch](https://www.mediawiki.org/wiki/API:Prefixsearch)。任意のAPIパラメータ・URLをクライアントから転送する経路ではありません。
