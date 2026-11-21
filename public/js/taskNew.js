@@ -3,9 +3,12 @@
   'use strict';
 
   const C = window.NanonaCommon;
+  const editTaskId = Number(new URLSearchParams(location.search).get('edit')) || null;
+  let editingTask = null;
+  const fixedEditing = () => editTaskId && editingTask && (editingTask.config_json.replacements || []).every(r => r.forceTargets || r.templateType === 'revertEdits');
   const user = window.NANONA_BOT || {};
 
-  const page = C.initPage({ title: '新規タスク作成', active: 'new' });
+  const page = C.initPage({ title: editTaskId ? 'タスク設定を編集' : '新規タスク作成', active: 'new' });
   if (!page.isOwner) {
     page.$main.append(C.buildEmergencyOnlyPanel(user));
     return;
@@ -252,7 +255,7 @@
       new OO.ui.FieldLayout(exactWidget, { label: '節・表示名を指定する', align: 'inline' }).$element,
       $exactFields,
       $('<p>').addClass('nb-hint').text(
-        'このルールは2ウェーブ構成で処理されます: ウェーブ1でTemplate名前空間を先に編集→対象を再取得→ウェーブ2でその他ページを編集。'
+        'タスク全体でTemplateを先にまとめて編集し、呼び出し先のリンク表を更新してから、通常ページの変更を他の種別とまとめて編集します。'
       ),
       ns.$element,
       new OO.ui.FieldLayout(searchWidget, {
@@ -400,13 +403,10 @@
           bothSchemes: bothSchemesWidget.isSelected(),
         });
       } else if (type === 'categoryRename' || type === 'categoryRemove') {
-        const ns = buildNamespaceField(null, '既定は全名前空間（原則すべてのカテゴリ呼び出し先が対象）。');
+        const ns = buildNamespaceField(null, '通常ページ側の対象名前空間。既定は全名前空間。Templateは先に処理します。');
         $body.append(
           $('<p>').css({ color: '#54595d', fontSize: '0.9em' }).text(
-            'このルールは3ウェーブ構成で処理されます: ' +
-              'ウェーブ1でTemplate名前空間のカテゴリメンバーを先に編集し、編集したテンプレートの使用ページをnull edit → ' +
-              'ウェーブ2でカテゴリメンバーを取り直して残りを編集 → ' +
-              'ウェーブ3で標準名前空間のうちTemplate:リダイレクトの所属カテゴリでこのカテゴリ名を保持しているページを書き換えます。' +
+            'タスク全体でTemplateを先に編集し、呼び出し先を更新します。次にカテゴリメンバーと標準名前空間の所属カテゴリ記述を集め、同じページへの変更は一度の編集にまとめます。' +
               '構造的に確認できない緩い一致のみは、自動編集せず警告として表示します。'
           ),
           ns.$element
@@ -419,7 +419,7 @@
               label: '「Category:旧」の記述も置換する',
               align: 'inline',
               help:
-                'ウェーブ3で、標準名前空間のうち「Category:旧」という記述があるページ（カテゴリのリンク元と本文検索で取得）を対象に加え、' +
+                '通常ページと同じウェーブで、標準名前空間のうち「Category:旧」という記述があるページ（カテゴリのリンク元と本文検索で取得）を対象に加え、' +
                 'リンクの形かどうかを問わず「Category:新」に置換します。「Category:旧橋梁」のように別カテゴリ名の一部になっている箇所は変更しません。',
               helpInline: true,
             }).$element
@@ -770,11 +770,14 @@
   const editIntervalWidget = new OO.ui.NumberInputWidget({ min: 5, step: 1, value: 10 });
   const linkUpdateMethodWidget = new OO.ui.DropdownInputWidget({
     options: [
-      { data: 'nullEdit', label: 'null edit（1件ずつ・既定）' },
-      { data: 'purge', label: 'purge＋forcelinkupdate（50件ずつ一括）' },
+      { data: 'nullEdit', label: 'null edit（呼び出し先を1件ずつ更新）' },
+      { data: 'purge', label: 'purge＋forcelinkupdate（呼び出し先を50件ずつ・既定）' },
     ],
-    value: 'nullEdit',
+    value: 'purge',
   });
+  const refreshTemplatesWidget = new OO.ui.CheckboxInputWidget({ selected: true });
+  const purgeRemainingWidget = new OO.ui.CheckboxInputWidget({ selected: false });
+  refreshTemplatesWidget.on('change', (enabled) => linkUpdateMethodWidget.setDisabled(!enabled));
 
   // ---- 実行モード ----
   const modeWidget = new OO.ui.RadioSelectInputWidget({
@@ -798,7 +801,10 @@
     minorEditWidget.setSelected(edit.minorEdit !== false);
     editSummaryWidget.setValue(botreqSummary || edit.editSummary || '');
     editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
-    linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'nullEdit');
+    linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'purge');
+    refreshTemplatesWidget.setSelected(edit.refreshTemplateTransclusions !== false);
+    linkUpdateMethodWidget.setDisabled(!refreshTemplatesWidget.isSelected());
+    purgeRemainingWidget.setSelected(edit.purgeRemainingTargets === true);
     modeWidget.setValue(review.mode || 'auto');
     autoWaitWidget.setValue(Number(review.autoWaitSeconds) || 0);
     manualTimeoutWidget.setValue(Number(review.manualTimeoutHours) || 72);
@@ -847,10 +853,10 @@
   });
 
   // ---- 送信 ----
-  const submitBtn = new OO.ui.ButtonWidget({ label: 'タスクを作成してキューに投入', icon: 'check', flags: ['primary', 'progressive'] });
+  const submitBtn = new OO.ui.ButtonWidget({ label: editTaskId ? 'タスク設定を保存' : 'タスクを作成してキューに投入', icon: 'check', flags: ['primary', 'progressive'] });
 
   function buildConfig() {
-    const replacements = rules.map((r) => r.getConfig()).filter(Boolean);
+    const replacements = fixedEditing() ? editingTask.config_json.replacements : rules.map((r) => r.getConfig()).filter(Boolean);
 
     const mode = modeWidget.getValue();
     const reviewSettings = { mode };
@@ -866,6 +872,8 @@
         editSummary: editSummaryWidget.getValue(),
         editIntervalSeconds: Number(editIntervalWidget.getValue()),
         linkUpdateMethod: linkUpdateMethodWidget.getValue(),
+        refreshTemplateTransclusions: refreshTemplatesWidget.isSelected(),
+        purgeRemainingTargets: purgeRemainingWidget.isSelected(),
       },
       reviewSettings,
       onFailure: onFailureWidget.getValue(),
@@ -879,7 +887,7 @@
     const errors = [];
     rules.forEach((rule) => rule.$card.removeClass('nb-rule-card--error'));
     if (config.replacements.length === 0) errors.push('置換ルールを1件以上追加してください。');
-    config.replacements.forEach((r, i) => {
+    (fixedEditing() ? [] : config.replacements).forEach((r, i) => {
       const label = 'ルール ' + (i + 1) + '（' + (C.RULE_TYPE_LABELS[r.templateType] || r.templateType) + '）';
       const before = errors.length;
       if (r.templateType === 'custom') {
@@ -926,7 +934,7 @@
 
   function describeForConfirm(config) {
     const $list = $('<ul>').addClass('nb-confirm-list');
-    config.replacements.forEach((r, i) => {
+    (fixedEditing() ? [] : config.replacements).forEach((r, i) => {
       const type = C.RULE_TYPE_LABELS[r.templateType] || r.templateType;
       const detail =
         r.templateType === 'custom'
@@ -937,10 +945,13 @@
     const review = config.reviewSettings;
     return $('<div>').append(
       $('<p>').text(
-        'アカウント ' + config.account + ' で、次の内容のタスクをキューに投入します。' +
+        'アカウント ' + config.account + (editTaskId ? ' で、タスクの未処理分の設定を更新します。' : ' で、次の内容のタスクをキューに投入します。') +
           (review.mode === 'auto' ? '自動更新（' + review.autoWaitSeconds + '秒後に承認）' : '手動確認（タイムアウト ' + review.manualTimeoutHours + '時間）') +
           '・編集間隔 ' + config.editSettings.editIntervalSeconds + '秒。'
       ),
+      $('<p>').text('作業順: Template優先のまとめ編集 → ' +
+        (config.editSettings.refreshTemplateTransclusions ? '呼び出し先を' + config.editSettings.linkUpdateMethod + 'で更新' : '呼び出し先の更新なし') +
+        ' → 通常ページ・所属カテゴリ記述をまとめ編集' + (config.editSettings.purgeRemainingTargets ? ' → 残る参照候補を再取得してpurge' : '')),
       $list
     );
   }
@@ -950,10 +961,15 @@
     const errors = validate(config);
     showErrors(errors);
     if (errors.length > 0) return;
-    const ok = await C.confirm(describeForConfirm(config), { title: 'タスクを作成しますか？', okLabel: '作成してキューに投入' });
+    if (editTaskId && !editingTask) return;
+    const ok = await C.confirm(describeForConfirm(config), { title: editTaskId ? '未処理分のタスク設定を変更しますか？' : 'タスクを作成しますか？', okLabel: editTaskId ? '設定を保存' : '作成してキューに投入' });
     if (!ok) return;
     submitBtn.setDisabled(true);
     try {
+      if (editTaskId) {
+        await C.putJson('/api/tasks/' + editTaskId + '/config', { config, revision: Number(editingTask.control_revision || 0) });
+        submitted = true; C.toast('設定を保存しました。再開時に未処理分を取り直します。'); location.href = '/tasks/' + editTaskId; return;
+      }
       const result = await C.postJson('/api/tasks', config);
       submitted = true;
       C.toast('タスク #' + result.id + ' を作成しました。');
@@ -978,19 +994,26 @@
   });
   rulesSection.$body.append($botreqLinkBox, $botreqPanel, $rulesContainer, $('<div>').addClass('nb-form-actions').append(addRuleBtn.$element));
 
-  const editSection = C.section({ title: '編集設定', hint: 'Botフラグと編集間隔は、実際の編集処理にも適用されます。', actions: [saveDefaultsBtn] });
+  const editSection = C.section({ title: '編集設定', hint: 'Templateを先に編集し、呼び出し先を更新した後、通常ページの変更を種別をまたいでまとめます。Botフラグと編集間隔は本編集に適用されます。', actions: [saveDefaultsBtn] });
   editSection.$body.append(
     new OO.ui.FieldLayout(botFlagWidget, { label: 'Botフラグを付与', align: 'inline' }).$element,
     new OO.ui.FieldLayout(minorEditWidget, { label: '細部の編集にする', align: 'inline' }).$element,
     new OO.ui.FieldLayout(editSummaryWidget, { label: '要約欄', align: 'top' }).$element,
     new OO.ui.FieldLayout(editIntervalWidget, { label: '編集間隔（秒・5以上）', align: 'top' }).$element,
+    new OO.ui.FieldLayout(refreshTemplatesWidget, {
+      label: 'Template編集後、その呼び出し先のリンク表・カテゴリ所属を更新する', align: 'inline',
+      help: '編集されたTemplateを呼び出しているページを更新してから、通常ページの対象を取り直します。種別を問わず共通の順番で進みます。', helpInline: true,
+    }).$element,
     new OO.ui.FieldLayout(linkUpdateMethodWidget, {
-      label: 'テンプレート使用ページの更新方法（Category系ルールのウェーブ1後）',
+      label: 'Template呼び出し先の更新方法',
       align: 'top',
       help:
-        'ウェーブ1で編集したテンプレートの使用ページのカテゴリ所属を更新する方法です。' +
-        '使用ページが多いテンプレートではpurge（50件ずつ一括）の方が速く終わります。',
+        '更新するのはTemplate本体ではなく、その呼び出し先です。purgeはリンク元・カテゴリ所属等の再計算を促し、本文を置換しません。',
       helpInline: true,
+    }).$element,
+    new OO.ui.FieldLayout(purgeRemainingWidget, {
+      label: '編集後も残る参照候補をもう一度purgeする', align: 'inline',
+      help: '通常ページの編集後、旧リンク元・旧カテゴリメンバー・旧テンプレートの使用ページ等を一度だけ再取得してpurgeします。手入力・固定対象は含めません。', helpInline: true,
     }).$element
   );
 
@@ -1023,7 +1046,11 @@
   if (botreqParam) botreqBtn.emit('click');
 
   // ===== タスクの複製（フェーズ12）: /tasks/new?from=タスクID =====
-  const duplicateFrom = Number(new URLSearchParams(location.search).get('from')) || null;
+  const duplicateFrom = editTaskId || Number(new URLSearchParams(location.search).get('from')) || null;
+  if (editTaskId) {
+    submitBtn.setDisabled(true);
+    page.$main.prepend($('<p>').addClass('nb-hint').text('同じタスクの未処理分を変更します。編集済みの結果は維持し、未処理の候補・差分・承認は再開時に作り直します。'));
+  }
 
   /** 複製元のタスクの設定をフォームに入れる（アカウントの既定値を読み込んだあとに呼ぶ）。 */
   function applyDuplicate(task) {
@@ -1035,7 +1062,10 @@
     minorEditWidget.setSelected(edit.minorEdit !== false);
     editSummaryWidget.setValue(edit.editSummary || '');
     editIntervalWidget.setValue(Number(edit.editIntervalSeconds) || 10);
-    linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'nullEdit');
+    linkUpdateMethodWidget.setValue(edit.linkUpdateMethod || 'purge');
+    refreshTemplatesWidget.setSelected(edit.refreshTemplateTransclusions !== false);
+    linkUpdateMethodWidget.setDisabled(!refreshTemplatesWidget.isSelected());
+    purgeRemainingWidget.setSelected(edit.purgeRemainingTargets === true);
     modeWidget.setValue(review.mode || 'auto');
     if (review.autoWaitSeconds !== undefined) autoWaitWidget.setValue(Number(review.autoWaitSeconds));
     if (review.manualTimeoutHours !== undefined) manualTimeoutWidget.setValue(Number(review.manualTimeoutHours));
@@ -1051,7 +1081,7 @@
       });
     if (rules.length === 0) addRuleCard();
     dirty = false;
-    C.toast('タスク #' + task.id + ' の設定を読み込みました。内容を確認してから作成してください。');
+    C.toast('タスク #' + task.id + ' の設定を読み込みました。内容を確認してください。');
   }
 
   if (!duplicateFrom) addRuleCard();
@@ -1064,15 +1094,27 @@
   if (duplicateFrom) {
     Promise.all([C.fetchJson('/api/tasks/' + duplicateFrom), defaultsLoaded])
       .then(([task]) => {
+        if (editTaskId) {
+          if (!['queued','paused','emergency_stopped','expired'].includes(task.status) || task.worker_active || task.pause_requested) {
+            throw new Error('一時停止が完了してから設定画面を開いてください。');
+          }
+          editingTask = task;
+        }
         // アカウントを切り替えると既定値が読み込まれるため、先にアカウントだけ切り替えてから他の値を入れる
         if (task.config_json && task.config_json.account) {
           accountWidget.setValue(task.config_json.account);
           applyAccountDefaults(task.config_json.account);
         }
         applyDuplicate(task);
+        if (fixedEditing()) {
+          rulesSection.$element.hide();
+          page.$main.prepend($('<p>').text('固定対象の再試行・一括取り消しは置換ルールを維持し、編集・確認設定だけ変更できます。'));
+        }
+        if (editTaskId) submitBtn.setDisabled(false);
       })
       .catch((e) => {
-        C.toast('複製元のタスクを読み込めませんでした: ' + e.message, 'error');
+        showErrors(['タスクを読み込めませんでした: ' + e.message]);
+        C.toast('タスクを読み込めませんでした: ' + e.message, 'error');
         if (rules.length === 0) addRuleCard();
       });
   }

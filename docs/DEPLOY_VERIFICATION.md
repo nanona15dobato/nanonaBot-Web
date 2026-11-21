@@ -124,12 +124,12 @@ mysql --defaults-file=$HOME/replica.my.cnf \
   <credentialUser>__nanona_bot -e "SHOW TABLES;"
 ```
 
-`system_status` / `bot_account_defaults` / `tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `app_settings` / `push_subscriptions` の9テーブルを確認する
+`system_status` / `bot_account_defaults` / `tasks` / `task_pages` / `edit_log` / `task_logs` / `task_warnings` / `app_settings` / `push_subscriptions` / `task_target_overrides` の10テーブルを確認する
 （`sessions`は`express-mysql-session`が初回起動時に自動作成するので、この時点では無くてよい）。
 
 - [ ] DB作成済み
 - [ ] `db/schema.sql`流し込み済み
-- [ ] `SHOW TABLES`で上記9テーブルを確認した
+- [ ] `SHOW TABLES`で上記10テーブルを確認した
 
 ---
 
@@ -390,3 +390,7 @@ toolforge jobs logs nanona-bot-worker
 ---
 
 以上が一通り確認できれば、実装が実環境で機能していることになる。
+
+## 一時停止・対象変更の既存環境への導入
+
+[一時停止・途中変更の更新手順](task-controls.md#導入更新)に従い、`db/migrations/20261121_task_controls.sql`を適用してからWebとワーカーの両方を更新・再起動します。既存tasksの列追加はschema.sqlの再読み込みでは行われません。

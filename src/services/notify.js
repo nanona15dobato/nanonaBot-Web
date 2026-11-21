@@ -161,7 +161,7 @@ async function notify(params) {
 }
 
 const TASK_STATUS_NOTICES = {
-  paused: '失敗により一時停止しました',
+  paused: '一時停止しました',
   failed: 'エラーで終了しました',
   expired: '無操作タイムアウトで期限切れになりました',
   emergency_stopped: '緊急停止により中断しました',

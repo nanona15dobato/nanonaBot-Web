@@ -147,6 +147,7 @@
       value: mode,
     });
     let reverting = false;
+    widget.setDisabled(Boolean(task.pause_requested));
     widget.on('change', async (nextMode) => {
       if (reverting || nextMode === mode) return; // 失敗時の値の巻き戻しで再送信しない
       widget.setDisabled(true);
@@ -171,10 +172,45 @@
     return btn;
   }
 
+  function canEditTask(task) {
+    return ['queued', 'paused', 'emergency_stopped', 'expired'].includes(task.status) && !task.worker_active && !task.pause_requested;
+  }
+  async function openTargetEditor(task, excludeTitle) {
+    const overrides = await C.fetchJson('/api/tasks/' + taskId + '/targets');
+    const add = new OO.ui.MultilineTextInputWidget({ rows: 4, placeholder: '1行に1ページ名' });
+    const exclude = new OO.ui.MultilineTextInputWidget({ rows: 4, value: excludeTitle || '', placeholder: '1行に1ページ名' });
+    const restore = new OO.ui.MultilineTextInputWidget({ rows: 3, placeholder: '1行に1ページ名' });
+    const $body = $('<div>').append(
+      $('<p>').text('変更は未処理分に適用します。追加ページには全置換ルールを適用します。設定済みの名前空間外のページも明示的に追加できます。編集済みページの再追加はできません。'),
+      new OO.ui.FieldLayout(add, { label: '追加するページ', align: 'top' }).$element,
+      new OO.ui.FieldLayout(exclude, { label: '除外するページ', align: 'top' }).$element,
+      new OO.ui.FieldLayout(restore, { label: '除外を解除するページ', align: 'top' }).$element
+    );
+    if (overrides.length) $body.append($('<p>').text('保存済み: ' + overrides.map(p => p.page_title + (p.excluded ? '（除外）' : '（追加）')).join('、')));
+    if (!await C.confirm($body, { title: '対象ページの追加・除外', okLabel: '対象の変更を保存' })) return;
+    const titles = widget => widget.getValue().split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+    await C.postJson('/api/tasks/' + taskId + '/targets', { revision: Number(task.control_revision || 0), add: titles(add), exclude: titles(exclude), restore: titles(restore) });
+    C.toast('対象の変更を保存しました。再開時に未処理分を取り直します。');
+    await poller.refresh();
+  }
+
   function renderTitleActions(task) {
     $titleActions.children('.oo-ui-buttonWidget').not(refreshBtn.$element).remove();
     const buttons = [];
-    if (['paused', 'emergency_stopped', 'expired'].includes(task.status)) {
+    if (['queued', 'running'].includes(task.status)) {
+      const pause = actionButton(task.pause_requested ? '一時停止処理中' : '一時停止', [], 'pause', btn =>
+        C.withBusy(btn, '一時停止', async () => {
+          const result = await C.postJson('/api/tasks/' + taskId + '/pause', {});
+          C.toast(result.paused ? '一時停止しました。' : '停止を要求しました。進行中の処理の終了を待っています。');
+          await poller.refresh();
+        }));
+      pause.setDisabled(Boolean(task.pause_requested)); buttons.push(pause);
+    }
+    const targets = actionButton('対象の追加・除外', [], 'listBullet', btn => C.withBusy(btn, '対象の変更', () => openTargetEditor(task)));
+    targets.setDisabled(!canEditTask(task)); buttons.push(targets);
+    const settings = actionButton('タスク設定を編集', [], 'settings', () => { location.href = '/tasks/new?edit=' + taskId; });
+    settings.setDisabled(!canEditTask(task)); buttons.push(settings);
+    if (['paused', 'emergency_stopped', 'expired'].includes(task.status) && !task.worker_active && !task.pause_requested) {
       buttons.push(
         actionButton('再開する', ['primary', 'progressive'], 'play', (btn) =>
           C.withBusy(btn, '再開', async () => {
@@ -275,7 +311,7 @@
   }
 
   const STATUS_MESSAGES = {
-    paused: { type: 'error', label: '失敗により一時停止しています。実行ログ・ページ一覧で原因を確認し、「再開する」で未処理のページから続行できます。' },
+    paused: { type: 'notice', label: '一時停止しています。実行ログと未処理の内容を確認し、停止完了後に「再開する」で続行できます。' },
     emergency_stopped: { type: 'error', label: '緊急停止により中断しました。緊急停止を解除してから「再開する」で未処理のページから続行できます。' },
     expired: { type: 'warning', label: '無操作タイムアウトで期限切れになりました。「再開する」とタイムアウトを取り直して未処理のページから続行します。' },
     completed_with_failures: { type: 'warning', label: '一部のページで失敗しました。「失敗ページのみ再試行」で失敗したページだけの新しいタスクを作れます。' },
@@ -292,7 +328,9 @@
   }
 
   function waveSteps(task) {
-    const descriptions = C.WAVE_DESCRIPTIONS[task.stage_count];
+    const descriptions = task.config_json?.workflowVersion === 'global-v1' && task.stage_count === 2
+      ? ['Templateのまとめ編集・呼び出し先の更新', '通常ページ・所属カテゴリ記述のまとめ編集・任意の再purge']
+      : C.WAVE_DESCRIPTIONS[task.stage_count];
     if (!descriptions) return null;
     const $steps = $('<ol>').addClass('nb-waves');
     descriptions.forEach((text, i) => {
@@ -312,6 +350,10 @@
     renderTitleActions(task);
     $summary.empty();
 
+    if (task.pause_requested || task.status === 'paused' && task.worker_active) $summary.append(new OO.ui.MessageWidget({
+      type: 'notice', label: '一時停止処理中です。保存中の処理・先読みの終了を確認してから、対象・設定の編集と再開が可能になります。',
+    }).$element);
+    if (canEditTask(task)) $summary.append(new OO.ui.MessageWidget({ type: 'notice', label: '対象ページやタスク設定を変更できます。編集済みの結果は維持し、変更後の未処理分は再開時に作り直します。' }).$element);
     const message = STATUS_MESSAGES[task.status];
     if (message) $summary.append(new OO.ui.MessageWidget(message).$element.addClass('nb-summary__message'));
 
@@ -612,7 +654,8 @@
   let filterOptionsKey = null;
   function updateFilterOptions(task, pages) {
     const counts = countByStatus(pages);
-    const key = JSON.stringify([counts, task.stage_count]);
+    const maxStage = Math.max(task.stage_count || 1, ...pages.map(p => p.stage));
+    const key = JSON.stringify([counts, maxStage]);
     if (key === filterOptionsKey) return;
     filterOptionsKey = key;
     statusFilter.setOptions(
@@ -624,10 +667,10 @@
     );
     statusFilter.setValue(state.pageFilter.status);
     const stages = [];
-    for (let i = 1; i <= (task.stage_count || 1); i++) stages.push({ data: String(i), label: 'ウェーブ' + i });
+    for (let i = 1; i <= maxStage; i++) stages.push({ data: String(i), label: 'ウェーブ' + i });
     stageFilter.setOptions([{ data: '', label: 'すべてのウェーブ' }].concat(stages));
     stageFilter.setValue(state.pageFilter.stage);
-    stageFilter.toggle((task.stage_count || 1) > 1);
+    stageFilter.toggle(maxStage > 1);
     setTabLabel(pagesPanel, 'ページ一覧（' + pages.length + '）');
   }
 
@@ -674,6 +717,10 @@
         $right.append(diffBtn.$element);
       }
       $row.append($right);
+      if (!['edited'].includes(p.status) && canEditTask(state.task)) {
+        const exclude = actionButton('対象から除外', [], 'close', btn => C.withBusy(btn, '除外', () => openTargetEditor(state.task, p.page_title)));
+        $row.append(exclude.$element);
+      }
       $pageList.append($row);
     });
     if (filtered.length > f.limit) {
@@ -803,10 +850,11 @@
     return $rule.append($dl);
   }
 
-  let configRendered = false;
+  let configRendered = null;
   function renderConfig(task) {
-    if (configRendered) return;
-    configRendered = true;
+    const key = JSON.stringify([task.control_revision, task.config_json]);
+    if (configRendered === key) return;
+    configRendered = key;
     const config = task.config_json || {};
     const edit = config.editSettings || {};
     const review = config.reviewSettings || {};
@@ -817,7 +865,17 @@
     fact('要約欄', edit.editSummary || '-');
     fact('Botフラグ・細部の編集', (edit.botFlag ? 'Botフラグあり' : 'Botフラグなし') + '・' + (edit.minorEdit ? '細部の編集' : '通常の編集'));
     fact('編集間隔', (edit.editIntervalSeconds || '-') + '秒');
-    if (edit.linkUpdateMethod) fact('使用ページの更新方法', edit.linkUpdateMethod === 'purge' ? 'purge＋forcelinkupdate' : 'null edit');
+    if (config.workflowVersion === 'global-v1') {
+      const fixed = (config.replacements || []).every((r) => r.forceTargets || r.templateType === 'revertEdits');
+      fact('作業の順番', fixed ? '固定対象を1ウェーブで編集' : 'Template優先 → 呼び出し先更新 → 通常ページ・所属カテゴリ記述をまとめ編集');
+      if (!fixed) {
+        fact('Template呼び出し先の更新', edit.refreshTemplateTransclusions === false ? 'しない' : (edit.linkUpdateMethod === 'nullEdit' ? 'null edit' : 'purge＋forcelinkupdate'));
+        fact('残る参照候補の再purge', edit.purgeRemainingTargets === true ? 'する（一度だけ再取得）' : 'しない');
+      }
+    } else {
+      fact('作業の順番', '既存タスクの種別別ウェーブ構成');
+      if (edit.linkUpdateMethod) fact('使用ページの更新方法', edit.linkUpdateMethod === 'purge' ? 'purge＋forcelinkupdate' : 'null edit');
+    }
     fact('確認モード（作成時）', review.mode === 'manual' ? '手動確認（タイムアウト ' + review.manualTimeoutHours + '時間）' : '自動更新（' + (review.autoWaitSeconds || 0) + '秒後に承認）');
     configPanel.$element.empty().append(
       $('<h3>').addClass('nb-subheading').text('置換ルール（' + (config.replacements || []).length + '件）'),
@@ -838,6 +896,7 @@
         C.fetchJson('/api/tasks/' + taskId + '/logs?limit=200'),
       ]);
       if (task.server_time) state.clockOffset = new Date(task.server_time).getTime() - Date.now();
+      if (state.task && state.task.control_revision !== task.control_revision) state.warnings = null;
       state.task = task;
       state.pages = pages;
       state.logs = logs;

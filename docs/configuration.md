@@ -117,6 +117,7 @@ Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` �
 |---|---|
 | `system_status` | 緊急停止の状態（1行だけ） |
 | `tasks` | タスク（設定・状態・進捗・ウェーブ・null editの進み具合など） |
+| `task_target_overrides` | タスク途中で明示追加・除外したページ。大文字小文字を区別するタイトルで管理 |
 | `task_pages` | タスクごとの対象ページと、準備した本文・状態 |
 | `edit_log` | 実際の編集の最終結果（恒久ログ。本文は含まない） |
 | `task_logs` | タスクの実行ログ・操作の記録 |
@@ -136,3 +137,5 @@ Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` �
 | `VAPID_PRIVATE_KEY` | （なし） | 同じペアの秘密鍵。共有・ログ出力しない |
 
 3つをWebとワーカーに設定します。未設定時は端末通知だけを無効にします。秘密鍵は公開しません。設定手順、追加テーブル、端末での有効化は [端末へのWeb Push](web-push.md) を参照してください。既存のメール／Webhookとは独立して通知対象を選びます。
+
+一時停止・途中変更の導入では `db/migrations/20261121_task_controls.sql` を適用します。tasksに`pause_requested`・`worker_active`・`control_revision`を追加します。[更新手順](task-controls.md#導入更新)を参照してください。

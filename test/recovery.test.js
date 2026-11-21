@@ -11,7 +11,9 @@ function fakePool(tasks, recentRequeues) {
   return {
     updates,
     async query(sql, params) {
-      if (/SELECT id FROM tasks WHERE status = 'running'/.test(sql)) return [tasks.filter((t) => t.status === 'running').map((t) => ({ id: t.id }))];
+      if (/UPDATE tasks SET worker_active/.test(sql)) return [{}];
+      if (/SELECT id, pause_requested FROM tasks WHERE status = 'running'/.test(sql)) return [tasks.filter((t) => t.status === 'running')];
+      if (/UPDATE tasks SET status = 'paused'/.test(sql)) { updates.push([params[0], 'paused']); return [{}]; }
       if (/FROM task_logs/.test(sql)) {
         assert.equal(params[1], REQUEUE_MESSAGE);
         return [[{ cnt: recentRequeues[params[0]] || 0 }]];
@@ -55,4 +57,12 @@ test('requeueInterruptedTasks: 同じタスクで再起動が続いている（�
   assert.deepEqual(pool.updates, [[48, 'failed'], [49, 'queued']]);
   assert.match(logs.find((e) => e.taskId === 48).message, /3回続けて停止/);
   assert.deepEqual(notified, [[48, 'failed']]);
+});
+
+test('recovery preserves a manual pause request instead of requeueing', async () => {
+  const pool = fakePool([{ id: 7, status: 'running', pause_requested: 1 }], {});
+  const logs = [];
+  assert.deepEqual(await requeueInterruptedTasks({ pool, writeTaskLog: async e => logs.push(e), logger: quiet }), { requeued: [], failed: [] });
+  assert.deepEqual(pool.updates, [[7, 'paused']]);
+  assert.match(logs[0].message, /停止状態を維持/);
 });

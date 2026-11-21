@@ -3,6 +3,7 @@
 const { pool } = require('../db');
 const { applyReplacementSteps } = require('./regexEngine');
 const { isEmergencyStopped } = require('./emergencyStop');
+const taskControl = require('./taskControl');
 const { writeEditLog } = require('./editLog');
 const { parseJsonColumn } = require('../dbJson');
 const { renameCategoryInTemplate, removeCategoryFromTemplate } = require('./redirectCategoryTemplate');
@@ -250,6 +251,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    if (await taskControl.stopReason(taskId)) return false;
     const [pageRows] = await pool.query(`SELECT status FROM task_pages WHERE id = ?`, [pageId]);
     const pageStatus = pageRows[0] && pageRows[0].status;
     if (pageStatus === 'approved') return true;
@@ -290,7 +292,7 @@ async function waitForApproval({ taskId, pageId, reviewSettings }) {
       return false;
     }
 
-    await sleep(sleepMs);
+    if (await taskControl.wait(sleepMs, taskId)) return false;
   }
 }
 
@@ -317,15 +319,7 @@ function isRetryableEditError(err) {
 
 /** 再試行までの待機。緊急停止・中止されたらすぐ戻る。 */
 async function waitBeforeRetry(ms, taskId) {
-  const until = Date.now() + ms;
-  for (;;) {
-    if (await isEmergencyStopped()) return 'emergency';
-    const [rows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [taskId]);
-    if (!rows[0] || rows[0].status === 'cancelled') return 'cancelled';
-    const remain = until - Date.now();
-    if (remain <= 0) return null;
-    await sleep(Math.min(1000, remain));
-  }
+  return taskControl.wait(ms, taskId);
 }
 
 /**
@@ -428,9 +422,16 @@ async function editOnePage(prepared, ctx) {
   let { page, newWikitext } = prepared;
   const workerSettings = await getWorkerSettings();
   const maxRetries = Math.max(0, workerSettings.editRetryCount);
+  const stopped = await taskControl.stopReason(ctx.taskId);
+  if (stopped) return { ok: false, interrupted: stopped };
   await pool.query(`UPDATE task_pages SET status = 'editing' WHERE id = ?`, [row.id]);
 
   for (let attempt = 0; ; attempt++) {
+    const stopped = await taskControl.stopReason(ctx.taskId);
+    if (stopped) {
+      await pool.query("UPDATE task_pages SET status = 'approved' WHERE id = ?", [row.id]);
+      return { ok: false, interrupted: stopped };
+    }
     try {
       const result = await ctx.mwClient.edit({
         title: row.page_title,
@@ -568,6 +569,8 @@ async function runStagePipeline(ctx) {
     `SELECT * FROM task_pages WHERE task_id = ? AND stage = ? AND status = 'pending' ORDER BY order_index ASC`,
     [ctx.taskId, ctx.stage]
   );
+  const initialStop = await taskControl.stopReason(ctx.taskId);
+  if (initialStop) return taskControl.result(initialStop);
   if (rows.length === 0) return { completed: true, hadFailures: false };
 
   if (await isEmergencyStopped()) {
@@ -577,10 +580,12 @@ async function runStagePipeline(ctx) {
   // 先読み: 今のページの確認・編集・編集間隔の待ちの間に、次に編集するページを準備しておく。
   // 準備した結果が「変更不要（スキップ）」なら、その場で確定させてさらに次を準備し、
   // 編集が要るページ（または失敗したページ）が見つかるまで進む（＝次に編集するものを待機させておく）。
-  const ahead = { stopped: false };
+  const ahead = { stopped: false, reason: null };
   async function prepareAhead(from) {
     for (let j = from; j < rows.length; j++) {
-      if (ahead.stopped || (await isEmergencyStopped())) return null;
+      if (ahead.stopped) return null;
+      ahead.reason = await taskControl.stopReason(ctx.taskId);
+      if (ahead.reason) return null;
       const result = await prepareOnePage(rows[j], ctx);
       if (result.status === 'skipped') {
         await updateProgress(ctx.taskId);
@@ -597,6 +602,8 @@ async function runStagePipeline(ctx) {
 
   try {
     while (current) {
+      const stopped = await taskControl.stopReason(ctx.taskId);
+      if (stopped) return taskControl.result(stopped, hadFailures);
       nextPromise = prepareAhead(current.index + 1);
 
       if (await isEmergencyStopped()) {
@@ -629,6 +636,8 @@ async function runStagePipeline(ctx) {
           // waitForApproval内でタスクがexpired/emergency_stoppedになっている可能性があるため確認
           const [taskRows] = await pool.query(`SELECT status FROM tasks WHERE id = ?`, [ctx.taskId]);
           const taskStatus = taskRows[0] && taskRows[0].status;
+          const stopped = await taskControl.stopReason(ctx.taskId);
+          if (stopped) return taskControl.result(stopped, hadFailures);
           if (['expired', 'emergency_stopped', 'cancelled'].includes(taskStatus)) {
             return {
               completed: false,
@@ -659,12 +668,7 @@ async function runStagePipeline(ctx) {
           }
           if (editResult.interrupted) {
             // 再試行の待機中に緊急停止・中止された
-            return {
-              completed: false,
-              emergencyStopped: editResult.interrupted === 'emergency',
-              cancelled: editResult.interrupted === 'cancelled',
-              hadFailures,
-            };
+            return taskControl.result(editResult.interrupted, hadFailures);
           }
           if (!editResult.ok) {
             hadFailures = true;
@@ -688,7 +692,10 @@ async function runStagePipeline(ctx) {
       // 次に編集するページが無いとき（残りがすべてスキップ・終わり）は待たない
       if (editedAt !== null && next) {
         const remaining = Math.max(0, ctx.editSettings.editIntervalSeconds) * 1000 - (Date.now() - editedAt);
-        if (remaining > 0) await sleep(remaining);
+        if (remaining > 0) {
+          const reason = await taskControl.wait(remaining, ctx.taskId);
+          if (reason) return taskControl.result(reason, hadFailures);
+        }
       }
       current = next;
     }
@@ -699,6 +706,7 @@ async function runStagePipeline(ctx) {
     if (nextPromise) await nextPromise.catch(() => {});
   }
 
+  if (ahead.reason) return taskControl.result(ahead.reason, hadFailures);
   return { completed: true, hadFailures };
 }
 

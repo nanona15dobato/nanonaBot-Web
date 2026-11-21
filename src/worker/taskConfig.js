@@ -165,6 +165,15 @@ function validateRule(rule, i, errors) {
   }
 }
 
+function validateLinkRefreshSettings(edit, errors) {
+  if (edit.linkUpdateMethod !== undefined && !['nullEdit', 'purge'].includes(edit.linkUpdateMethod)) {
+    errors.push('editSettings.linkUpdateMethodは"nullEdit"または"purge"である必要があります');
+  }
+  for (const key of ['refreshTemplateTransclusions', 'purgeRemainingTargets']) {
+    if (edit[key] !== undefined && typeof edit[key] !== 'boolean') errors.push(`editSettings.${key}は真偽値である必要があります`);
+  }
+}
+
 /**
  * タスク作成時のconfig_jsonを検証する（純粋関数）。
  * フェーズ4で、5種類のテンプレート（templatePresets.js）と4種類の自動取得
@@ -180,6 +189,8 @@ function validateTaskConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     return { valid: false, errors: ['configはオブジェクトである必要があります'] };
   }
+
+  if (config.workflowVersion !== undefined && config.workflowVersion !== 'global-v1') errors.push('workflowVersionはglobal-v1または省略である必要があります');
 
   if (!Array.isArray(config.replacements) || config.replacements.length === 0) {
     errors.push('replacementsは1件以上の配列である必要があります');
@@ -197,10 +208,7 @@ function validateTaskConfig(config) {
     if (typeof config.editSettings.editSummary !== 'string' || !config.editSettings.editSummary.trim()) {
       errors.push('editSettings.editSummaryは空でない文字列である必要があります');
     }
-    const { linkUpdateMethod } = config.editSettings;
-    if (linkUpdateMethod !== undefined && !['nullEdit', 'purge'].includes(linkUpdateMethod)) {
-      errors.push('editSettings.linkUpdateMethodは"nullEdit"または"purge"である必要があります');
-    }
+    validateLinkRefreshSettings(config.editSettings, errors);
     const interval = config.editSettings.editIntervalSeconds;
     if (typeof interval !== 'number' || interval < 5) {
       errors.push('editSettings.editIntervalSecondsは5以上の数値である必要があります（仕様書12章の最小間隔）');
@@ -239,5 +247,5 @@ function validateTaskConfig(config) {
   return { valid: errors.length === 0, errors };
 }
 
-module.exports = { validateTaskConfig, VALID_TARGET_SOURCE_TYPES };
+module.exports = { validateTaskConfig, validateLinkRefreshSettings, VALID_TARGET_SOURCE_TYPES };
 

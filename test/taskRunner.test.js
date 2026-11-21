@@ -345,7 +345,7 @@ test('nullEditTemplateTransclusionsIfNeeded: Category系で編集したテンプ
       ];
     }
     if (s.startsWith('SELECT emergency_stopped')) return [[{ emergency_stopped: 0 }]];
-    if (s.startsWith('SELECT status FROM tasks')) return [[{ status: 'running' }]];
+    if (s.startsWith('SELECT status, pause_requested FROM tasks') || s.startsWith('SELECT status FROM tasks')) return [[{ status: 'running' }]];
     if (s.startsWith('INSERT INTO task_logs')) return [{}];
     if (s.startsWith('UPDATE tasks SET target_titles_json')) {
       task.target_titles_json = params[0];
@@ -390,7 +390,7 @@ test('nullEditTemplateTransclusionsIfNeeded: purge指定時は使用ページを
       return [[{ page_title: 'Template:カテゴリ付き', matched_rule_indices: '[0]' }]];
     }
     if (s.startsWith('SELECT emergency_stopped')) return [[{ emergency_stopped: 0 }]];
-    if (s.startsWith('SELECT status FROM tasks')) return [[{ status: 'running' }]];
+    if (s.startsWith('SELECT status, pause_requested FROM tasks') || s.startsWith('SELECT status FROM tasks')) return [[{ status: 'running' }]];
     if (s.startsWith('INSERT INTO task_logs')) {
       logs.push(params);
       return [{}];
@@ -442,7 +442,7 @@ test('nullEditTemplateTransclusionsIfNeeded: 途中で止まったら処理済�
       return [[{ page_title: 'Template:カテゴリ付き', matched_rule_indices: '[0]' }]];
     }
     if (s.startsWith('SELECT emergency_stopped')) return [[{ emergency_stopped: 0 }]];
-    if (s.startsWith('SELECT status FROM tasks')) return [[{ status: taskStatus }]];
+    if (s.startsWith('SELECT status, pause_requested FROM tasks') || s.startsWith('SELECT status FROM tasks')) return [[{ status: taskStatus }]];
     if (s.startsWith('INSERT INTO task_logs')) return [{}];
     if (s.startsWith('UPDATE tasks SET target_titles_json')) {
       task.target_titles_json = params[0];

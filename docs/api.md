@@ -74,10 +74,14 @@
 | `bothSchemes` | `urlRename` で http:// と https:// の両方の旧URLを付け替える |
 | `targetSource.type` | `manualList`（`titles`）/ `category`（`category`）/ `backlinks`・`embeddedin`（`page`）/ `regexSearch`（`query`） |
 | `editIntervalSeconds` | 5以上 |
-| `linkUpdateMethod` | `nullEdit` / `purge` |
+| `linkUpdateMethod` | Template呼び出し先の更新方法。新構成の省略時は `purge`、`nullEdit` も指定可 |
+| `refreshTemplateTransclusions` | `editSettings` 内の真偽値。Template編集後の呼び出し先更新。省略時true |
+| `purgeRemainingTargets` | `editSettings` 内の真偽値。通常編集後の残存候補を一度だけ再取得してpurge。省略時false |
 | `reviewSettings` | `{"mode":"auto","autoWaitSeconds":0以上}` または `{"mode":"manual","manualTimeoutHours":正の数}` |
 | `onFailure` | `pause` / `skipAndContinue` |
 | `botreq` | 任意。Bot作業依頼への紐づけ `{"threadId": "h-…-YYYYMMDDhhmmss", "name": "依頼名"}` |
+
+新規作成時はサーバーが `workflowVersion: "global-v1"` を保存します。種別共通の2ウェーブで、同一ページの変更をまとめます。固定対象の再試行・取り消しは1ウェーブ。既存タスクの設定は自動移行しません。詳しくは [全体ウェーブとpurge](global-waves.md)。
 
 ## その他
 
@@ -120,3 +124,17 @@
 `endpointHash` はブラウザ購読URLのSHA-256（小文字16進64文字）。購読URLそのものをクエリーへ入れません。他セッションの識別子をbodyに指定しても採用しません。未設定・未移行時は端末通知だけを無効化または503にし、既存通知の設定は維持します。購読入力の不正は `400 push_error`、公開鍵の変更や端末上限は `409 push_error`、無効な購読への更新・テストは `404 push_error` です。
 
 暗号化Pushペイロードは `{version: 2, event, url, tag}`。`event` は8種類の通常イベントまたは `test` で、Service Workerが固定のイベント別文面へ変換します。自由記述のタイトルや本文は渡しません。古い・不明なイベントの文面は汎用表示です。詳しくは [端末通知](web-push.md) を参照。
+
+## 一時停止・対象・設定の途中変更（owner専用）
+
+| API | 内容 |
+|---|---|
+| `POST /api/tasks/:id/pause` | 待機中なら即停止。実行中なら停止要求。`{ok:true,paused:false}`は処理終了待ち |
+| `PUT /api/tasks/:id/config` | `{revision,config}`で設定全体を保存 |
+| `GET /api/tasks/:id/targets` | 明示追加・除外一覧（`page_title,namespace,added,excluded`） |
+| `POST /api/tasks/:id/targets` | `{revision,add:[],exclude:[],restore:[]}`。ページ名の配列、合計200件まで |
+| `POST /api/tasks/:id/resume` | 停止完了したタスクをqueuedへ。変更保存とは別操作 |
+
+タスク取得には`pause_requested`・`worker_active`・`control_revision`を含みます。対象・設定変更には取得時の版番号を渡します。待機中またはpaused・emergency_stopped・expiredで、worker_active=0かつpause_requested=0の場合だけ変更可能です。停止処理中は409 `task_busy`、版競合は409 `revision_conflict`。入力不正は400、編集済みの再追加は409 `already_edited`。設定変更後も元のworkflowVersionを保持します。
+
+変更はトランザクションで対象指定・設定・版番号・操作ログに反映します。未処理分を再計画し、既存承認は無効にします。追加ページには全ルールを適用し、名前空間の自動取得範囲より優先します。詳しい適用範囲は[一時停止・途中変更](task-controls.md)を参照してください。

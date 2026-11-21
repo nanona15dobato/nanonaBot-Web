@@ -21,7 +21,7 @@ async function claimNextQueuedTask() {
       return null;
     }
     const task = rows[0];
-    await conn.query(`UPDATE tasks SET status = 'running', updated_at = NOW() WHERE id = ?`, [task.id]);
+    await conn.query(`UPDATE tasks SET status = 'running', worker_active = 1, pause_requested = 0, updated_at = NOW() WHERE id = ?`, [task.id]);
     await conn.commit();
     task.status = 'running';
     return task;

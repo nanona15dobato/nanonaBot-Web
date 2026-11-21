@@ -4,6 +4,7 @@ const config = require('./src/config');
 const { pool } = require('./src/db');
 const { claimNextQueuedTask } = require('./src/worker/queue');
 const { runTask } = require('./src/worker/taskRunner');
+const { releaseTask } = require('./src/worker/taskControl');
 const { isEmergencyStopped } = require('./src/worker/emergencyStop');
 const { writeTaskLogSafely } = require('./src/worker/taskLog');
 const { notifyTaskStatus } = require('./src/services/notify');
@@ -120,6 +121,8 @@ async function mainLoop() {
         await pool.query(`UPDATE tasks SET status = 'failed', updated_at = NOW() WHERE id = ? AND status = 'running'`, [
           task.id,
         ]);
+      } finally {
+        await releaseTask(task.id);
       }
 
       // 処理が止まった/終わった理由を通知する（一時停止・失敗・期限切れ・緊急停止・完了）

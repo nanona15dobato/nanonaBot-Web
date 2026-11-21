@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS tasks (
                         'completed_with_failures', 'failed', 'cancelled',
                         'expired', 'emergency_stopped'
                       ) NOT NULL DEFAULT 'queued',
+  pause_requested    TINYINT(1) NOT NULL DEFAULT 0,
+  worker_active      TINYINT(1) NOT NULL DEFAULT 0,
+  control_revision   INT UNSIGNED NOT NULL DEFAULT 0,
   config_json        JSON NOT NULL,
   target_titles_json JSON NULL,
   progress_current   INT UNSIGNED NOT NULL DEFAULT 0,
@@ -175,3 +178,15 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   KEY idx_push_user (username),
   KEY idx_push_expiry (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS task_target_overrides (
+  task_id INT UNSIGNED NOT NULL,
+  page_title VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  namespace INT NOT NULL,
+  excluded TINYINT(1) NOT NULL DEFAULT 0,
+  added TINYINT(1) NOT NULL DEFAULT 0,
+  updated_by VARCHAR(255) NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (task_id, page_title),
+  CONSTRAINT fk_target_overrides_task FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
