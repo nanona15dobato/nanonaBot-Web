@@ -89,13 +89,10 @@ toolforge webservice node20 restart
 
 ## 本番での確認記録（2026-10-25）
 
-以下は運用者から共有された結果です。すべてのブラウザ・端末を確認したという意味ではありません。
-
 - `NODE_ENV=production`、HTTPSのベースURLとOAuthコールバック一致を確認。
 - `Content-Security-Policy: frame-ancestors 'none'`、`X-Frame-Options: DENY` と通常表示を確認。
 - Web Push依存関係、追加テーブル、VAPID設定の有効判定、Web／ワーカーの新Pod起動、端末へのテスト通知受信を確認。
-- イベント別文面への更新手順は運用者が完了と報告。各イベントの実配送・全端末での表示は個別に確認する。
-- iPhone/iPadのSafari実機、メール実配送、ログ再作成後の権限は確認結果をまだ記録していない。
+- イベント別の通知文面を本番に反映。イベントごとの実配送、iPhone/iPadのSafari、メールの実配送、ログ再作成後の権限は確認記録なし。
 
 参考: [Toolforgeの環境変数](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Envvars#Updating_an_environment_variable)、[ジョブの再起動](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Running_jobs#Restarting_your_jobs)、[Webサービス](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Web)。
 

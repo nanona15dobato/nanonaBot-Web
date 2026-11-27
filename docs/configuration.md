@@ -91,7 +91,7 @@ Webアプリは全応答に `Content-Security-Policy: frame-ancestors 'none'` �
 
 ### Bot作業依頼
 
-[着手・完了・解決](botreq.md#着手完了解決フェーズ13) で使います。
+[着手・完了・解決](botreq.md#着手完了解決) で使います。
 
 | 名前 | 既定値 | 説明 |
 |---|---|---|
