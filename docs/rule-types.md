@@ -125,6 +125,8 @@ BOTREQからの取り込みでは、改名元に全角括弧が無く改名先�
 - `{{リダイレクトの所属カテゴリ}}` と旧カテゴリ名の記載があるのに構造的に確認できないページ（想定外の書き方・コメントアウト等）は自動編集せず、「警告」タブに表示します。
 - 名前空間を指定した場合、Templateを含まなければウェーブ1は0件になります。ウェーブ3は指定に関係なく標準名前空間だけです。
 
+ウィキ上のテンプレートの書式を確認するには、連絡先を含む `WIKI_USER_AGENT` を設定して `node scripts/check-redirect-category-template.js` を実行します。テンプレート本文と使用例の引数が `redirect-category-template-report.json` に出力されます。 [確認スクリプト](../scripts/check-redirect-category-template.js)
+
 ## Category除去 `categoryRemove`
 
 ページからカテゴリを外します。
